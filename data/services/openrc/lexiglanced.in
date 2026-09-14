@@ -1,0 +1,7 @@
+#!/sbin/openrc-run
+# A user service (OpenRC 0.60 or newer): rc-update --user add lexiglanced default
+
+description="Lexiglance pop-up dictionary daemon"
+command="@LEXIGLANCE_DAEMON@"
+supervisor="supervise-daemon"
+respawn_delay=2

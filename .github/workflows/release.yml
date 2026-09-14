@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APT_PACKAGES: >-
+    ninja-build zlib1g-dev libcairo2-dev libpango1.0-dev libx11-dev libxi-dev libxfixes-dev libxrandr-dev
+    libxext-dev libatspi2.0-dev libcurl4-openssl-dev libgl-dev libxkbcommon-dev qt6-base-dev dpkg-dev file
+
+jobs:
+  linux:
+    name: Linux packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $APT_PACKAGES g++-14 libfuse2
+      - name: Configure
+        # x86-64-v2 runs on every x86-64 CPU since about 2009; build with -DLEXIGLANCE_NATIVE=ON for your own CPU.
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-14
+          -DCMAKE_INSTALL_PREFIX=/usr -DLEXIGLANCE_ARCH=x86-64-v2
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Packages (.tar.gz, .deb)
+        run: |
+          cd build && cpack
+          mkdir -p ../dist && mv lexiglance-*.tar.gz lexiglance_*.deb ../dist/
+      - name: AppImage
+        # The Linux download that needs no installing, so no release goes out without it.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          DESTDIR="$PWD/AppDir" cmake --install build
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          export QMAKE=/usr/lib/qt6/bin/qmake LDAI_OUTPUT="dist/lexiglance-${GITHUB_REF_NAME#v}-x86_64.AppImage"
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage \
+            --desktop-file AppDir/usr/share/applications/io.github.mattfor.lexiglance.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/lexiglance.svg \
+            --executable AppDir/usr/bin/lexiglanced --executable AppDir/usr/bin/lexiglancectl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-linux
+          path: dist/*
+
+  windows:
+    name: Windows packages (MSYS2 UCRT64)
+    # The daemon, the settings application and lexiglancectl with the DLLs and Qt plugins they load: an installer that
+    # needs no administrator rights, and the same files as a .zip.
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-cairo mingw-w64-ucrt-x86_64-pango mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-qt6-base
+      - name: Build, test and package
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEXIGLANCE_ARCH=x86-64-v2
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+          cmake --install build --prefix stage
+          cd build && cpack -G ZIP
+          mkdir -p ../dist && mv lexiglance-*.zip ../dist/
+      - name: Installer
+        shell: pwsh
+        run: ./.github/scripts/windows-installer.ps1 build stage dist
+      - name: Smoke test the packages
+        # Unpacked and installed, with nothing but Windows on PATH: every DLL and Qt plugin the programs load must be there.
+        shell: pwsh
+        run: |
+          ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem dist/*.zip | Select-Object -First 1).FullName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem dist/*-setup.exe | Select-Object -First 1).FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-windows
+          path: dist/*
+
+  publish:
+    name: Publish
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: dist
+      - name: Stable file names
+        # The same names in every release, so links to releases/latest/download/<name> (the README's) always give the
+        # newest version. The version is in the release's title and in the files themselves.
+        working-directory: dist
+        run: |
+          mv lexiglance-*-windows-setup.exe lexiglance-windows-setup.exe
+          mv lexiglance-*-windows-*.zip lexiglance-windows-portable.zip
+          mv lexiglance-*.AppImage lexiglance-x86_64.AppImage
+          mv lexiglance_*.deb lexiglance-amd64.deb
+          mv lexiglance-*-linux-*.tar.gz lexiglance-linux-x86_64.tar.gz
+          sha256sum * > SHA256SUMS
+      - name: Notes
+        # Which file to download comes first; the changes of this version follow, from CHANGELOG.md.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          {
+            echo "- **Windows 10 and 11:** run \`lexiglance-windows-setup.exe\`. It needs no administrator rights and opens Lexiglance when it is done. \`lexiglance-windows-portable.zip\` is the same without installing."
+            echo "- **Linux:** make \`lexiglance-x86_64.AppImage\` executable and run it, or install \`lexiglance-amd64.deb\` on Debian and Ubuntu."
+            echo
+            awk -v v="$version" '/^## \[/{ found = index($0, "[" v "]") > 0; next } found' CHANGELOG.md
+          } > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}

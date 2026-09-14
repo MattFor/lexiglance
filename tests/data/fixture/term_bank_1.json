@@ -1,0 +1,41 @@
+[
+    [
+        "食べる",
+        "たべる",
+        "1 v1 vt",
+        "v1",
+        100,
+        [
+            "to eat",
+            {
+                "type": "structured-content",
+                "content": {
+                    "tag": "ul",
+                    "content": [
+                        { "tag": "li", "content": "to live on" },
+                        {
+                            "tag": "li",
+                            "content": {
+                                "tag": "span",
+                                "data": { "content": "note" },
+                                "content": "figurative"
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        1,
+        "★"
+    ],
+    ["読む", "よむ", "v5m vt", "v5", 90, ["to read"], 2, ""],
+    ["勉強", "べんきょう", "n vs", "", 80, ["study"], 3, ""],
+    ["高い", "たかい", "adj-i", "adj-i", 85, ["tall", "expensive"], 4, ""],
+    ["する", "する", "vs-i", "vs", 70, ["to do"], 5, ""],
+    ["来る", "くる", "vk", "vk", 75, ["to come"], 6, ""],
+    ["日本語", "にほんご", "n", "", 95, ["Japanese (language)"], 7, ""],
+    ["日本", "にほん", "n", "", 60, ["Japan"], 8, ""],
+    ["コーヒー", "コーヒー", "n", "", 50, ["coffee"], 9, ""],
+    ["すごい", "すごい", "adj-i", "adj-i", 40, ["amazing"], 10, ""],
+    ["学校", "がっこう", "n", "", 65, ["school"], 11, ""]
+]

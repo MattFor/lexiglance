@@ -1,0 +1,21 @@
+[Icon Theme]
+Name=Lexiglance
+Comment=Breeze icons (KDE, LGPL 3.0) for the Lexiglance settings application
+Inherits=hicolor
+Directories=16,22,32,48
+
+[16]
+Size=16
+Type=Fixed
+
+[22]
+Size=22
+Type=Fixed
+
+[32]
+Size=32
+Type=Fixed
+
+[48]
+Size=48
+Type=Fixed

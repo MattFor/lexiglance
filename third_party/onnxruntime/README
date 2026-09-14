@@ -1,0 +1,2 @@
+onnxruntime_c_api.h from ONNX Runtime 1.30.0 (https://github.com/microsoft/onnxruntime), MIT licensed (see LICENSE).
+Only the header is needed to build; the library is loaded at run time.

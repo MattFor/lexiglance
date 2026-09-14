@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Lexiglance
+Comment=System-wide pop-up dictionary
+Exec=@LEXIGLANCE_DAEMON@
+Icon=lexiglance
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,46 @@
+{
+    "code": "el",
+    "name": "Greek",
+    "script": ["0370-03FF", "1F00-1FFF"],
+    "word_characters": "-",
+    "folds": {
+        "ά": "α",
+        "έ": "ε",
+        "ή": "η",
+        "ί": "ι",
+        "ΐ": "ι",
+        "ϊ": "ι",
+        "ό": "ο",
+        "ύ": "υ",
+        "ΰ": "υ",
+        "ϋ": "υ",
+        "ώ": "ω",
+        "ς": "σ",
+        "Ά": "Α",
+        "Έ": "Ε",
+        "Ή": "Η",
+        "Ί": "Ι",
+        "Ϊ": "Ι",
+        "Ό": "Ο",
+        "Ύ": "Υ",
+        "Ϋ": "Υ",
+        "Ώ": "Ω"
+    },
+    "sample_text": "Ξεσκεπάζω την ψυχοφθόρα βδελυγμία",
+    "sample_words": ["σπίτι", "νερό"],
+    "commons_prefix": "El",
+    "ocr": {
+        "paddle": "PP-OCRv5/rec/el_PP-OCRv5_rec_mobile.onnx",
+        "tesseract": "ell"
+    },
+    "dictionaries": [
+        {
+            "name": "Wiktionary Greek-English",
+            "category": "Terms",
+            "title": "wty-el-en",
+            "description": "Greek-English dictionary built from Wiktionary by kaikki.org and wty: definitions, examples and every inflected form. Updated monthly.",
+            "homepage": "https://github.com/yomidevs/wiktionary-to-yomitan",
+            "download": "https://huggingface.co/datasets/daxida/wty-release/resolve/main/latest/dict/el/en/wty-el-en.zip"
+        }
+    ]
+}

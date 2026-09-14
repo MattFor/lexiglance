@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Lexiglance
+GenericName=Pop-up Dictionary
+Comment=System-wide pop-up dictionary for Yomitan dictionaries
+Exec=lexiglance
+Icon=lexiglance
+Terminal=false
+Categories=Education;Languages;
+Keywords=dictionary;japanese;russian;ukrainian;korean;greek;yomitan;popup;translate;
+StartupNotify=true

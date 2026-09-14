@@ -1,0 +1,35 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze C++
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build g++-14 zlib1g-dev libcairo2-dev libpango1.0-dev libx11-dev libxi-dev \
+            libxfixes-dev libxrandr-dev libxext-dev libatspi2.0-dev libcurl4-openssl-dev
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: c-cpp
+          build-mode: manual
+          queries: security-extended
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-14 -DLEXIGLANCE_BUILD_GUI=OFF
+          cmake --build build
+      - uses: github/codeql-action/analyze@v3

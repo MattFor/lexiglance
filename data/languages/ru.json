@@ -1,0 +1,14 @@
+{
+    "code": "ru",
+    "name": "Russian",
+    "dictionaries": [
+        {
+            "name": "Wiktionary Russian-English",
+            "category": "Terms",
+            "title": "wty-ru-en",
+            "description": "Russian-English dictionary built from Wiktionary by kaikki.org and wty: definitions, examples, stress marks and every inflected form, so declined and conjugated words are found. Updated monthly.",
+            "homepage": "https://github.com/yomidevs/wiktionary-to-yomitan",
+            "download": "https://huggingface.co/datasets/daxida/wty-release/resolve/main/latest/dict/ru/en/wty-ru-en.zip"
+        }
+    ]
+}

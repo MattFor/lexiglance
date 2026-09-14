@@ -1,0 +1,14 @@
+{
+    "title": "Fixture Dictionary [2026-01-01]",
+    "revision": "fixture.1",
+    "format": 3,
+    "sequenced": true,
+    "author": "Lexiglance tests",
+    "description": "Small dictionary used by the unit tests",
+    "attribution": "Written for the Lexiglance test suite",
+    "isUpdatable": true,
+    "indexUrl": "https://example.invalid/index.json",
+    "downloadUrl": "https://example.invalid/fixture.zip",
+    "sourceLanguage": "ja",
+    "targetLanguage": "en"
+}

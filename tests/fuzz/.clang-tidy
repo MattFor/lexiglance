@@ -1,0 +1,3 @@
+# libFuzzer fixes the name of the entry point.
+InheritParentConfig: true
+Checks: -readability-identifier-naming

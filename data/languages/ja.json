@@ -1,0 +1,62 @@
+{
+    "code": "ja",
+    "name": "Japanese",
+    "dictionaries": [
+        {
+            "name": "JMdict",
+            "category": "Terms",
+            "title_prefix": "JMdict [",
+            "description": "The standard Japanese-English dictionary from the Electronic Dictionary Research and Development Group, with part of speech information for accurate conjugation matching.",
+            "homepage": "https://github.com/yomidevs/jmdict-yomitan",
+            "download": "https://github.com/yomidevs/jmdict-yomitan/releases/latest/download/JMdict_english.zip"
+        },
+        {
+            "name": "Jitendex",
+            "category": "Terms",
+            "title_prefix": "Jitendex",
+            "description": "A richly formatted Japanese-English dictionary built on JMdict with example sentences, usage notes, cross references and antonyms. Updated monthly.",
+            "homepage": "https://jitendex.org",
+            "download": "https://github.com/stephenmk/stephenmk.github.io/releases/latest/download/jitendex-yomitan.zip"
+        },
+        {
+            "name": "JMnedict",
+            "category": "Names",
+            "title_prefix": "JMnedict",
+            "description": "Japanese proper names: people, places, companies and more.",
+            "homepage": "https://github.com/yomidevs/jmdict-yomitan",
+            "download": "https://github.com/yomidevs/jmdict-yomitan/releases/latest/download/JMnedict.zip"
+        },
+        {
+            "name": "KANJIDIC",
+            "category": "Kanji",
+            "title_prefix": "KANJIDIC",
+            "description": "Readings, meanings, stroke counts, school grade and JLPT level of more than 10,000 kanji.",
+            "homepage": "https://github.com/yomidevs/jmdict-yomitan",
+            "download": "https://github.com/yomidevs/jmdict-yomitan/releases/latest/download/KANJIDIC_english.zip"
+        },
+        {
+            "name": "BCCWJ",
+            "category": "Frequency",
+            "title": "BCCWJ",
+            "description": "Word frequencies from the Balanced Corpus of Contemporary Written Japanese: books, magazines, newspapers, blogs and more.",
+            "homepage": "https://github.com/Kuuuube/yomitan-dictionaries",
+            "download": "https://github.com/Kuuuube/yomitan-dictionaries/releases/download/yomitan-permalink/BCCWJ_SUW_LUW_combined.zip"
+        },
+        {
+            "name": "JPDB v2.2",
+            "category": "Frequency",
+            "title_prefix": "JPDBv2",
+            "description": "Word frequencies from the jpdb.io corpus of anime, dramas, light novels, visual novels and games.",
+            "homepage": "https://github.com/Kuuuube/yomitan-dictionaries",
+            "download": "https://github.com/Kuuuube/yomitan-dictionaries/releases/download/yomitan-permalink/JPDB_v2.2_Frequency_Kana.zip"
+        },
+        {
+            "name": "Jiten",
+            "category": "Frequency",
+            "title": "Jiten",
+            "description": "Word frequencies across all media indexed by jiten.moe. Updated regularly.",
+            "homepage": "https://jiten.moe/other",
+            "download": "https://api.jiten.moe/api/frequency-list/download?downloadType=yomitan"
+        }
+    ]
+}
