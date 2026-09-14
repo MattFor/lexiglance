@@ -50,7 +50,7 @@ jobs:
             --desktop-file AppDir/usr/share/applications/io.github.mattfor.lexiglance.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/lexiglance.svg \
             --executable AppDir/usr/bin/lexiglanced --executable AppDir/usr/bin/lexiglancectl
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-linux
           path: dist/*
@@ -91,7 +91,7 @@ jobs:
           ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem dist/*.zip | Select-Object -First 1).FullName
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem dist/*-setup.exe | Select-Object -First 1).FullName
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-windows
           path: dist/*
