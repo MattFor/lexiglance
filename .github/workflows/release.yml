@@ -130,7 +130,7 @@ jobs:
             echo
             awk -v v="$version" '/^## \[/{ found = index($0, "[" v "]") > 0; next } found' CHANGELOG.md
           } > notes.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           body_path: notes.md
