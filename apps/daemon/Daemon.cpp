@@ -695,8 +695,12 @@ namespace lexiglance::daemon
 		state.resets      = capture_resets_.load();
 		std::string label = state.capture ? state.capture->describe() : std::string( "unavailable" );
 		log::info( "text capture: {}", label );
-		const std::scoped_lock lock( capture_status_mutex_ );
-		capture_status_ = std::move( label );
+		{
+			const std::scoped_lock lock( capture_status_mutex_ );
+			capture_status_ = std::move( label );
+		}
+		// The settings application shows what is read now as soon as it is ready, after a download too.
+		ipc_.broadcast( "status.changed", statusJson() );
 	}
 
 	Daemon::Reading Daemon::readRequest( CaptureState& state, CaptureRequest& request, const config::Config& cfg )

@@ -7,6 +7,7 @@
 #include <QLoggingCategory>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QThread>
 #include <QTimer>
 
 #include <cstdio>
@@ -95,18 +96,27 @@ namespace
 		const auto    search_flag = arguments.indexOf( QStringLiteral( "--search" ) );
 		const QString query       = search_flag >= 0 && search_flag + 1 < arguments.size() ? arguments[search_flag + 1] : QString();
 
-		// A second launch brings the running window to the front instead.
+		// A second launch brings the running window to the front instead. One started by an update (--updated) waits
+		// for the version it replaces to end.
 		const QString instance = QStringLiteral( "lexiglance-gui-%1" ).arg( userKey() );
+		const bool    updated  = arguments.contains( QStringLiteral( "--updated" ) );
+		for ( int waited = 0;; ++waited )
 		{
 			QLocalSocket existing;
 			existing.connectToServer( instance );
-			if ( existing.waitForConnected( 250 ) )
+			if ( !existing.waitForConnected( 250 ) )
+			{
+				break;
+			}
+			if ( !updated || waited >= 40 )
 			{
 				const QString request = query.isEmpty() ? QStringLiteral( "show %1\n" ).arg( page ) : QStringLiteral( "find %1\n" ).arg( query );
 				existing.write( request.toUtf8() );
 				existing.waitForBytesWritten( 250 );
 				return 0;
 			}
+			existing.disconnectFromServer();
+			QThread::msleep( 250 );
 		}
 		QLocalServer::removeServer( instance );
 		QLocalServer server;
@@ -148,6 +158,7 @@ namespace
 			{
 				window.search( query );
 			}
+			window.welcome();
 		}
 		return QApplication::exec();
 	}

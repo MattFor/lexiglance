@@ -12,6 +12,9 @@ with the daemon's installed path already filled in.
 `~/.config/autostart/lexiglance-daemon.desktop` (on Windows the `Run` registry key, on macOS a LaunchAgent). Every
 XDG desktop starts it with the session. The same file ships as `services/xdg/lexiglance-daemon.desktop`.
 
+**Also start this window, hidden in the tray**, below it, adds `~/.config/autostart/lexiglance-tray.desktop` (on
+Windows the `Lexiglance tray` value of the same key), which starts the settings application with `--tray`.
+
 ## systemd (user service)
 
 ```sh

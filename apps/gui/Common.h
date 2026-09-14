@@ -1,6 +1,8 @@
 #ifndef LEXIGLANCE_GUI_COMMON_H
 #define LEXIGLANCE_GUI_COMMON_H
 
+#include <QProgressBar>
+#include <QSettings>
 #include <QString>
 #include <QWidget>
 
@@ -16,6 +18,10 @@ namespace lexiglance::gui
 
 	class DaemonClient;
 	class Settings;
+
+	// Download progress on a bar, the figures written on it so they stay in place while they change; `total` is 0 while
+	// unknown.
+	void showProgress( QProgressBar* bar, qint64 received, qint64 total );
 
 	[[nodiscard]] inline QString qs( std::string_view text )
 	{
@@ -39,6 +45,12 @@ namespace lexiglance::gui
 
 	// Asks before something that cannot be undone; true when `action` (the button's text) was chosen.
 	[[nodiscard]] bool confirm( QWidget* parent, const QString& title, const QString& text, const QString& action );
+
+	// Whether version `a` ("1.0.1", or "v1.0.1") comes before `b`; false when either is not a version.
+	[[nodiscard]] bool olderVersion( const QString& a, const QString& b );
+
+	// The settings application's own memory, apart from the daemon's configuration: what it decided or showed once.
+	[[nodiscard]] QSettings applicationMemory();
 
 	struct Context
 	{

@@ -95,4 +95,23 @@ namespace lexiglance::gui
 		} );
 	}
 
+	void Downloader::resolve( const QUrl& url, Resolved done )
+	{
+		if ( !secure( url ) )
+		{
+			done( {}, QStringLiteral( "only https downloads are allowed: " ) + url.toString() );
+			return;
+		}
+		QNetworkReply* reply = network_->head( makeRequest( url ) );
+		connect( reply, &QNetworkReply::finished, this, [reply, done = std::move( done )] {
+			reply->deleteLater();
+			if ( reply->error() != QNetworkReply::NoError )
+			{
+				done( {}, reply->errorString() );
+				return;
+			}
+			done( reply->url(), {} );
+		} );
+	}
+
 } // namespace lexiglance::gui

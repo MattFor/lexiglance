@@ -113,7 +113,8 @@ jobs:
           path: dist
       - name: Stable file names
         # The same names in every release, so links to releases/latest/download/<name> (the README's) always give the
-        # newest version. The version is in the release's title and in the files themselves.
+        # newest version. The version is in the release's title and in the files themselves. Lexiglance's own updater
+        # (apps/gui/UpdateGroup.cpp) downloads them by these names too, checked against SHA256SUMS.
         working-directory: dist
         run: |
           mv lexiglance-*-windows-setup.exe lexiglance-windows-setup.exe

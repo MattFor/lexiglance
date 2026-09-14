@@ -11,6 +11,7 @@ add_executable(
     DesktopEntry.cpp
     DictionariesPage.cpp
     Downloader.cpp
+    HelpOverlay.cpp
     MainWindow.cpp
     OcrGroup.cpp
     OverviewPage.cpp
@@ -18,6 +19,7 @@ add_executable(
     SearchPage.cpp
     Settings.cpp
     Themes.cpp
+    UpdateGroup.cpp
     resources.qrc)
 set_target_properties(lexiglance PROPERTIES AUTORCC ON)
 

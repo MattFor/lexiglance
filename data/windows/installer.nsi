@@ -85,6 +85,11 @@ Section
     ${OrIf} $2 != ""
         WriteRegStr HKCU "${RUN_KEY}" "Lexiglance" '"$INSTDIR\bin\lexiglanced.exe"'
     ${EndIf}
+    ; The settings application in the tray at login too, when chosen there: kept pointing here as well.
+    ReadRegStr $3 HKCU "${RUN_KEY}" "Lexiglance tray"
+    ${If} $3 != ""
+        WriteRegStr HKCU "${RUN_KEY}" "Lexiglance tray" '"$INSTDIR\bin\lexiglance.exe" --tray'
+    ${EndIf}
 
     WriteRegStr HKCU "${APP_KEY}" "InstallDir" "$INSTDIR"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "Lexiglance"
@@ -102,10 +107,22 @@ Section
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "EstimatedSize" $0
 SectionEnd
 
-; Straight into Lexiglance, which starts its daemon. A silent install (updates, CI) starts nothing.
+; Straight into Lexiglance, which starts its daemon. A silent install (CI) starts nothing, unless it is Lexiglance
+; updating itself: /relaunch=tray opens it in the tray, /relaunch=window on its updates.
 Function .onInstSuccess
-    ${IfNot} ${Silent}
-        Exec '"$INSTDIR\bin\lexiglance.exe"'
+    ${GetParameters} $0
+    ClearErrors
+    ${GetOptions} $0 "/relaunch=" $1
+    ${IfNot} ${Errors}
+        ${If} $1 == "tray"
+            Exec '"$INSTDIR\bin\lexiglance.exe" --tray'
+        ${Else}
+            Exec '"$INSTDIR\bin\lexiglance.exe" --page overview'
+        ${EndIf}
+    ${Else}
+        ${IfNot} ${Silent}
+            Exec '"$INSTDIR\bin\lexiglance.exe"'
+        ${EndIf}
     ${EndIf}
 FunctionEnd
 
@@ -114,6 +131,7 @@ Section "Uninstall"
     SetShellVarContext current
     Delete "$SMPROGRAMS\Lexiglance.lnk"
     DeleteRegValue HKCU "${RUN_KEY}" "Lexiglance"
+    DeleteRegValue HKCU "${RUN_KEY}" "Lexiglance tray"
     DeleteRegKey HKCU "${UNINSTALL_KEY}"
     DeleteRegKey HKCU "${APP_KEY}"
     RMDir /r "$INSTDIR\bin"

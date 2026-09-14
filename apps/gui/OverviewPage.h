@@ -26,6 +26,9 @@ namespace lexiglance::gui
 		void setStatus( const json::Value& status );
 		void refresh() override;
 
+	protected:
+		void showEvent( QShowEvent* event ) override;
+
 	private:
 		// Asks the daemon for its self-checks, or tells what can be told without it, and lists them. `interactive`: the
 		// user clicked for it.
@@ -43,6 +46,7 @@ namespace lexiglance::gui
 		QPushButton*               pause_;
 		QPushButton*               restart_;
 		QCheckBox*                 autostart_;
+		QCheckBox*                 autostart_tray_;
 		QLineEdit*                 test_text_;
 		QLabel*                    test_result_;
 		QLabel*                    dictionaries_value_;
@@ -56,12 +60,14 @@ namespace lexiglance::gui
 		QLabel*                    trigger_state_;
 		QLabel*                    last_capture_;
 		QTimer*                    restart_timer_;
+		QTimer*                    health_timer_;
 		std::vector<health::Check> checks_;
 		bool                       checking_        = false;
 		bool                       restarting_      = false;
 		qint64                     restart_from_    = 0;
 		qint64                     restart_started_ = 0;
 		bool                       paused_          = false;
+		bool                       health_stale_    = false;
 	};
 
 } // namespace lexiglance::gui

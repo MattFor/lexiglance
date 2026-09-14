@@ -23,8 +23,8 @@ namespace lexiglance::ocr
 		std::vector<float>        data;
 	};
 
-	// One ONNX model. ONNX Runtime is loaded at run time (libonnxruntime.so from `runtime_dir`, then the system), so it
-	// stays an optional dependency.
+	// One ONNX model. ONNX Runtime is loaded at run time (libonnxruntime.so from `runtime_dir`, then the system's; on
+	// Windows onnxruntime.dll from `runtime_dir` only), so it stays an optional dependency.
 	class OnnxModel
 	{
 	public:

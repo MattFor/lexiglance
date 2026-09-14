@@ -265,6 +265,11 @@ namespace lexiglance::ocr
 
 	Result<std::unique_ptr<PaddleOcr>> PaddleOcr::load( const std::filesystem::path& directory, const std::filesystem::path& runtime_dir, int threads, std::span<const lang::Language* const> languages )
 	{
+		// Nothing downloaded yet: no runtime is loaded either, so the one downloaded with the models is the one used.
+		if ( std::error_code ec; !std::filesystem::exists( directory / "det.onnx", ec ) )
+		{
+			return fail( "PaddleOCR is not downloaded" );
+		}
 		auto detector = OnnxModel::load( directory / "det.onnx", runtime_dir, threads );
 		if ( !detector )
 		{

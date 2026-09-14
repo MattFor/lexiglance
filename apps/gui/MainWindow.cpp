@@ -19,9 +19,11 @@
 #include <QHBoxLayout>
 #include <QMenu>
 #include <QPalette>
+#include <QScrollBar>
 #include <QStatusBar>
 #include <QStyleHints>
 #include <QTimer>
+#include <QVBoxLayout>
 
 namespace lexiglance::gui
 {
@@ -60,6 +62,13 @@ QAbstractSpinBox::up-arrow { image: url(:/lexiglance/up.png); width: 10px; heigh
 QAbstractSpinBox::down-arrow { image: url(:/lexiglance/down.png); width: 10px; height: 10px; }
 QComboBox::drop-down { border: none; width: 22px; }
 QComboBox::down-arrow { image: url(:/lexiglance/down.png); width: 10px; height: 10px; }
+QWidget#sidebar { background: %7; }
+QPushButton#sidebarButton { background: transparent; border: none; border-radius: 7px; margin: 0 8px; padding: 8px 10px 8px 14px; text-align: left; }
+QPushButton#sidebarButton:hover { background: %4; }
+QPushButton#donateButton { background: #d6457a; border: none; border-radius: 16px; color: #ffffff; font-weight: 600; padding: 8px 20px; }
+QPushButton#donateButton:hover { background: #e65d8f; }
+QPushButton#donateButton:pressed { background: #b93a69; }
+QFrame#helpCard { background: %1; border: 1px solid %3; border-radius: 14px; }
 QListWidget#navigation { background: %7; border: none; padding: 8px; }
 QListWidget#navigation::item { padding: 6px 10px; border-radius: 7px; margin: 1px 0; }
 QListWidget#navigation::item:hover { background: %4; }
@@ -99,7 +108,8 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 					return false;
 				}
 				auto* widget = qobject_cast<QWidget*>( watched );
-				if ( widget == nullptr || ( qobject_cast<QAbstractSpinBox*>( widget ) == nullptr && qobject_cast<QComboBox*>( widget ) == nullptr && qobject_cast<QAbstractSlider*>( widget ) == nullptr ) )
+				// Scroll bars are sliders too, but they are what scrolls the page: never held back.
+				if ( widget == nullptr || qobject_cast<QScrollBar*>( widget ) != nullptr || ( qobject_cast<QAbstractSpinBox*>( widget ) == nullptr && qobject_cast<QComboBox*>( widget ) == nullptr && qobject_cast<QAbstractSlider*>( widget ) == nullptr ) )
 				{
 					return false;
 				}
@@ -147,16 +157,31 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 #endif
 
 		navigation_->setObjectName( QStringLiteral( "navigation" ) );
-		navigation_->setFixedWidth( 190 );
 		navigation_->setIconSize( QSize( 20, 20 ) );
 		navigation_->setSpacing( 2 );
 		navigation_->setFrameShape( QFrame::NoFrame );
+
+		// The pages, and the help at the bottom left.
+		auto* sidebar = new QWidget();
+		sidebar->setObjectName( QStringLiteral( "sidebar" ) );
+		sidebar->setAttribute( Qt::WA_StyledBackground, true );
+		sidebar->setFixedWidth( 190 );
+		auto* sidebar_layout = new QVBoxLayout( sidebar );
+		sidebar_layout->setContentsMargins( 0, 0, 0, 10 );
+		sidebar_layout->setSpacing( 0 );
+		sidebar_layout->addWidget( navigation_, 1 );
+		auto* help = new QPushButton( QIcon::fromTheme( QStringLiteral( "help-contents" ) ), QStringLiteral( "Help" ) );
+		help->setObjectName( QStringLiteral( "sidebarButton" ) );
+		help->setIconSize( QSize( 20, 20 ) );
+		help->setToolTip( QStringLiteral( "What Lexiglance can do, and where" ) );
+		sidebar_layout->addWidget( help );
+		connect( help, &QPushButton::clicked, this, [this] { showHelp(); } );
 
 		auto* central = new QWidget();
 		auto* layout  = new QHBoxLayout( central );
 		layout->setContentsMargins( 0, 0, 0, 0 );
 		layout->setSpacing( 0 );
-		layout->addWidget( navigation_ );
+		layout->addWidget( sidebar );
 		layout->addWidget( pages_, 1 );
 		setCentralWidget( central );
 
@@ -257,6 +282,12 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 
 	void MainWindow::showPage( const QString& name )
 	{
+		if ( name.toLower() == QStringLiteral( "help" ) )
+		{
+			present();
+			showHelp();
+			return;
+		}
 		static const QStringList pages{ QStringLiteral( "overview" ), QStringLiteral( "dictionaries" ), QStringLiteral( "scanning" ), QStringLiteral( "appearance" ), QStringLiteral( "search" ), QStringLiteral( "anki" ), QStringLiteral( "about" ) };
 		if ( const auto index = pages.indexOf( name.toLower() ); index >= 0 )
 		{
@@ -274,10 +305,35 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		}
 	}
 
+	void MainWindow::showHelp( bool first )
+	{
+		if ( help_ == nullptr )
+		{
+			help_ = new HelpOverlay( [this]( const QString& page ) { showPage( page ); }, this );
+		}
+		help_->open( chordText( settings_->config().scan.trigger ), first );
+	}
+
+	void MainWindow::welcome()
+	{
+		auto memory = applicationMemory();
+		if ( memory.value( QStringLiteral( "help/shown" ) ).toBool() )
+		{
+			return;
+		}
+		memory.setValue( QStringLiteral( "help/shown" ), true );
+		showHelp( true );
+	}
+
 	void MainWindow::setupTray()
 	{
 		if ( !QSystemTrayIcon::isSystemTrayAvailable() )
 		{
+			// At login the tray can come up after this program (started with --tray): look again for a minute.
+			if ( ++tray_tries_ <= 30 )
+			{
+				QTimer::singleShot( 2000, this, [this] { setupTray(); } );
+			}
 			return;
 		}
 		tray_ = new QSystemTrayIcon( windowIcon(), this );
@@ -360,6 +416,12 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 	{
 		connection_->setText( statusLine( status, client_->bytesSent(), client_->bytesReceived() ) );
 		client_->setDaemonPid( status["pid"].asInt() );
+		// After an update the daemon still running can be the older version: this one's replaces it, once.
+		if ( !replaced_daemon_ && olderVersion( qs( status["version"].asString() ), qs( version ) ) )
+		{
+			replaced_daemon_ = true;
+			client_->startDaemon( true );
+		}
 		const bool paused = status["paused"].asBool();
 		if ( pause_action_ != nullptr )
 		{

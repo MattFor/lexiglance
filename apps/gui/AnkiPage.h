@@ -55,6 +55,9 @@ namespace lexiglance::gui
 		QLineEdit*             tags_;
 		QCheckBox*             duplicates_;
 		bool                   loading_ = false;
+		// AnkiConnect answered the last time it was asked; a poll is on its way.
+		bool anki_connected_ = false;
+		bool anki_asking_    = false;
 	};
 
 } // namespace lexiglance::gui

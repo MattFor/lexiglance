@@ -49,11 +49,6 @@ namespace lexiglance::gui::desktop
 			return QFileInfo( QCoreApplication::applicationFilePath() ).canonicalFilePath();
 		}
 
-		QSettings memory()
-		{
-			return { qs( ( paths::configDir() / "settings-application.ini" ).string() ), QSettings::IniFormat };
-		}
-
 	} // namespace
 
 	bool menuEntryShown()
@@ -63,7 +58,7 @@ namespace lexiglance::gui::desktop
 
 	bool setMenuEntry( bool shown, QString* error )
 	{
-		auto settings = memory();
+		auto settings = applicationMemory();
 		settings.setValue( QStringLiteral( "menu/decided" ), true );
 		if ( QFile::exists( shortcut() ) && !QFile::remove( shortcut() ) )
 		{
@@ -87,7 +82,7 @@ namespace lexiglance::gui::desktop
 
 	void maintainMenuEntry()
 	{
-		auto settings = memory();
+		auto settings = applicationMemory();
 		// The shortcut follows the program to where it runs now.
 		if ( QFile::exists( shortcut() ) && QFileInfo( QFileInfo( shortcut() ).symLinkTarget() ).canonicalFilePath() != program() )
 		{
@@ -209,11 +204,6 @@ namespace lexiglance::gui::desktop
 			        .arg( exec, program(), installIcon(), generated_key );
 		}
 
-		QSettings memory()
-		{
-			return { qs( ( paths::configDir() / "settings-application.ini" ).string() ), QSettings::IniFormat };
-		}
-
 	} // namespace
 
 	bool menuEntryShown()
@@ -227,7 +217,7 @@ namespace lexiglance::gui::desktop
 
 	bool setMenuEntry( bool shown, QString* error )
 	{
-		auto settings = memory();
+		auto settings = applicationMemory();
 		settings.setValue( QStringLiteral( "menu/decided" ), true );
 		if ( shown )
 		{
@@ -251,7 +241,7 @@ namespace lexiglance::gui::desktop
 
 	void maintainMenuEntry()
 	{
-		auto          settings = memory();
+		auto          settings = applicationMemory();
 		const QString current  = read( userEntry() );
 		// An entry this program wrote follows it to where it runs now.
 		if ( current.contains( generated_key ) && !hides( current ) && current != entryText() )

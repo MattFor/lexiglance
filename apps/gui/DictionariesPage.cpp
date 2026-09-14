@@ -453,6 +453,7 @@ namespace lexiglance::gui
 			return;
 		}
 		progress_->show();
+		progress_->setFormat( QStringLiteral( "%p%" ) );
 		progress_->setRange( 0, maximum );
 		progress_->setValue( value );
 	}
@@ -629,19 +630,7 @@ namespace lexiglance::gui
 		downloader_->download(
 				next.url,
 				target,
-				[this, name = next.name]( qint64 received, qint64 total ) {
-					if ( total > 0 )
-					{
-						setBusy( QStringLiteral( "Downloading %1 (%2 of %3)..." )
-				                         .arg( name, formatBytes( static_cast<std::uint64_t>( received ) ), formatBytes( static_cast<std::uint64_t>( total ) ) ),
-				                 static_cast<int>( received / 1024 ),
-				                 static_cast<int>( total / 1024 ) );
-					}
-					else
-					{
-						setBusy( QStringLiteral( "Downloading %1 (%2)..." ).arg( name, formatBytes( static_cast<std::uint64_t>( received ) ) ), 0, 0 );
-					}
-				},
+				[this]( qint64 received, qint64 total ) { showProgress( progress_, received, total ); },
 				[this, target, next]( const QString& error ) {
 					if ( !error.isEmpty() )
 					{

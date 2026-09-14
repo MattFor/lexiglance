@@ -3,11 +3,13 @@
 #include "DaemonClient.h"
 #include "DesktopEntry.h"
 #include "Settings.h"
+#include "UpdateGroup.h"
 
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Process.h>
 #include <lexiglance/core/Version.h>
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -100,6 +102,64 @@ namespace lexiglance::gui
 			return file.write( entry.toUtf8() ) > 0;
 #endif
 		}
+
+#ifndef Q_OS_MACOS
+		// The settings application at login as well, in the tray: a second entry beside the daemon's.
+	#ifdef Q_OS_WIN
+		const QString tray_value = QStringLiteral( "Lexiglance tray" );
+	#else
+		QString trayAutostartFile()
+		{
+			return QStandardPaths::writableLocation( QStandardPaths::GenericConfigLocation ) + "/autostart/lexiglance-tray.desktop";
+		}
+	#endif
+
+		bool trayAutostartEnabled()
+		{
+	#ifdef Q_OS_WIN
+			return runKey().contains( tray_value );
+	#else
+			return QFile::exists( trayAutostartFile() );
+	#endif
+		}
+
+		bool setTrayAutostart( bool enabled )
+		{
+	#ifdef Q_OS_WIN
+			auto run = runKey();
+			if ( enabled )
+			{
+				run.setValue( tray_value, QStringLiteral( "\"%1\" --tray" ).arg( QDir::toNativeSeparators( QCoreApplication::applicationFilePath() ) ) );
+			}
+			else
+			{
+				run.remove( tray_value );
+			}
+			run.sync();
+			return run.status() == QSettings::NoError;
+	#else
+			if ( !enabled )
+			{
+				return QFile::remove( trayAutostartFile() ) || !QFile::exists( trayAutostartFile() );
+			}
+			// The AppImage file itself rather than its mount, which changes every run.
+			const QString appimage = qEnvironmentVariable( "APPIMAGE" );
+			const QString program  = appimage.isEmpty() ? QCoreApplication::applicationFilePath() : appimage;
+			QDir().mkpath( QFileInfo( trayAutostartFile() ).absolutePath() );
+			QFile file( trayAutostartFile() );
+			if ( !file.open( QIODevice::WriteOnly | QIODevice::Truncate ) )
+			{
+				return false;
+			}
+			const QString entry = QStringLiteral(
+										  "[Desktop Entry]\nType=Application\nName=Lexiglance (tray)\nComment=The Lexiglance settings application, in the tray\n"
+										  "Exec=\"%1\" --tray\nIcon=lexiglance\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n"
+			)
+			                              .arg( program );
+			return file.write( entry.toUtf8() ) > 0;
+	#endif
+		}
+#endif
 
 		// A figure with its caption, for the status overview.
 		QFrame* tile( QLabel* value, const QString& caption )
@@ -222,6 +282,7 @@ namespace lexiglance::gui
 		pause_( new QPushButton() ),
 		restart_( new QPushButton( QStringLiteral( "Restart" ) ) ),
 		autostart_( new QCheckBox( QStringLiteral( "Start Lexiglance automatically when I log in" ) ) ),
+		autostart_tray_( new QCheckBox( QStringLiteral( "Also start this window, hidden in the tray" ) ) ),
 		test_text_( new QLineEdit() ),
 		test_result_( new QLabel() ),
 		dictionaries_value_( new QLabel( QStringLiteral( "–" ) ) ),
@@ -234,7 +295,8 @@ namespace lexiglance::gui
 		health_rows_( new QVBoxLayout() ),
 		trigger_state_( new QLabel() ),
 		last_capture_( new QLabel() ),
-		restart_timer_( new QTimer( this ) )
+		restart_timer_( new QTimer( this ) ),
+		health_timer_( new QTimer( this ) )
 	{
 		auto* content = new QWidget();
 		auto* layout  = new QVBoxLayout( content );
@@ -315,6 +377,23 @@ namespace lexiglance::gui
 		auto* startup_layout = new QVBoxLayout( startup_box );
 		autostart_->setChecked( autostartEnabled() );
 		startup_layout->addWidget( autostart_ );
+		// Under the option it belongs to.
+		auto* tray_row = new QHBoxLayout();
+		tray_row->addSpacing( 24 );
+		tray_row->addWidget( autostart_tray_, 1 );
+		startup_layout->addLayout( tray_row );
+#ifdef Q_OS_MACOS
+		autostart_tray_->hide();
+#else
+		// Without the daemon's autostart this window's would start the daemon anyway, so it goes too.
+		if ( !autostart_->isChecked() && trayAutostartEnabled() )
+		{
+			setTrayAutostart( false );
+		}
+		autostart_tray_->setChecked( autostart_->isChecked() && trayAutostartEnabled() );
+		autostart_tray_->setEnabled( autostart_->isChecked() );
+		autostart_tray_->setToolTip( QStringLiteral( "At login this window starts as a tray icon: click the icon to open it, right-click it to pause scanning." ) );
+#endif
 #if !defined( Q_OS_WIN ) && !defined( Q_OS_MACOS )
 		auto* menu_entry = new QCheckBox( QStringLiteral( "Show Lexiglance in the applications menu" ) );
 		menu_entry->setChecked( desktop::menuEntryShown() );
@@ -331,6 +410,7 @@ namespace lexiglance::gui
 		} );
 #endif
 		layout->addWidget( startup_box );
+		layout->addWidget( new UpdateGroup() );
 
 		auto* reset_box    = new QGroupBox( QStringLiteral( "Settings" ) );
 		auto* reset_layout = new QHBoxLayout( reset_box );
@@ -365,7 +445,17 @@ namespace lexiglance::gui
 		connect( restart_, &QPushButton::clicked, this, [this] { restart(); } );
 		connect( check_, &QPushButton::clicked, this, [this] { checkHealth( true ); } );
 		connect( show_passed_, &QCheckBox::toggled, this, [this] { showChecks( checks_ ); } );
-		connect( autostart_, &QCheckBox::toggled, this, []( bool enabled ) { setAutostart( enabled ); } );
+		connect( autostart_, &QCheckBox::toggled, this, [this]( bool enabled ) {
+			setAutostart( enabled );
+			autostart_tray_->setEnabled( enabled );
+			if ( !enabled )
+			{
+				autostart_tray_->setChecked( false );
+			}
+		} );
+#ifndef Q_OS_MACOS
+		connect( autostart_tray_, &QCheckBox::toggled, this, []( bool enabled ) { setTrayAutostart( enabled ); } );
+#endif
 
 		restart_timer_->setInterval( 300 );
 		connect( restart_timer_, &QTimer::timeout, this, [this] {
@@ -422,6 +512,28 @@ namespace lexiglance::gui
 				last_capture_->setText( QStringLiteral( "Last lookup: <span style=\"color:%1\">%2</span> <span style=\"color:gray\">(%3)</span>" )
 				                                .arg( found ? QStringLiteral( "#3fa45b" ) : QStringLiteral( "#d19a1f" ), qs( params["summary"].asString() ).toHtmlEscaped(), qs( params["where"].asString() ).toHtmlEscaped() ) );
 			}
+			// What the health depends on changed: checked again once it settles, or when the page is next shown.
+			else if ( name == "dictionaries.changed" || name == "config.changed" || name == "status.changed" )
+			{
+				if ( isVisible() )
+				{
+					health_timer_->start();
+				}
+				else
+				{
+					health_stale_ = true;
+				}
+			}
+		} );
+		health_timer_->setSingleShot( true );
+		health_timer_->setInterval( 1200 );
+		connect( health_timer_, &QTimer::timeout, this, [this] {
+			if ( checking_ || restarting_ )
+			{
+				health_timer_->start();
+				return;
+			}
+			checkHealth( false );
 		} );
 
 		state_->setText( QStringLiteral( "Connecting..." ) );
@@ -457,6 +569,16 @@ namespace lexiglance::gui
 	{
 		trigger_->setText( QStringLiteral( "Trigger: <b>%1</b>" ).arg( chordText( settings().config().scan.trigger ).toHtmlEscaped() ) );
 		setTrigger( false );
+	}
+
+	void OverviewPage::showEvent( QShowEvent* event )
+	{
+		Page::showEvent( event );
+		if ( health_stale_ )
+		{
+			health_stale_ = false;
+			health_timer_->start();
+		}
 	}
 
 	void OverviewPage::setTrigger( bool held )

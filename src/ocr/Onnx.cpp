@@ -29,15 +29,18 @@ namespace lexiglance::ocr
 		constexpr std::array library_names{ "libonnxruntime.so", "libonnxruntime.so.1" };
 #endif
 
-		// ONNX Runtime's entry point, from our own copy of the library or else the system's.
+		// ONNX Runtime's entry point, from our own copy of the library or else the system's. Not on Windows: the
+		// onnxruntime.dll in System32 is Windows' own, an older release that cannot read the models.
 		void* entryPoint( const std::filesystem::path& directory )
 		{
 			std::vector<std::filesystem::path> candidates{ directory / library_names.front() };
+#ifndef _WIN32
 			candidates.insert( candidates.end(), library_names.begin(), library_names.end() );
+#endif
 			for ( const auto& candidate : candidates )
 			{
 #ifdef _WIN32
-				if ( HMODULE library = LoadLibraryW( candidate.c_str() ); library != nullptr )
+				if ( HMODULE library = LoadLibraryExW( candidate.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH ); library != nullptr )
 				{
 					return reinterpret_cast<void*>( GetProcAddress( library, "OrtGetApiBase" ) );
 				}
@@ -58,34 +61,38 @@ namespace lexiglance::ocr
 			std::string   error;
 		};
 
-		// One runtime and environment for the whole process; the library stays loaded until exit.
-		Runtime& runtime( const std::filesystem::path& directory )
+		// One runtime and environment for the whole process; the library stays loaded until exit. Until one has loaded
+		// every call tries again, since the runtime can be downloaded while the daemon runs.
+		Runtime runtime( const std::filesystem::path& directory )
 		{
 			static Runtime        instance;
-			static std::once_flag once;
-			std::call_once( once, [&] {
-				void* entry = entryPoint( directory );
-				if ( entry == nullptr )
-				{
-					instance.error = "ONNX Runtime is not installed";
-					return;
-				}
-				using GetApiBase  = const OrtApiBase* ( * )();
-				const auto    get = reinterpret_cast<GetApiBase>( entry );
-				const OrtApi* api = get != nullptr ? get()->GetApi( api_version ) : nullptr;
-				if ( api == nullptr )
-				{
-					instance.error = "ONNX Runtime is too old (1.16 or newer is needed)";
-					return;
-				}
-				if ( OrtStatus* status = api->CreateEnv( ORT_LOGGING_LEVEL_ERROR, "lexiglance", &instance.env ); status != nullptr )
-				{
-					instance.error = api->GetErrorMessage( status );
-					api->ReleaseStatus( status );
-					return;
-				}
-				instance.api = api;
-			} );
+			static std::mutex     mutex;
+			const std::lock_guard lock( mutex );
+			if ( instance.api != nullptr )
+			{
+				return instance;
+			}
+			void* entry = entryPoint( directory );
+			if ( entry == nullptr )
+			{
+				instance.error = "ONNX Runtime is not installed";
+				return instance;
+			}
+			using GetApiBase  = const OrtApiBase* ( * )();
+			const auto    get = reinterpret_cast<GetApiBase>( entry );
+			const OrtApi* api = get != nullptr ? get()->GetApi( api_version ) : nullptr;
+			if ( api == nullptr )
+			{
+				instance.error = "ONNX Runtime is too old (1.16 or newer is needed)";
+				return instance;
+			}
+			if ( OrtStatus* status = api->CreateEnv( ORT_LOGGING_LEVEL_ERROR, "lexiglance", &instance.env ); status != nullptr )
+			{
+				instance.error = api->GetErrorMessage( status );
+				api->ReleaseStatus( status );
+				return instance;
+			}
+			instance.api = api;
 			return instance;
 		}
 
@@ -113,7 +120,7 @@ namespace lexiglance::ocr
 
 	Result<std::unique_ptr<OnnxModel>> OnnxModel::load( const std::filesystem::path& model, const std::filesystem::path& runtime_dir, int threads )
 	{
-		Runtime& rt = runtime( runtime_dir );
+		const Runtime rt = runtime( runtime_dir );
 		if ( rt.api == nullptr )
 		{
 			return fail( "{}", rt.error );

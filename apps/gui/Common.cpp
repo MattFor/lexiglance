@@ -1,10 +1,13 @@
 #include "Common.h"
 
+#include <lexiglance/core/Paths.h>
+
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QVersionNumber>
 
 namespace lexiglance::gui
 {
@@ -65,6 +68,32 @@ namespace lexiglance::gui
 		box.setDefaultButton( QMessageBox::Cancel );
 		box.exec();
 		return box.clickedButton() == accept;
+	}
+
+	void showProgress( QProgressBar* bar, qint64 received, qint64 total )
+	{
+		bar->show();
+		if ( total <= 0 )
+		{
+			bar->setRange( 0, 0 );
+			return;
+		}
+		bar->setRange( 0, 1000 );
+		bar->setValue( static_cast<int>( std::min( received, total ) * 1000 / total ) );
+		bar->setFormat( QStringLiteral( "%1 of %2" ).arg( formatBytes( static_cast<std::uint64_t>( received ) ), formatBytes( static_cast<std::uint64_t>( total ) ) ) );
+	}
+
+	bool olderVersion( const QString& a, const QString& b )
+	{
+		const auto number = []( const QString& text ) { return QVersionNumber::fromString( text.startsWith( 'v' ) ? text.mid( 1 ) : text ); };
+		const auto first  = number( a );
+		const auto second = number( b );
+		return !first.isNull() && !second.isNull() && first < second;
+	}
+
+	QSettings applicationMemory()
+	{
+		return { qs( ( paths::configDir() / "settings-application.ini" ).string() ), QSettings::IniFormat };
 	}
 
 } // namespace lexiglance::gui

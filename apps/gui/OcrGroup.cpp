@@ -245,7 +245,8 @@ namespace lexiglance::gui
 		model_( new QComboBox() ),
 		windows_( new QPlainTextEdit() ),
 		status_( new QLabel() ),
-		download_( new QPushButton( QIcon::fromTheme( QStringLiteral( "folder-download" ) ), QString() ) )
+		download_( new QPushButton( QIcon::fromTheme( QStringLiteral( "folder-download" ) ), QString() ) ),
+		progress_( new QProgressBar() )
 	{
 		auto* layout = new QVBoxLayout( this );
 		layout->addWidget( note( QStringLiteral( "Reads the pixels around the pointer when an application exposes no text: games, images, videos, "
@@ -272,6 +273,8 @@ namespace lexiglance::gui
 		row->addWidget( status_, 1 );
 		row->addWidget( download_ );
 		layout->addLayout( row );
+		progress_->hide();
+		layout->addWidget( progress_ );
 
 		connect( mode_, &QComboBox::currentIndexChanged, this, [this] { store(); } );
 		for ( QComboBox* combo : { engine_, model_ } )
@@ -294,10 +297,15 @@ namespace lexiglance::gui
 			}
 		} );
 
-		context_.client->onEvent( [this]( std::string_view name, const json::Value& ) {
+		context_.client->onEvent( [this]( std::string_view name, const json::Value& params ) {
 			if ( name == "config.changed" )
 			{
 				updateStatus();
+			}
+			// Sent once the daemon has rebuilt its text capture, after a download say.
+			else if ( name == "status.changed" )
+			{
+				showStatus( params );
 			}
 		} );
 	}
@@ -356,23 +364,29 @@ namespace lexiglance::gui
 	{
 		updateDownloadButton();
 		context_.client->call( "status", "{}", [this]( const json::Value* status, const QString& error ) {
-			status_->setText( status == nullptr ? error : QStringLiteral( "Text capture: " ) + qs( ( *status )["capture"].asString() ) );
 			if ( status == nullptr )
 			{
+				status_->setText( error );
 				return;
 			}
-			// Models are for the languages the daemon reads: turned on, with dictionaries.
-			std::vector<std::string> in_use;
-			for ( const json::Value& code : ( *status )["languages"].items() )
-			{
-				in_use.emplace_back( code.asString() );
-			}
-			if ( in_use != in_use_ )
-			{
-				in_use_ = std::move( in_use );
-				updateDownloadButton();
-			}
+			showStatus( *status );
 		} );
+	}
+
+	void OcrGroup::showStatus( const json::Value& status )
+	{
+		status_->setText( QStringLiteral( "Text capture: " ) + qs( status["capture"].asString() ) );
+		// Models are for the languages the daemon reads: turned on, with dictionaries.
+		std::vector<std::string> in_use;
+		for ( const json::Value& code : status["languages"].items() )
+		{
+			in_use.emplace_back( code.asString() );
+		}
+		if ( in_use != in_use_ )
+		{
+			in_use_ = std::move( in_use );
+			updateDownloadButton();
+		}
 	}
 
 	void OcrGroup::updateDownloadButton()
@@ -407,23 +421,32 @@ namespace lexiglance::gui
 		return used.empty() ? enabled : used;
 	}
 
-	void OcrGroup::fetchAll( std::vector<std::pair<QUrl, QString>> files, std::function<QString()> finish )
+	void OcrGroup::fetchAll( const QString& what, std::vector<std::pair<QUrl, QString>> files, std::function<QString()> finish )
 	{
 		download_->setEnabled( false );
+		status_->setText( QStringLiteral( "Downloading %1..." ).arg( what ) );
 		auto remaining = std::make_shared<std::size_t>( files.size() );
 		auto failure   = std::make_shared<QString>();
 		auto after     = std::make_shared<std::function<QString()>>( std::move( finish ) );
-		for ( auto& [url, target] : files )
+		// Each file's bytes so far and in all: the files come side by side, and the bar shows them as one.
+		auto sizes = std::make_shared<std::vector<std::pair<qint64, qint64>>>( files.size() );
+		for ( std::size_t index = 0; index < files.size(); ++index )
 		{
-			const QString name = url.fileName();
 			downloader_->download(
-					url,
-					target,
-					[this, name]( qint64 received, qint64 total ) {
-						if ( total > 0 )
+					files[index].first,
+					files[index].second,
+					[this, sizes, index]( qint64 received, qint64 total ) {
+						( *sizes )[index] = { received, total };
+						qint64 done       = 0;
+						qint64 all        = 0;
+						bool   known      = true;
+						for ( const auto& [file_received, file_total] : *sizes )
 						{
-							status_->setText( QStringLiteral( "Downloading %1: %2 of %3" ).arg( name, formatBytes( static_cast<std::uint64_t>( received ) ), formatBytes( static_cast<std::uint64_t>( total ) ) ) );
+							done += file_received;
+							all += file_total;
+							known = known && file_total > 0;
 						}
+						showProgress( progress_, done, known ? all : 0 );
 					},
 					[this, remaining, failure, after]( const QString& error ) {
 						if ( !error.isEmpty() )
@@ -439,13 +462,21 @@ namespace lexiglance::gui
 							*failure = ( *after )();
 						}
 						download_->setEnabled( true );
+						progress_->hide();
 						if ( !failure->isEmpty() )
 						{
 							status_->setText( QStringLiteral( "Download failed: " ) + *failure );
 							return;
 						}
-						// The daemon rebuilds its text capture and picks the new files up.
-						context_.client->call( "capture.reset", "{}", [this]( const json::Value*, const QString& ) { updateStatus(); } );
+						// The daemon rebuilds its text capture with the new files, and says so when it is ready (status.changed).
+						updateDownloadButton();
+						status_->setText( QStringLiteral( "Text capture: loading what was downloaded..." ) );
+						context_.client->call( "capture.reset", "{}", [this]( const json::Value*, const QString& reset_error ) {
+							if ( !reset_error.isEmpty() )
+							{
+								updateStatus();
+							}
+						} );
 					}
 			);
 		}
@@ -461,7 +492,7 @@ namespace lexiglance::gui
 		{
 			files.emplace_back( QUrl( base + name + ".traineddata" ), directory + "/" + name + ".traineddata" );
 		}
-		fetchAll( toDownload( std::move( files ) ), {} );
+		fetchAll( QStringLiteral( "Tesseract models" ), toDownload( std::move( files ) ), {} );
 	}
 
 	void OcrGroup::downloadPaddle()
@@ -475,7 +506,7 @@ namespace lexiglance::gui
 		{
 			files.emplace_back( QUrl( QStringLiteral( "https://github.com/microsoft/onnxruntime/releases/download/v%1/%2%3" ).arg( onnx_runtime_version, archive, archive_suffix ) ), runtime + "/" + archive + archive_suffix );
 		}
-		fetchAll( std::move( files ), [runtime, archive, unpack] { return unpack ? unpackRuntime( runtime, archive ) : QString(); } );
+		fetchAll( QStringLiteral( "PaddleOCR" ), std::move( files ), [runtime, archive, unpack] { return unpack ? unpackRuntime( runtime, archive ) : QString(); } );
 	}
 
 } // namespace lexiglance::gui

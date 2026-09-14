@@ -13,6 +13,7 @@
 #include <QNetworkRequest>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace lexiglance::gui
@@ -192,6 +193,26 @@ namespace lexiglance::gui
 				loadFields( model );
 			}
 		} );
+
+		// While shown, AnkiConnect is asked every few seconds, so Anki starting or closing shows without leaving the page.
+		auto* poll = new QTimer( this );
+		poll->setInterval( 3000 );
+		connect( poll, &QTimer::timeout, this, [this] {
+			if ( !isVisible() || !anki_enabled_->isChecked() || anki_asking_ )
+			{
+				return;
+			}
+			anki_asking_ = true;
+			request( QStringLiteral( "version" ), {}, [this]( const QJsonValue&, const QString& error ) {
+				anki_asking_ = false;
+				// Only a change is shown: Anki started (its decks and note types come in) or closed.
+				if ( error.isEmpty() != anki_connected_ )
+				{
+					connectAnki();
+				}
+			} );
+		} );
+		poll->start();
 	}
 
 	void AnkiPage::refresh()
@@ -340,6 +361,7 @@ namespace lexiglance::gui
 	{
 		anki_status_->setText( QStringLiteral( "Connecting…" ) );
 		request( QStringLiteral( "version" ), {}, [this]( const QJsonValue& version, const QString& error ) {
+			anki_connected_ = error.isEmpty();
 			if ( !error.isEmpty() )
 			{
 				anki_status_->setText( error );

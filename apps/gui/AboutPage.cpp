@@ -28,6 +28,7 @@ namespace lexiglance::gui
 	{
 
 		const QString author_url = QStringLiteral( "https://github.com/MattFor" );
+		const QString donate_url = QStringLiteral( "https://tip.mattfor.com" );
 
 		struct Component
 		{
@@ -132,6 +133,12 @@ namespace lexiglance::gui
 		identity->addSpacing( 4 );
 		identity->addLayout( links );
 		header->addLayout( identity, 1 );
+		// Top right, apart from the links: a tip for the project.
+		auto* donate = opener( QStringLiteral( "♥  Support Lexiglance" ), donate_url, this );
+		donate->setObjectName( QStringLiteral( "donateButton" ) );
+		donate->setCursor( Qt::PointingHandCursor );
+		donate->setToolTip( QStringLiteral( "Lexiglance is free; a tip helps it keep going (%1)" ).arg( donate_url ) );
+		header->addWidget( donate, 0, Qt::AlignVCenter | Qt::AlignRight );
 		layout->addLayout( header );
 
 		text_->setOpenLinks( false );
@@ -147,6 +154,15 @@ namespace lexiglance::gui
 
 		daemon_ = QStringLiteral( "not running" );
 		render();
+
+		// Kept current while open: the daemon's state, and the attributions of the dictionaries installed.
+		client().onEvent( [this]( std::string_view event, const json::Value& ) {
+			if ( event == "status.changed" || event == "dictionaries.changed" )
+			{
+				activated();
+			}
+		} );
+		client().onConnection( [this]( bool ) { activated(); } );
 	}
 
 	void AboutPage::activated()

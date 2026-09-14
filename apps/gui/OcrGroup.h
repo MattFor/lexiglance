@@ -4,6 +4,7 @@
 #include "Common.h"
 #include "Downloader.h"
 
+#include <lexiglance/core/Json.h>
 #include <lexiglance/language/Language.h>
 
 #include <QCheckBox>
@@ -11,6 +12,7 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QString>
 #include <QUrl>
@@ -34,11 +36,14 @@ namespace lexiglance::gui
 	private:
 		void store();
 		void updateStatus();
+		// The daemon's status (its answer to "status", or a status.changed event): what capture reads.
+		void showStatus( const json::Value& status );
 		void updateDownloadButton();
 		// The languages OCR models are for: those the daemon reads, else those turned on.
 		[[nodiscard]] std::vector<const lang::Language*> ocrLanguages() const;
-		// Downloads every file, then runs `finish` (an error message, or empty) and has the daemon reload its capture.
-		void fetchAll( std::vector<std::pair<QUrl, QString>> files, std::function<QString()> finish );
+		// Downloads every file (`what` they are, for the status), then runs `finish` (an error message, or empty) and has
+		// the daemon reload its capture.
+		void fetchAll( const QString& what, std::vector<std::pair<QUrl, QString>> files, std::function<QString()> finish );
 		void downloadTesseract();
 		void downloadPaddle();
 
@@ -51,6 +56,7 @@ namespace lexiglance::gui
 		QPlainTextEdit* windows_;
 		QLabel*         status_;
 		QPushButton*    download_;
+		QProgressBar*   progress_;
 		bool            loading_ = false;
 		// Codes of the languages the daemon reads (turned on, with dictionaries).
 		std::vector<std::string> in_use_;

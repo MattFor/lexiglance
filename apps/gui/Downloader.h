@@ -18,6 +18,7 @@ namespace lexiglance::gui
 		using Progress = std::function<void( qint64 received, qint64 total )>;
 		using Done     = std::function<void( const QString& error )>;
 		using Fetched  = std::function<void( const QByteArray& data, const QString& error )>;
+		using Resolved = std::function<void( const QUrl& url, const QString& error )>;
 
 		explicit Downloader( QObject* parent = nullptr );
 
@@ -26,6 +27,9 @@ namespace lexiglance::gui
 
 		// Small in-memory request, e.g. a dictionary's update index.
 		void fetch( const QUrl& url, Fetched done );
+
+		// Where `url` leads after its redirects (a HEAD request), e.g. a project's latest release.
+		void resolve( const QUrl& url, Resolved done );
 
 	private:
 		QNetworkAccessManager* network_;

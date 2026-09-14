@@ -3,6 +3,7 @@
 
 #include "Common.h"
 #include "DaemonClient.h"
+#include "HelpOverlay.h"
 #include "Settings.h"
 
 #include <QAction>
@@ -30,6 +31,12 @@ namespace lexiglance::gui
 
 		void search( const QString& text );
 
+		// What can be done and where, over the window; `first` on the first start.
+		void showHelp( bool first = false );
+
+		// The help, on the first start only.
+		void welcome();
+
 	protected:
 		void closeEvent( QCloseEvent* event ) override;
 
@@ -45,13 +52,16 @@ namespace lexiglance::gui
 		QStackedWidget*           pages_;
 		std::vector<Page*>        page_list_;
 		QSystemTrayIcon*          tray_         = nullptr;
+		int                       tray_tries_   = 0;
 		QAction*                  pause_action_ = nullptr;
+		HelpOverlay*              help_         = nullptr;
 		QLabel*                   connection_;
 		QLabel*                   summary_;
 		QPushButton*              start_button_;
 		bool                      palette_from_daemon_ = true;
 		bool                      dark_                = false;
 		bool                      tried_start_         = false;
+		bool                      replaced_daemon_     = false;
 	};
 
 } // namespace lexiglance::gui

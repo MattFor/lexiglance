@@ -45,7 +45,7 @@ same dictionary format as [Yomitan](https://yomitan.wiki/).
   make it executable (`chmod +x lexiglance-x86_64.AppImage`) and run it.
 
 The [releases page](https://github.com/MattFor/lexiglance/releases) also has a portable `.zip` for Windows, a `.deb`
-for Debian and Ubuntu, and a `.tar.gz`.
+for Debian and Ubuntu, and a `.tar.gz`. From then on Lexiglance keeps itself up to date (**Overview -> Updates**).
 
 ## Getting started
 
