@@ -1,0 +1,11 @@
+/* Only simple attribute selectors map onto popup markup. */
+span[data-sc-content="note"] {
+    color: #ff0000;
+    font-weight: bold;
+}
+
+div[data-sc-content="nested"] {
+    & ul {
+        color: #00ff00;
+    }
+}

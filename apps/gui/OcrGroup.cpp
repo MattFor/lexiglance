@@ -1,0 +1,481 @@
+#include "OcrGroup.h"
+
+#include "DaemonClient.h"
+#include "Settings.h"
+
+#include <lexiglance/core/Paths.h>
+#include <lexiglance/language/Language.h>
+
+#include <QDir>
+#include <QFile>
+#include <QFormLayout>
+#include <QHBoxLayout>
+#include <QProcess>
+#include <QSignalBlocker>
+#include <QSysInfo>
+#include <QUrl>
+#include <QVBoxLayout>
+
+#include <algorithm>
+#include <iterator>
+#include <memory>
+#include <utility>
+#include <vector>
+
+namespace lexiglance::gui
+{
+
+	namespace
+	{
+
+		const QString onnx_runtime_version = QStringLiteral( "1.30.0" );
+		// RapidOCR's ONNX exports of the PaddleOCR models; languages name theirs relative to it (lang::OcrModels).
+		const QString paddle_release = QStringLiteral( "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/" );
+		const QString paddle_models  = paddle_release + QStringLiteral( "PP-OCRv6/" );
+
+		QString ocrPath( const char* name )
+		{
+			return qs( ( paths::ocrDir() / name ).string() );
+		}
+
+		QString modelDirectory( const std::string& model )
+		{
+			return qs( ( paths::ocrDir() / model ).string() );
+		}
+
+		// Tesseract's models of the languages, horizontal and vertical.
+		std::vector<QString> tesseractModels( std::span<const lang::Language* const> languages )
+		{
+			std::vector<QString> names;
+			for ( const lang::Language* language : languages )
+			{
+				for ( const std::string_view name : { language->ocrModels().tesseract, language->ocrModels().tesseract_vertical } )
+				{
+					if ( !name.empty() )
+					{
+						names.push_back( qs( name ) );
+					}
+				}
+			}
+			return names;
+		}
+
+		bool modelInstalled( const std::string& model, std::span<const lang::Language* const> languages )
+		{
+			const QString directory = modelDirectory( model );
+			return std::ranges::all_of( tesseractModels( languages ), [&]( const QString& name ) { return QFile::exists( directory + "/" + name + ".traineddata" ); } );
+		}
+
+		// PaddleOCR's files for the languages, each with where it comes from: the detector, the default recogniser
+		// (Chinese, Japanese, English) when a language needs it, and the recognisers of the others.
+		std::vector<std::pair<QUrl, QString>> paddleFiles( std::span<const lang::Language* const> languages )
+		{
+			const QString                         models = ocrPath( "paddle" );
+			std::vector<std::pair<QUrl, QString>> files{ { QUrl( paddle_models + "det/PP-OCRv6_det_small.onnx" ), models + "/det.onnx" } };
+			if ( std::ranges::any_of( languages, []( const lang::Language* language ) { return language->ocrModels().paddle.empty(); } ) )
+			{
+				files.emplace_back( QUrl( paddle_models + "rec/PP-OCRv6_rec_small.onnx" ), models + "/rec.onnx" );
+			}
+			for ( const lang::Language* language : languages )
+			{
+				const auto    ocr    = language->ocrModels();
+				const QString target = models + "/" + qs( ocr.paddleFile() );
+				if ( !ocr.paddle.empty() && std::ranges::none_of( files, [&]( const auto& file ) { return file.second == target; } ) )
+				{
+					files.emplace_back( QUrl( paddle_release + qs( ocr.paddle ) ), target );
+				}
+			}
+			return files;
+		}
+
+		bool paddleInstalled( std::span<const lang::Language* const> languages )
+		{
+			return std::ranges::all_of( paddleFiles( languages ), []( const auto& file ) { return QFile::exists( file.second ); } );
+		}
+
+		// What is missing, or everything again when nothing is.
+		std::vector<std::pair<QUrl, QString>> toDownload( std::vector<std::pair<QUrl, QString>> files )
+		{
+			if ( !std::ranges::all_of( files, []( const auto& file ) { return QFile::exists( file.second ); } ) )
+			{
+				std::erase_if( files, []( const auto& file ) { return QFile::exists( file.second ); } );
+			}
+			return files;
+		}
+
+#ifdef Q_OS_WIN
+		// The runtime's library as the daemon loads it, and the release archives' format.
+		const QString runtime_library = QStringLiteral( "onnxruntime.dll" );
+		const QString archive_suffix  = QStringLiteral( ".zip" );
+#else
+		const QString runtime_library = QStringLiteral( "libonnxruntime.so" );
+		const QString archive_suffix  = QStringLiteral( ".tgz" );
+#endif
+
+		// The ONNX Runtime release archive for this machine (without extension), if one exists.
+		QString runtimeArchive()
+		{
+			const QString cpu = QSysInfo::currentCpuArchitecture();
+			if ( QSysInfo::kernelType() == QStringLiteral( "winnt" ) )
+			{
+				if ( cpu == QStringLiteral( "x86_64" ) )
+				{
+					return QStringLiteral( "onnxruntime-win-x64-" ) + onnx_runtime_version;
+				}
+				if ( cpu == QStringLiteral( "arm64" ) )
+				{
+					return QStringLiteral( "onnxruntime-win-arm64-" ) + onnx_runtime_version;
+				}
+				return {};
+			}
+			if ( QSysInfo::kernelType() != QStringLiteral( "linux" ) )
+			{
+				return {};
+			}
+			if ( cpu == QStringLiteral( "x86_64" ) )
+			{
+				return QStringLiteral( "onnxruntime-linux-x64-" ) + onnx_runtime_version;
+			}
+			if ( cpu == QStringLiteral( "arm64" ) )
+			{
+				return QStringLiteral( "onnxruntime-linux-aarch64-" ) + onnx_runtime_version;
+			}
+			return {};
+		}
+
+		// Takes the library and its license out of a downloaded release archive; an error message on failure.
+		QString unpackRuntime( const QString& directory, const QString& archive )
+		{
+			const QString packed = directory + "/" + archive + archive_suffix;
+#ifdef Q_OS_WIN
+			const QString library = QStringLiteral( "lib/onnxruntime.dll" );
+			// Windows' own bsdtar (not another tar on PATH), which reads zip archives too.
+			const QString program = qEnvironmentVariable( "SystemRoot", QStringLiteral( "C:\\Windows" ) ) + QStringLiteral( "\\System32\\tar.exe" );
+			const QString extract = QStringLiteral( "-xf" );
+#else
+			const QString library = "lib/libonnxruntime.so." + onnx_runtime_version;
+			const QString program = QStringLiteral( "tar" );
+			const QString extract = QStringLiteral( "-xzf" );
+#endif
+			QProcess tar;
+			tar.start( program, { extract, packed, QStringLiteral( "-C" ), directory, QStringLiteral( "--strip-components=1" ), archive + "/LICENSE", archive + "/" + library } );
+			const bool unpacked = tar.waitForFinished( 60000 ) && tar.exitStatus() == QProcess::NormalExit && tar.exitCode() == 0;
+			QFile::remove( packed );
+			if ( !unpacked )
+			{
+				return QStringLiteral( "cannot unpack ONNX Runtime: " ) + QString::fromLocal8Bit( tar.readAllStandardError() ).trimmed();
+			}
+			QFile::remove( directory + "/" + runtime_library );
+			const bool moved = QFile::rename( directory + "/" + library, directory + "/" + runtime_library );
+			QDir( directory + "/lib" ).removeRecursively();
+			return moved ? QString() : QStringLiteral( "cannot install ONNX Runtime" );
+		}
+
+		int modeIndex( config::OcrMode mode )
+		{
+			switch ( mode )
+			{
+				case config::OcrMode::Off:
+					return 0;
+				case config::OcrMode::Always:
+					return 2;
+				case config::OcrMode::Fallback:
+					break;
+			}
+			return 1;
+		}
+
+		config::OcrMode modeAt( int index )
+		{
+			switch ( index )
+			{
+				case 0:
+					return config::OcrMode::Off;
+				case 2:
+					return config::OcrMode::Always;
+				default:
+					return config::OcrMode::Fallback;
+			}
+		}
+
+		int engineIndex( config::OcrEngine engine )
+		{
+			switch ( engine )
+			{
+				case config::OcrEngine::Paddle:
+					return 1;
+				case config::OcrEngine::Tesseract:
+					return 2;
+				case config::OcrEngine::Auto:
+					break;
+			}
+			return 0;
+		}
+
+		config::OcrEngine engineAt( int index )
+		{
+			switch ( index )
+			{
+				case 1:
+					return config::OcrEngine::Paddle;
+				case 2:
+					return config::OcrEngine::Tesseract;
+				default:
+					return config::OcrEngine::Auto;
+			}
+		}
+
+		QLabel* note( const QString& text )
+		{
+			auto* label = new QLabel( text );
+			label->setWordWrap( true );
+			label->setEnabled( false );
+			return label;
+		}
+
+	} // namespace
+
+	OcrGroup::OcrGroup( Context context, QWidget* parent ) :
+		QGroupBox( QStringLiteral( "Screen text recognition (OCR)" ), parent ),
+		context_( std::move( context ) ),
+		downloader_( new Downloader( this ) ),
+		mode_( new QComboBox() ),
+		engine_( new QComboBox() ),
+		vertical_( new QCheckBox( QStringLiteral( "Vertical text (manga, vertical novels)" ) ) ),
+		model_( new QComboBox() ),
+		windows_( new QPlainTextEdit() ),
+		status_( new QLabel() ),
+		download_( new QPushButton( QIcon::fromTheme( QStringLiteral( "folder-download" ) ), QString() ) )
+	{
+		auto* layout = new QVBoxLayout( this );
+		layout->addWidget( note( QStringLiteral( "Reads the pixels around the pointer when an application exposes no text: games, images, videos, "
+		                                         "Wine programs and some terminals. Only a region around the pointer is read, and only while the trigger is held." ) ) );
+
+		auto* form = new QFormLayout();
+		mode_->addItems( { QStringLiteral( "Off" ), QStringLiteral( "When an application exposes no text" ), QStringLiteral( "Always" ) } );
+		engine_->addItems( { QStringLiteral( "Automatic (PaddleOCR when installed)" ), QStringLiteral( "PaddleOCR (most accurate)" ), QStringLiteral( "Tesseract" ) } );
+		model_->addItems( { QStringLiteral( "Fast" ), QStringLiteral( "Accurate (slower)" ) } );
+		form->addRow( QStringLiteral( "Use OCR" ), mode_ );
+		form->addRow( QStringLiteral( "Engine" ), engine_ );
+		form->addRow( QStringLiteral( "Tesseract model" ), model_ );
+		form->addRow( vertical_ );
+		layout->addLayout( form );
+
+		layout->addWidget( note( QStringLiteral( "Windows that always use OCR first (window class patterns, one per line):" ) ) );
+		windows_->setMaximumHeight( 80 );
+		windows_->setPlaceholderText( QStringLiteral( "steam_app_*" ) );
+		layout->addWidget( windows_ );
+
+		auto* row = new QHBoxLayout();
+		status_->setWordWrap( true );
+		status_->setTextInteractionFlags( Qt::TextSelectableByMouse );
+		row->addWidget( status_, 1 );
+		row->addWidget( download_ );
+		layout->addLayout( row );
+
+		connect( mode_, &QComboBox::currentIndexChanged, this, [this] { store(); } );
+		for ( QComboBox* combo : { engine_, model_ } )
+		{
+			connect( combo, &QComboBox::currentIndexChanged, this, [this] {
+				store();
+				updateStatus();
+			} );
+		}
+		connect( vertical_, &QCheckBox::toggled, this, [this] { store(); } );
+		connect( windows_, &QPlainTextEdit::textChanged, this, [this] { store(); } );
+		connect( download_, &QPushButton::clicked, this, [this] {
+			if ( engine_->currentIndex() == 2 )
+			{
+				downloadTesseract();
+			}
+			else
+			{
+				downloadPaddle();
+			}
+		} );
+
+		context_.client->onEvent( [this]( std::string_view name, const json::Value& ) {
+			if ( name == "config.changed" )
+			{
+				updateStatus();
+			}
+		} );
+	}
+
+	void OcrGroup::refresh()
+	{
+		loading_         = true;
+		const auto& scan = context_.settings->config().scan;
+		{
+			const QSignalBlocker a( mode_ );
+			const QSignalBlocker b( model_ );
+			const QSignalBlocker c( vertical_ );
+			const QSignalBlocker d( engine_ );
+			mode_->setCurrentIndex( modeIndex( scan.ocr ) );
+			engine_->setCurrentIndex( engineIndex( scan.ocr_engine ) );
+			model_->setCurrentIndex( scan.ocr_model == "best" ? 1 : 0 );
+			vertical_->setChecked( scan.ocr_vertical );
+		}
+		QStringList patterns;
+		for ( const auto& pattern : scan.ocr_windows )
+		{
+			patterns << qs( pattern );
+		}
+		if ( windows_->toPlainText() != patterns.join( '\n' ) )
+		{
+			const QSignalBlocker blocker( windows_ );
+			windows_->setPlainText( patterns.join( '\n' ) );
+		}
+		loading_ = false;
+		updateStatus();
+	}
+
+	void OcrGroup::store()
+	{
+		if ( loading_ )
+		{
+			return;
+		}
+		auto& scan        = context_.settings->config().scan;
+		scan.ocr          = modeAt( mode_->currentIndex() );
+		scan.ocr_engine   = engineAt( engine_->currentIndex() );
+		scan.ocr_model    = model_->currentIndex() == 1 ? "best" : "fast";
+		scan.ocr_vertical = vertical_->isChecked();
+		scan.ocr_windows.clear();
+		for ( const QString& line : windows_->toPlainText().split( '\n', Qt::SkipEmptyParts ) )
+		{
+			if ( !line.trimmed().isEmpty() )
+			{
+				scan.ocr_windows.push_back( ss( line.trimmed() ) );
+			}
+		}
+		context_.settings->commit();
+	}
+
+	void OcrGroup::updateStatus()
+	{
+		updateDownloadButton();
+		context_.client->call( "status", "{}", [this]( const json::Value* status, const QString& error ) {
+			status_->setText( status == nullptr ? error : QStringLiteral( "Text capture: " ) + qs( ( *status )["capture"].asString() ) );
+			if ( status == nullptr )
+			{
+				return;
+			}
+			// Models are for the languages the daemon reads: turned on, with dictionaries.
+			std::vector<std::string> in_use;
+			for ( const json::Value& code : ( *status )["languages"].items() )
+			{
+				in_use.emplace_back( code.asString() );
+			}
+			if ( in_use != in_use_ )
+			{
+				in_use_ = std::move( in_use );
+				updateDownloadButton();
+			}
+		} );
+	}
+
+	void OcrGroup::updateDownloadButton()
+	{
+		const bool tesseract = engine_->currentIndex() == 2;
+		const auto languages = ocrLanguages();
+		model_->setEnabled( engine_->currentIndex() != 1 );
+		if ( tesseract )
+		{
+			download_->setText( modelInstalled( model_->currentIndex() == 1 ? "best" : "fast", languages ) ? QStringLiteral( "Re-download models" ) : QStringLiteral( "Download Tesseract models" ) );
+		}
+		else
+		{
+			QString text = QStringLiteral( "Download PaddleOCR (about 40 MB)" );
+			if ( paddleInstalled( languages ) )
+			{
+				text = QStringLiteral( "Re-download PaddleOCR" );
+			}
+			else if ( QFile::exists( ocrPath( "paddle" ) + "/det.onnx" ) )
+			{
+				text = QStringLiteral( "Download PaddleOCR for more languages" );
+			}
+			download_->setText( text );
+		}
+	}
+
+	std::vector<const lang::Language*> OcrGroup::ocrLanguages() const
+	{
+		const auto                         enabled = lang::enabledLanguages( context_.settings->config().disabled_languages );
+		std::vector<const lang::Language*> used;
+		std::ranges::copy_if( enabled, std::back_inserter( used ), [this]( const lang::Language* language ) { return std::ranges::contains( in_use_, language->code() ); } );
+		return used.empty() ? enabled : used;
+	}
+
+	void OcrGroup::fetchAll( std::vector<std::pair<QUrl, QString>> files, std::function<QString()> finish )
+	{
+		download_->setEnabled( false );
+		auto remaining = std::make_shared<std::size_t>( files.size() );
+		auto failure   = std::make_shared<QString>();
+		auto after     = std::make_shared<std::function<QString()>>( std::move( finish ) );
+		for ( auto& [url, target] : files )
+		{
+			const QString name = url.fileName();
+			downloader_->download(
+					url,
+					target,
+					[this, name]( qint64 received, qint64 total ) {
+						if ( total > 0 )
+						{
+							status_->setText( QStringLiteral( "Downloading %1: %2 of %3" ).arg( name, formatBytes( static_cast<std::uint64_t>( received ) ), formatBytes( static_cast<std::uint64_t>( total ) ) ) );
+						}
+					},
+					[this, remaining, failure, after]( const QString& error ) {
+						if ( !error.isEmpty() )
+						{
+							*failure = error;
+						}
+						if ( --*remaining > 0 )
+						{
+							return;
+						}
+						if ( failure->isEmpty() && *after )
+						{
+							*failure = ( *after )();
+						}
+						download_->setEnabled( true );
+						if ( !failure->isEmpty() )
+						{
+							status_->setText( QStringLiteral( "Download failed: " ) + *failure );
+							return;
+						}
+						// The daemon rebuilds its text capture and picks the new files up.
+						context_.client->call( "capture.reset", "{}", [this]( const json::Value*, const QString& ) { updateStatus(); } );
+					}
+			);
+		}
+	}
+
+	void OcrGroup::downloadTesseract()
+	{
+		const std::string                     model     = model_->currentIndex() == 1 ? "best" : "fast";
+		const QString                         base      = model == "best" ? QStringLiteral( "https://github.com/tesseract-ocr/tessdata_best/raw/main/" ) : QStringLiteral( "https://github.com/tesseract-ocr/tessdata_fast/raw/main/" );
+		const QString                         directory = modelDirectory( model );
+		std::vector<std::pair<QUrl, QString>> files;
+		for ( const QString& name : tesseractModels( ocrLanguages() ) )
+		{
+			files.emplace_back( QUrl( base + name + ".traineddata" ), directory + "/" + name + ".traineddata" );
+		}
+		fetchAll( toDownload( std::move( files ) ), {} );
+	}
+
+	void OcrGroup::downloadPaddle()
+	{
+		const QString runtime = ocrPath( "runtime" );
+		auto          files   = toDownload( paddleFiles( ocrLanguages() ) );
+		// ONNX Runtime comes along unless it is already there; elsewhere it has to be installed from the system.
+		const QString archive = runtimeArchive();
+		const bool    unpack  = !archive.isEmpty() && !QFile::exists( runtime + "/" + runtime_library );
+		if ( unpack )
+		{
+			files.emplace_back( QUrl( QStringLiteral( "https://github.com/microsoft/onnxruntime/releases/download/v%1/%2%3" ).arg( onnx_runtime_version, archive, archive_suffix ) ), runtime + "/" + archive + archive_suffix );
+		}
+		fetchAll( std::move( files ), [runtime, archive, unpack] { return unpack ? unpackRuntime( runtime, archive ) : QString(); } );
+	}
+
+} // namespace lexiglance::gui

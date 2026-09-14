@@ -1,0 +1,69 @@
+---
+# Excluded checks are either pure style preferences already enforced by .clang-format, or they flag unavoidable
+# patterns of this code base (memory mapped structs, C APIs such as Xlib/AT-SPI, Qt parent ownership).
+Checks: >
+    -*,
+    bugprone-*,
+    -bugprone-easily-swappable-parameters,
+    cert-*,
+    -cert-err58-cpp,
+    clang-analyzer-*,
+    concurrency-*,
+    -concurrency-mt-unsafe,
+    cppcoreguidelines-*,
+    -cppcoreguidelines-avoid-magic-numbers,
+    -cppcoreguidelines-avoid-do-while,
+    -cppcoreguidelines-non-private-member-variables-in-classes,
+    -cppcoreguidelines-owning-memory,
+    -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+    -cppcoreguidelines-pro-bounds-constant-array-index,
+    -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+    -cppcoreguidelines-pro-type-reinterpret-cast,
+    -cppcoreguidelines-pro-type-union-access,
+    misc-*,
+    -misc-include-cleaner,
+    -misc-no-recursion,
+    -misc-non-private-member-variables-in-classes,
+    modernize-*,
+    -modernize-use-trailing-return-type,
+    performance-*,
+    portability-*,
+    -portability-avoid-pragma-once,
+    readability-*,
+    -readability-identifier-length,
+    -readability-magic-numbers,
+    -readability-uppercase-literal-suffix,
+    -readability-math-missing-parentheses
+WarningsAsErrors: ""
+HeaderFilterRegex: ".*/lexiglance/(include|src|apps|tests)/.*"
+FormatStyle: file
+CheckOptions:
+    bugprone-unused-return-value.AllowCastToVoid: true
+    cert-err33-c.AllowCastToVoid: true
+    readability-function-cognitive-complexity.Threshold: 60
+    readability-function-cognitive-complexity.IgnoreMacros: true
+    readability-implicit-bool-conversion.AllowPointerConditions: true
+    readability-implicit-bool-conversion.AllowIntegerConditions: true
+    cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor: true
+    cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted: true
+    misc-const-correctness.AnalyzePointers: false
+    readability-identifier-naming.NamespaceCase: lower_case
+    readability-identifier-naming.ClassCase: CamelCase
+    readability-identifier-naming.ClassIgnoredRegexp: "^iterator$"
+    readability-identifier-naming.StructCase: CamelCase
+    readability-identifier-naming.UnionCase: CamelCase
+    readability-identifier-naming.EnumCase: CamelCase
+    readability-identifier-naming.EnumConstantCase: CamelCase
+    readability-identifier-naming.TypeAliasCase: CamelCase
+    readability-identifier-naming.TypeAliasIgnoredRegexp: "^(value_type|difference_type|iterator_category|is_transparent)$"
+    readability-identifier-naming.TemplateParameterCase: CamelCase
+    readability-identifier-naming.FunctionCase: camelBack
+    readability-identifier-naming.MethodCase: camelBack
+    readability-identifier-naming.VariableCase: lower_case
+    readability-identifier-naming.ParameterCase: lower_case
+    readability-identifier-naming.MemberCase: lower_case
+    readability-identifier-naming.PrivateMemberSuffix: "_"
+    readability-identifier-naming.ProtectedMemberSuffix: "_"
+    readability-identifier-naming.ConstexprVariableCase: lower_case
+    readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
+...

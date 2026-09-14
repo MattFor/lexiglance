@@ -1,0 +1,4 @@
+#!/bin/sh
+# A per-user service: run it from a runsvdir (or turnstile) started inside the graphical session, so DISPLAY is set.
+exec 2>&1
+exec @LEXIGLANCE_DAEMON@

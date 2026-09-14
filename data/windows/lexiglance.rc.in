@@ -1,0 +1,4 @@
+// UTF-8 as the process code page: command lines, paths and console text in any script arrive intact.
+1 24 "@PROJECT_SOURCE_DIR@/data/windows/lexiglance.manifest"
+// The icon Explorer, the taskbar and shortcuts show (data/icons/lexiglance.svg rendered at 16 to 256 pixels).
+1 ICON "@PROJECT_SOURCE_DIR@/data/windows/lexiglance.ico"

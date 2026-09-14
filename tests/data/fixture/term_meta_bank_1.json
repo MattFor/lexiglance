@@ -1,0 +1,24 @@
+[
+    [
+        "食べる",
+        "freq",
+        {
+            "reading": "たべる",
+            "frequency": { "value": 199, "displayValue": "199" }
+        }
+    ],
+    ["読む", "freq", 292],
+    [
+        "食べる",
+        "pitch",
+        { "reading": "たべる", "pitches": [{ "position": 2 }] }
+    ],
+    [
+        "日本語",
+        "ipa",
+        {
+            "reading": "にほんご",
+            "transcriptions": [{ "ipa": "ɲihoŋɡo", "tags": [] }]
+        }
+    ]
+]

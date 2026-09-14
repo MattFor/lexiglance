@@ -1,0 +1,73 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: Latest
+# Allman everywhere except lambda bodies: with ColumnLimit 0 clang-format cannot indent Allman lambdas passed as
+# arguments (it leaves their bodies unformatted), so lambdas open their brace on the same line.
+BreakBeforeBraces: Custom
+BraceWrapping:
+    AfterCaseLabel: true
+    AfterClass: true
+    AfterControlStatement: Always
+    AfterEnum: true
+    AfterFunction: true
+    AfterNamespace: true
+    AfterStruct: true
+    AfterUnion: true
+    AfterExternBlock: true
+    BeforeCatch: true
+    BeforeElse: true
+    BeforeLambdaBody: false
+    BeforeWhile: false
+    IndentBraces: false
+    SplitEmptyFunction: true
+    SplitEmptyRecord: true
+    SplitEmptyNamespace: true
+ColumnLimit: 0
+UseTab: AlignWithSpaces
+TabWidth: 4
+IndentWidth: 4
+ContinuationIndentWidth: 8
+IndentCaseLabels: true
+IndentGotoLabels: false
+IndentExternBlock: Indent
+AccessModifierOffset: -4
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+SpaceAfterTemplateKeyword: true
+SpacesInParens: Custom
+SpacesInParensOptions:
+    InConditionalStatements: true
+    InCStyleCasts: true
+    InEmptyParentheses: false
+    Other: true
+Cpp11BracedListStyle: false
+SpaceBeforeCaseColon: false
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveDeclarations: Consecutive
+AlignConsecutiveBitFields: Consecutive
+AlignTrailingComments: true
+AlignOperands: AlignAfterOperator
+AlignAfterOpenBracket: BlockIndent
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+NamespaceIndentation: All
+PackConstructorInitializers: Never
+BreakConstructorInitializers: AfterColon
+ConstructorInitializerIndentWidth: 4
+InsertBraces: true
+AllowShortBlocksOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+IndentPPDirectives: BeforeHash
+SortIncludes: Never
+InsertNewlineAtEOF: true
+...

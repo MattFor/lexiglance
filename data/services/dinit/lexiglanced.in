@@ -1,0 +1,4 @@
+# A user service: copy to ~/.config/dinit.d/ and run dinitctl enable lexiglanced
+type = process
+command = @LEXIGLANCE_DAEMON@
+restart = true

@@ -1,0 +1,14 @@
+[Unit]
+Description=Lexiglance pop-up dictionary daemon
+Documentation=https://github.com/MattFor/lexiglance/blob/master/docs/autostart.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@LEXIGLANCE_DAEMON@
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

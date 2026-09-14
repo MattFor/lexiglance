@@ -1,0 +1,23 @@
+{
+    "code": "uk",
+    "name": "Ukrainian",
+    "script": ["0400-052F"],
+    "word_characters": "-‐‑'’ʼ",
+    "sample_text": "Чуєш їх, доцю, га? Кумедна ж ти, прощайся без ґольфів!",
+    "sample_words": ["їжа", "мова"],
+    "commons_prefix": "Uk",
+    "ocr": {
+        "paddle": "PP-OCRv5/rec/eslav_PP-OCRv5_rec_mobile.onnx",
+        "tesseract": "ukr"
+    },
+    "dictionaries": [
+        {
+            "name": "Wiktionary Ukrainian-English",
+            "category": "Terms",
+            "title": "wty-uk-en",
+            "description": "Ukrainian-English dictionary built from Wiktionary by kaikki.org and wty: definitions, examples, stress marks and every inflected form. Updated monthly.",
+            "homepage": "https://github.com/yomidevs/wiktionary-to-yomitan",
+            "download": "https://huggingface.co/datasets/daxida/wty-release/resolve/main/latest/dict/uk/en/wty-uk-en.zip"
+        }
+    ]
+}

@@ -1,0 +1,17 @@
+#ifndef LEXIGLANCE_CORE_VERSION_H
+#define LEXIGLANCE_CORE_VERSION_H
+
+#include <string_view>
+
+namespace lexiglance
+{
+
+	inline constexpr std::string_view version          = "@PROJECT_VERSION@";
+	inline constexpr std::string_view project_url      = "@PROJECT_HOMEPAGE_URL@";
+	inline constexpr std::string_view app_name         = "Lexiglance";
+	inline constexpr std::string_view app_id           = "lexiglance";
+	inline constexpr int              protocol_version = 1;
+
+} // namespace lexiglance
+
+#endif // LEXIGLANCE_CORE_VERSION_H

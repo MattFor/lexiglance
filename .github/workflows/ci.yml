@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: "6.8.3"
+  APT_PACKAGES: >-
+    ninja-build zlib1g-dev libcairo2-dev libpango1.0-dev libx11-dev libxi-dev libxfixes-dev libxrandr-dev
+    libxext-dev libatspi2.0-dev libcurl4-openssl-dev libgl-dev libxkbcommon-dev qt6-base-dev
+
+jobs:
+  format:
+    name: Formatting
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install clang-format
+        run: pipx install clang-format==21.1.7
+      - name: Check formatting
+        run: git ls-files '*.cpp' '*.h' ':!:third_party/**' | xargs clang-format --dry-run --Werror
+
+  linux:
+    name: Linux (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GCC 14
+            cxx: g++-14
+          - name: Clang 20
+            cxx: clang++-20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $APT_PACKAGES g++-14
+      - name: Install Clang
+        if: startsWith(matrix.cxx, 'clang')
+        run: wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 20
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DLEXIGLANCE_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: Sanitizers (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $APT_PACKAGES g++-14
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 20
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++-20
+          -DLEXIGLANCE_SANITIZE=ON -DLEXIGLANCE_BUILD_GUI=OFF
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/lsan.supp:print_suppressions=0
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build --output-on-failure
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $APT_PACKAGES g++-14
+          pipx install clang-tidy==21.1.1
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Generate sources
+        run: cmake --build build --target lexiglance_autogen || true
+      - name: Run clang-tidy
+        run: >-
+          git ls-files 'src/*.cpp' 'apps/*.cpp' 'tests/*.cpp' ':!:src/platform/windows/*'
+          | xargs -P "$(nproc)" -n 4 clang-tidy -p build --quiet --warnings-as-errors='*'
+
+  windows:
+    name: Windows (MinGW-w64, tests under wine)
+    runs-on: ubuntu-24.04
+    container: fedora:41
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: dnf install -y cmake ninja-build mingw64-gcc-c++ mingw64-zlib-static wine-core
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja --toolchain cmake/toolchains/mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release
+          -DLEXIGLANCE_BUILD_DAEMON=OFF -DLEXIGLANCE_BUILD_GUI=OFF
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        env:
+          WINEDEBUG: "-all"
+          # The container runs as root with a HOME it does not own, where wine refuses to make its prefix.
+          WINEPREFIX: /tmp/wine
+        run: ctest --test-dir build --output-on-failure
+
+  windows-native:
+    name: Windows (native, MSYS2 UCRT64)
+    # Everything: the daemon with its Windows backend, the settings application and all tests. MSYS2 moves to new GCC
+    # releases quickly, so its warnings are reported but do not fail the build.
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-cairo mingw-w64-ucrt-x86_64-pango mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-qt6-base
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Package
+        run: |
+          cmake --install build --prefix stage
+          cd build && cpack -G ZIP
+      - name: Installer
+        shell: pwsh
+        run: ./.github/scripts/windows-installer.ps1 build stage build
+      - name: Smoke test the packages
+        # Unpacked and installed, with nothing but Windows on PATH: every DLL and Qt plugin the programs load must be there.
+        shell: pwsh
+        run: |
+          ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem build/lexiglance-*.zip | Select-Object -First 1).FullName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem build/*-setup.exe | Select-Object -First 1).FullName
+
+  macos:
+    name: macOS (portable part)
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+      - name: Configure
+        run: brew install ninja && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEXIGLANCE_BUILD_DAEMON=OFF
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
