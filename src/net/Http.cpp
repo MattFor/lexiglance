@@ -1,10 +1,13 @@
 #include <lexiglance/net/Http.h>
 
+#include <lexiglance/core/Process.h>
 #include <lexiglance/core/Version.h>
 
 #include <format>
 #include <iterator>
 #include <memory>
+#include <string>
+#include <filesystem>
 
 #ifdef LEXIGLANCE_HAVE_CURL
 	#include <curl/curl.h>
@@ -64,6 +67,21 @@ namespace lexiglance::net
 			return size * count;
 		}
 
+	#ifdef _WIN32
+		// OpenSSL's libcurl (the one MinGW ships) looks for a CA bundle under the MSYS2 tree. An installed copy has
+		// none of that, and CURLSSLOPT_NATIVE_CA still fails to verify hosts such as JapanesePod101's CDN. The
+		// installer puts curl-ca-bundle.crt next to the programs; point libcurl at it.
+		const std::string& caBundle()
+		{
+			static const std::string path = [] {
+				const auto      next_to = process::executable().parent_path() / "curl-ca-bundle.crt";
+				std::error_code ec;
+				return std::filesystem::is_regular_file( next_to, ec ) ? next_to.string() : std::string();
+			}();
+			return path;
+		}
+	#endif
+
 	} // namespace
 
 	Result<Response> fetch( const Request& request )
@@ -91,8 +109,10 @@ namespace lexiglance::net
 	#endif
 		set( curl, CURLOPT_NOSIGNAL, 1L );
 	#ifdef _WIN32
-		// Windows' own certificate store: a libcurl built for MSYS2 looks for its CA bundle inside the MSYS2 tree.
-		set( curl, CURLOPT_SSL_OPTIONS, static_cast<long>( CURLSSLOPT_NATIVE_CA ) );
+		if ( const std::string& ca = caBundle(); !ca.empty() )
+		{
+			set( curl, CURLOPT_CAINFO, ca.c_str() );
+		}
 	#endif
 		set( curl, CURLOPT_TIMEOUT_MS, timeout );
 		set( curl, CURLOPT_CONNECTTIMEOUT_MS, std::min( timeout, 5000L ) );

@@ -68,8 +68,10 @@ statically and tested under wine.
   applications, Windows Terminal. The classic Win32 edit control (Notepad on Windows 10) has none; OCR reads it.
 - Selection lookup becomes lookup of copied text: Windows has no selection of its own, and text hookers copy what they
   read to the clipboard.
-- The wheel changes the looked-up length while the trigger is held, but the window under the pointer scrolls too:
-  keeping the wheel from it would take a low-level mouse hook, which [anticheat.md](anticheat.md) rules out.
+- The wheel changes the looked-up length while the trigger is held, and by default the window under the pointer scrolls
+  too, since taking the wheel from it needs a low-level mouse hook. **Scanning -> Also keep the wheel from the window
+  underneath** installs one while the trigger is held over a popup; it is off by default, and
+  [anticheat.md](anticheat.md) explains when to leave it that way.
 - Pronunciations play through MCI (MP3 and WAV); other formats need ffplay or mpv on PATH. HTTPS uses Windows'
   certificate store.
 - The settings application downloads PaddleOCR with ONNX Runtime for Windows; Tesseract is used when it is installed

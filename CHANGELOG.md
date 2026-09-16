@@ -1,6 +1,27 @@
 # Changelog
 
-## [1.0.1] - 2026-09-14
+## [1.1.0] - 22:20 CEST 2026-09-16
+
+- Statistics page: lookups, languages, sources and recent days, kept locally (optional).
+- Middle-click in the popup plays the pronunciation under the pointer. Speaker and Anki buttons are larger by default;
+  Appearance → Shown → Button size sets how large.
+- The popup closes when another window takes the keyboard (for example Alt+Tab).
+- Highlight padding can be set sideways and vertically separately, including negative values.
+- Daemon and application logs (`daemon.log`, `application.log`) with wall-clock times, thread names and richer detail;
+  linked from About → Files.
+- Help: click a number field, then use the wheel to change it quickly; 0 means automatic where the field says so.
+- Windows: OCR installs the Visual C++ Redistributable when needed (health check, Download PaddleOCR, the setup, and
+  silent self-updates). Lexiglance restarts on the new runtime by itself.
+- Overview → Health → Fix issues carries out every automatic fix at once.
+- About shows build channel (stable/dev) and platform beside the version.
+- Overview tagline sits beside the Lexiglance title; Text capture tile wraps the bracketed detail onto its own line.
+- Windows: each pronunciation clip uses its own temp file, so replay no longer fails after the first play.
+- Windows: the Windows key is shown as Win rather than Super in settings, health, help and the log.
+- Windows: optional Scanning setting to keep the wheel from the window underneath while it changes looked-up length
+  (off by default; see docs/anticheat.md).
+- Health and About turn download addresses into links; capture failures are logged as warnings under Recent problems.
+
+## [1.0.1] - 23:15 CEST 2026-09-14
 
 - Windows: PaddleOCR no longer fails after **Download PaddleOCR** with "Unsupported model IR version: 10, max
   supported IR version: 9". Lexiglance used the older ONNX Runtime that Windows keeps for itself; it now uses only the

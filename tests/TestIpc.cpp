@@ -69,8 +69,8 @@ namespace
 		server.broadcast( "tick", R"({"n":1})" );
 		bool       ticked = false;
 		const auto reply  = first->call( "echo", R"({"text":"a"})", [&]( std::string_view event, const lg::json::Value& params ) {
-            ticked = ticked || ( event == "tick" && params["n"].asInt() == 1 );
-        } );
+			ticked = ticked || ( event == "tick" && params["n"].asInt() == 1 );
+		} );
 		lg::test::expect( reply.has_value() && ticked );
 
 		// A client leaving does not disturb the others.

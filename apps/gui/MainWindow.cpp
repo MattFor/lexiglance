@@ -7,6 +7,7 @@
 #include "OverviewPage.h"
 #include "ScanningPage.h"
 #include "SearchPage.h"
+#include "StatisticsPage.h"
 
 #include <lexiglance/core/Version.h>
 
@@ -100,7 +101,6 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		public:
 			using QObject::QObject;
 
-		protected:
 			bool eventFilter( QObject* watched, QEvent* event ) override
 			{
 				if ( event->type() != QEvent::Wheel && event->type() != QEvent::Polish )
@@ -192,6 +192,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		addPage( new AppearancePage( context ), QStringLiteral( "Appearance" ), QStringLiteral( "preferences-desktop-theme" ) );
 		addPage( new SearchPage( context ), QStringLiteral( "Search" ), QStringLiteral( "edit-find" ) );
 		addPage( new AnkiPage( context ), QStringLiteral( "Anki" ), QStringLiteral( "document-send" ) );
+		addPage( new StatisticsPage( context ), QStringLiteral( "Statistics" ), QStringLiteral( "office-chart-bar" ) );
 		addPage( new AboutPage( context ), QStringLiteral( "About" ), QStringLiteral( "help-about" ) );
 
 		connect( navigation_, &QListWidget::currentRowChanged, this, [this]( int row ) {
@@ -288,7 +289,8 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 			showHelp();
 			return;
 		}
-		static const QStringList pages{ QStringLiteral( "overview" ), QStringLiteral( "dictionaries" ), QStringLiteral( "scanning" ), QStringLiteral( "appearance" ), QStringLiteral( "search" ), QStringLiteral( "anki" ), QStringLiteral( "about" ) };
+		// In the order they were added above, which is the order of the sidebar.
+		static const QStringList pages{ QStringLiteral( "overview" ), QStringLiteral( "dictionaries" ), QStringLiteral( "scanning" ), QStringLiteral( "appearance" ), QStringLiteral( "search" ), QStringLiteral( "anki" ), QStringLiteral( "statistics" ), QStringLiteral( "about" ) };
 		if ( const auto index = pages.indexOf( name.toLower() ); index >= 0 )
 		{
 			navigation_->setCurrentRow( static_cast<int>( index ) );
@@ -299,9 +301,13 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 	void MainWindow::search( const QString& text )
 	{
 		showPage( QStringLiteral( "search" ) );
-		if ( auto* page = dynamic_cast<SearchPage*>( page_list_[4] ) )
+		for ( Page* page : page_list_ )
 		{
-			page->setQuery( text );
+			if ( auto* search = dynamic_cast<SearchPage*>( page ) )
+			{
+				search->setQuery( text );
+				return;
+			}
 		}
 	}
 
@@ -398,11 +404,11 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		{
 			const auto lookups = status["lookups"].asInt();
 			QString    line    = QStringLiteral( "Connected to the daemon %1 · pid %2 · up %3 · %4 dictionaries · %5 lookups" )
-			                       .arg( qs( status["version"].asString() ) )
-			                       .arg( status["pid"].asInt() )
-			                       .arg( uptimeText( status["uptime"].asInt() ) )
-			                       .arg( status["dictionaries"].asInt() )
-			                       .arg( lookups );
+			                             .arg( qs( status["version"].asString() ) )
+			                             .arg( status["pid"].asInt() )
+			                             .arg( uptimeText( status["uptime"].asInt() ) )
+			                             .arg( status["dictionaries"].asInt() )
+			                             .arg( lookups );
 			if ( lookups > 0 )
 			{
 				line += QStringLiteral( " (%1 µs each)" ).arg( status["average_lookup_us"].asDouble(), 0, 'f', 1 );

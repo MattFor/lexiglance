@@ -38,28 +38,6 @@ namespace lexiglance::render
 			return std::max( 2.0, static_cast<double>( thickness( look ) ) );
 		}
 
-		// Room the lines need below the text box.
-		int depth( const HighlightLook& look ) noexcept
-		{
-			const int t = thickness( look );
-			switch ( look.shape )
-			{
-				case HighlightShape::Underline:
-					return t;
-				case HighlightShape::DoubleUnderline:
-					return 3 * t;
-				case HighlightShape::DottedUnderline:
-					return std::max( 2, t );
-				case HighlightShape::WavyUnderline:
-					return static_cast<int>( std::ceil( ( 2.0 * amplitude( look ) ) + t ) );
-				case HighlightShape::Outline:
-				case HighlightShape::Fill:
-				case HighlightShape::Brackets:
-					break;
-			}
-			return 0;
-		}
-
 		// A line along the bottom: rounded ends when the look is rounded.
 		void bar( cairo_t* cr, double y, double w, double t, double radius )
 		{
@@ -69,24 +47,38 @@ namespace lexiglance::render
 
 	} // namespace
 
-	Box highlightArea( const Box& text, const HighlightLook& look ) noexcept
+	int highlightDepth( const HighlightLook& look ) noexcept
 	{
-		const int p = std::max( 0, look.padding );
 		const int t = thickness( look );
 		switch ( look.shape )
 		{
-			case HighlightShape::Fill:
-				return { .x = text.x - p, .y = text.y - p, .width = text.width + ( 2 * p ), .height = text.height + ( 2 * p ) };
-			case HighlightShape::Outline:
-			case HighlightShape::Brackets:
-				return { .x = text.x - p - t, .y = text.y - p - t, .width = text.width + ( 2 * ( p + t ) ), .height = text.height + ( 2 * ( p + t ) ) };
 			case HighlightShape::Underline:
+				return t;
 			case HighlightShape::DoubleUnderline:
+				return 3 * t;
 			case HighlightShape::DottedUnderline:
+				return std::max( 2, t );
 			case HighlightShape::WavyUnderline:
+				return static_cast<int>( std::ceil( ( 2.0 * amplitude( look ) ) + t ) );
+			case HighlightShape::Outline:
+			case HighlightShape::Fill:
+			case HighlightShape::Brackets:
 				break;
 		}
-		return { .x = text.x - p, .y = text.y - p, .width = text.width + ( 2 * p ), .height = text.height + ( 2 * p ) + depth( look ) };
+		return 0;
+	}
+
+	Box highlightArea( const Box& text, const HighlightLook& look ) noexcept
+	{
+		const int t = thickness( look );
+		// Outlines and brackets are drawn just outside the room around the text, so they take some of their own.
+		const int edge = look.shape == HighlightShape::Outline || look.shape == HighlightShape::Brackets ? t : 0;
+		const int px   = look.padding_x + edge;
+		const int py   = look.padding_y + edge;
+		// Room taken away may not eat the box: there is always something to draw.
+		const int width  = std::max( 2 * t, text.width + ( 2 * px ) );
+		const int height = std::max( 2 * t, text.height + ( 2 * py ) + highlightDepth( look ) );
+		return { .x = text.x - px, .y = text.y - py, .width = width, .height = height };
 	}
 
 	void drawHighlight( cairo_t* cr, int width, int height, const HighlightLook& look, const Color& color )
@@ -251,7 +243,7 @@ namespace lexiglance::render
 		cairo_t*         cr      = cairo_create( surface );
 		pango_cairo_update_layout( cr, layout );
 
-		const HighlightLook scaled{ .shape = look.shape, .thickness = std::max( 1, px( look.thickness ) ), .radius = px( look.radius ), .padding = px( look.padding ) };
+		const HighlightLook scaled{ .shape = look.shape, .thickness = std::max( 1, px( look.thickness ) ), .radius = px( look.radius ), .padding_x = px( look.padding_x ), .padding_y = px( look.padding_y ) };
 		for ( int panel = 0; panel < 2; ++panel )
 		{
 			const bool  dark       = panel == 1;

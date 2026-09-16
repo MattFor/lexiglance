@@ -1,5 +1,6 @@
 #include "Daemon.h"
 
+#include <lexiglance/config/Keys.h>
 #include <lexiglance/core/Glob.h>
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
@@ -193,6 +194,8 @@ namespace lexiglance::daemon
 		config_( std::make_shared<const config::Config>( std::move( config ) ) )
 	{
 		actions_ = std::make_unique<ThreadPool>( 2, false, "lg-actions" );
+		stats_.setEnabled( this->config()->statistics );
+		stats_.load( paths::stateDir() / "statistics.json" );
 		if ( lang::findLanguage( this->config()->language ) == nullptr )
 		{
 			log::warn( "unsupported language \"{}\": text is looked up in the language of its script", this->config()->language );
@@ -201,6 +204,8 @@ namespace lexiglance::daemon
 
 	Daemon::~Daemon()
 	{
+		// Whatever was counted since the last write is kept.
+		stats_.save();
 		// The socket goes first: a new daemon can take over at once, and no request reaches a half torn down one.
 		ipc_.stop();
 		actions_.reset();
@@ -278,18 +283,101 @@ namespace lexiglance::daemon
 		capture_thread_ = std::jthread( [this]( const std::stop_token& stop ) { captureLoop( stop ); } );
 		render_thread_  = std::jthread( [this]( const std::stop_token& stop ) { renderLoop( stop ); } );
 
-		const auto cfg = config();
+		const auto  cfg = config();
+		std::string trigger;
+		for ( const auto& key : cfg->scan.trigger )
+		{
+			// Spelled as the user is shown it, so a log and a bug report name the same keys.
+			trigger.append( trigger.empty() ? "" : " + " ).append( config::displayName( key ) );
+		}
 		log::info(
-				"{} {} ready: backend {}, trigger {}, {} dictionaries",
+				"{} {} ready: backend {}, scale {:.3g}x, {} theme, {}, trigger {}",
 				app_name,
 				version,
 				backend_->name(),
-				cfg->scan.trigger.empty() ? "" : cfg->scan.trigger.front(),
-				dictionaries_.load()->all().size()
+				backend_->scaleFactor(),
+				backend_->prefersDarkTheme() ? "dark" : "light",
+				backend_->supportsTransparency() ? "compositing" : "no compositor",
+				trigger.empty() ? "(none)" : trigger
 		);
+		logSetup( *cfg );
 		backend_->run();
 		log::info( "shutting down" );
 		return 0;
+	}
+
+	// What this daemon is working with, in the log: enough that a log alone says why a lookup did or did not happen,
+	// without asking the user which settings they had.
+	void Daemon::logSetup( const config::Config& cfg )
+	{
+		const auto  set = dictionaries_.load();
+		std::string titles;
+		for ( const auto& loaded : set->all() )
+		{
+			if ( titles.size() > 400 )
+			{
+				titles.append( ", ..." );
+				break;
+			}
+			const auto& dictionary = *loaded.dictionary;
+			// What each one brings, which is why a kanji or frequency list shows no words.
+			std::string holds = "empty";
+			if ( !dictionary.terms().empty() )
+			{
+				holds = std::format( "{} terms", dictionary.terms().size() );
+			}
+			else if ( !dictionary.kanji().empty() )
+			{
+				holds = std::format( "{} kanji", dictionary.kanji().size() );
+			}
+			else if ( !dictionary.meta().empty() )
+			{
+				holds = std::format( "{} frequencies or pitch accents", dictionary.meta().size() );
+			}
+			titles.append( titles.empty() ? "" : ", " ).append( loaded.name ).append( std::format( " ({})", holds ) );
+		}
+		log::info( "dictionaries: {}", titles.empty() ? "none installed or enabled" : titles );
+
+		std::string languages;
+		for ( const lang::Language* language : languagesInUse( cfg ) )
+		{
+			languages.append( languages.empty() ? "" : ", " ).append( language->name() );
+		}
+		const auto ocr = [&] -> std::string_view {
+			switch ( cfg.scan.ocr )
+			{
+				case config::OcrMode::Off:
+					return "off";
+				case config::OcrMode::Always:
+					return "always";
+				case config::OcrMode::Fallback:
+					break;
+			}
+			return "when an application exposes no text";
+		}();
+		log::info(
+				"reading: languages {}, up to {} characters, accessibility {}, OCR {}, selections {}",
+				languages.empty() ? "none" : languages,
+				cfg.scan.max_length,
+				cfg.scan.accessibility ? "on" : "off",
+				ocr,
+				cfg.scan.selection == config::SelectionMode::Off ? "off" : "on"
+		);
+		log::info(
+				"popup: {} px wide, font {} px{}, highlight {}, audio {}, Anki {}",
+				cfg.popup.width,
+				cfg.popup.font_size,
+				cfg.popup.font_family.empty() ? std::string() : std::format( " ({})", cfg.popup.font_family ),
+				cfg.scan.highlight ? "on" : "off",
+				[&] {
+					if ( !cfg.audio.enabled )
+					{
+						return "off";
+					}
+					return cfg.audio.autoplay ? "on, playing by itself" : "on";
+				}(),
+				cfg.anki.enabled ? cfg.anki.deck : std::string( "off" )
+		);
 	}
 
 	// ---------------------------------------------------------------------------------------------------------------------
@@ -314,6 +402,21 @@ namespace lexiglance::daemon
 
 		auto snapshot = std::make_shared<const config::Config>( std::move( config ) );
 		config_.store( snapshot );
+		stats_.setEnabled( snapshot->statistics );
+		log::info(
+				"settings {}: scanning {}, OCR {}, accessibility {}, {} dictionaries",
+				save ? "saved" : "reloaded",
+				snapshot->paused ? "paused" : "on",
+				[&] {
+					if ( snapshot->scan.ocr == config::OcrMode::Off )
+					{
+						return "off";
+					}
+					return snapshot->scan.ocr == config::OcrMode::Always ? "always" : "as needed";
+				}(),
+				snapshot->scan.accessibility ? "on" : "off",
+				dictionaries_.load()->all().size()
+		);
 		capture_requests_.post( { .refresh = true } );
 		if ( backend_ )
 		{
@@ -454,6 +557,7 @@ namespace lexiglance::daemon
 		style.rounded          = !backend_ || backend_->supportsTransparency();
 		style.audio_button     = popup.show_buttons && cfg.audio.enabled && !cfg.audio.sources.empty();
 		style.anki_button      = popup.show_buttons && cfg.anki.enabled;
+		style.button_size      = popup.button_size;
 		style.design           = designOf( popup.design );
 		style.padding          = popup.padding;
 		style.corner_radius    = popup.corner_radius;
@@ -535,6 +639,10 @@ namespace lexiglance::daemon
 
 	void Daemon::dismiss()
 	{
+		if ( current_.shown )
+		{
+			log::debug( "popup closed" );
+		}
 		backend_->hidePopup();
 		backend_->hideHighlight();
 		current_ = {};
@@ -578,6 +686,13 @@ namespace lexiglance::daemon
 		}
 		if ( action == render::PopupAction::Audio )
 		{
+			// The middle button plays a pronunciation without a speaker to aim at, so it can be pressed when there is
+			// nothing to play; silence would look like a fault.
+			if ( const auto cfg = config(); !cfg->audio.enabled || cfg->audio.sources.empty() )
+			{
+				backend_->showBadge( "Pronunciations are turned off", std::chrono::milliseconds( 1400 ) );
+				return;
+			}
 			playAudio( shown, entry, true );
 		}
 		else if ( entry < current_.notes.size() && current_.notes[entry] == render::NoteState::Exists && !config()->anki.allow_duplicates )
@@ -593,8 +708,18 @@ namespace lexiglance::daemon
 	void Daemon::playAudio( std::shared_ptr<const Shown> shown, std::size_t entry, bool report )
 	{
 		( void )actions_->submit( [this, shown = std::move( shown ), entry, settings = config()->audio, report] {
-			const auto& term = shown->result.terms[entry];
-			if ( auto played = audio_.play( term.expression, term.reading, shown->result.language, settings ); !played && report )
+			const auto& term    = shown->result.terms[entry];
+			const auto  started = std::chrono::steady_clock::now();
+			auto        played  = audio_.play( term.expression, term.reading, shown->result.language, settings );
+			const auto  took    = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started );
+			if ( played )
+			{
+				log::info( "audio: played {} in {} ms", term.expression, took.count() );
+				stats_.recordAudio();
+				return;
+			}
+			log::warn( "audio: {} not played: {}", term.expression, played.error().message );
+			if ( report )
 			{
 				backend_->post( [this, message = played.error().message] { backend_->showBadge( message, std::chrono::milliseconds( 1800 ) ); } );
 			}
@@ -641,7 +766,12 @@ namespace lexiglance::daemon
 			}
 			auto        added   = addNote( cfg->anki, shown->result, term, context );
 			std::string message = added ? std::string( "Added to Anki ✓" ) : added.error().message;
-			if ( !added )
+			if ( added )
+			{
+				log::info( "anki: added {} to {} ({})", term.expression, cfg->anki.deck, cfg->anki.model );
+				stats_.recordAnki();
+			}
+			else
 			{
 				log::warn( "anki: {}", message );
 			}
@@ -689,15 +819,29 @@ namespace lexiglance::daemon
 				effective.disabled_languages.emplace_back( language->code() );
 			}
 		}
-		state.capture     = backend_->createTextCapture( effective );
-		state.upkeep      = state.capture ? state.capture->idle() : std::nullopt;
-		state.signature   = std::move( wanted );
-		state.resets      = capture_resets_.load();
-		std::string label = state.capture ? state.capture->describe() : std::string( "unavailable" );
-		log::info( "text capture: {}", label );
+		state.capture       = backend_->createTextCapture( effective );
+		state.upkeep        = state.capture ? state.capture->idle() : std::nullopt;
+		state.signature     = std::move( wanted );
+		state.resets        = capture_resets_.load();
+		std::string label   = state.capture ? state.capture->describe() : std::string( "unavailable" );
+		std::string problem = state.capture ? state.capture->problem() : std::string( "the text capture could not be created" );
+		if ( problem.empty() )
+		{
+			log::info( "text capture: {}", label );
+		}
+		else
+		{
+			// A warning rather than news: the health report counts this as an error, and only warnings and errors reach
+			// its recent problems and the settings application's log panel. One entry per line, so the line breaks
+			// meant for the report do not turn into entries of their own here.
+			std::string flat = problem;
+			std::ranges::replace( flat, '\n', ' ' );
+			log::warn( "text capture: {} - {}", label, flat );
+		}
 		{
 			const std::scoped_lock lock( capture_status_mutex_ );
-			capture_status_ = std::move( label );
+			capture_status_  = std::move( label );
+			capture_problem_ = std::move( problem );
 		}
 		// The settings application shows what is read now as soon as it is ready, after a download too.
 		ipc_.broadcast( "status.changed", statusJson() );
@@ -735,6 +879,35 @@ namespace lexiglance::daemon
 			}
 		}
 		return reading;
+	}
+
+	void Daemon::recordScreenLookup( const CaptureRequest& request, const lookup::LookupResult& result, std::string_view source, std::string_view text )
+	{
+		if ( text.empty() )
+		{
+			return;
+		}
+		++lookups_;
+		lookup_nanoseconds_ += static_cast<std::uint64_t>( result.elapsed.count() );
+		// The tally that outlives the daemon: what was read, in which language, through what. Only lookups the
+		// user asked for by pointing at text, not the trials behind previews and health checks.
+		if ( request.text )
+		{
+			return;
+		}
+		stats_.recordLookup(
+				result.terms.empty() ? std::string_view() : result.terms.front().expression,
+				result.language != nullptr ? result.language->code() : std::string_view(),
+				source,
+				utf8::length( text ),
+				std::chrono::duration_cast<std::chrono::microseconds>( result.elapsed )
+		);
+		// Written now and then rather than after every word: a few dozen lookups cost one small file.
+		if ( ++unsaved_stats_ >= 25 )
+		{
+			unsaved_stats_ = 0;
+			stats_.save();
+		}
 	}
 
 	void Daemon::captureLoop( const std::stop_token& stop )
@@ -811,11 +984,7 @@ namespace lexiglance::daemon
 			auto result = translator.lookup( dictionaries_.load(), captured->text, options );
 			log::debug( "lookup: {} terms in {} us", result.terms.size(), std::chrono::duration_cast<std::chrono::microseconds>( result.elapsed ).count() );
 			// Only real lookups count towards the statistics shown in the settings application.
-			if ( !captured->text.empty() )
-			{
-				++lookups_;
-				lookup_nanoseconds_ += static_cast<std::uint64_t>( result.elapsed.count() );
-			}
+			recordScreenLookup( *request, result, source, captured->text );
 			if ( !request->text && request->length == 0 )
 			{
 				reportCapture( *request, captured->text, unread, source, took, result.terms.size() + result.kanji.size(), reported );
@@ -925,9 +1094,15 @@ namespace lexiglance::daemon
 				{
 					backend_->hideHighlight();
 				}
+				const bool first = shown_key_.load() != key;
 				backend_->showPopup( { .image = image, .style = style, .anchor = anchor, .source = source } );
 				current_ = { .generation = generation, .shown = shown, .anchor = anchor, .highlight = highlight, .notes = notes, .source = source };
 				shown_key_.store( key );
+				// A popup of its own, not the fuller image of the one already up.
+				if ( first )
+				{
+					stats_.recordPopup();
+				}
 				// Autoplay once per word, not on every rescan while the pointer moves over it.
 				if ( autoplay && style.audio_button && !shown->result.terms.empty() )
 				{
@@ -980,6 +1155,9 @@ namespace lexiglance::daemon
 			return;
 		}
 		reported = { .at = now, .summary = summary };
+		// The same line the settings application shows, so a log says what was looked up where and what came of it.
+		// Throttled with the report, so moving the pointer along a line does not fill the file.
+		log::info( "lookup: {} {}", summary, where );
 		json::Writer out;
 		out.beginObject().field( "summary", summary ).field( "where", where ).field( "found", !text.empty() ).field( "entries", entries ).endObject();
 		ipc_.broadcast( "capture.result", out.str() );
@@ -1085,6 +1263,7 @@ namespace lexiglance::daemon
 		{
 			const std::scoped_lock lock( capture_status_mutex_ );
 			out.field( "capture", capture_status_ );
+			out.field( "capture_problem", capture_problem_ );
 		}
 		out.field( "paused", cfg->paused );
 		out.field( "scale", backend_ ? backend_->scaleFactor() : 1.0 );
@@ -1451,6 +1630,18 @@ namespace lexiglance::daemon
 		} );
 
 		ipc_.on( "health", [this]( const json::Value& params ) -> Result<std::string> { return healthJson( params["interactive"].asBool() ); } );
+
+		// The tally behind the Statistics page. Written to disk when asked for, so the figures a second daemon would
+		// read are never behind what this one shows.
+		ipc_.on( "stats", [this]( const json::Value& ) -> Result<std::string> {
+			stats_.save();
+			return stats_.json();
+		} );
+
+		ipc_.on( "stats.reset", [this]( const json::Value& ) -> Result<std::string> {
+			stats_.reset();
+			return "{}";
+		} );
 
 		ipc_.on( "debug.scan", [this]( const json::Value& params ) -> Result<std::string> {
 			if ( !backend_ )

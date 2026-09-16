@@ -79,10 +79,17 @@ namespace lexiglance::platform
 
 		[[nodiscard]] virtual std::string_view name() const noexcept = 0;
 
-		// State shown in the settings application, e.g. "at-spi + OCR (jpn, fast)".
+		// State shown in the settings application, e.g. "at-spi + OCR (jpn, fast)". A summary: it sits in a small tile,
+		// so the reason a part is missing belongs in problem() and the health report, not here.
 		[[nodiscard]] virtual std::string describe() const
 		{
 			return std::string( name() );
+		}
+
+		// Why a part of this capture is not working, in full, or empty when everything it was asked for runs.
+		[[nodiscard]] virtual std::string problem() const
+		{
+			return {};
 		}
 
 		[[nodiscard]] virtual std::optional<CapturedText> capture( Point point, const WindowInfo& window, std::size_t max_chars ) = 0;

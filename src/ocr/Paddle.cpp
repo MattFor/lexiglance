@@ -3,6 +3,7 @@
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Utf8.h>
 #include <lexiglance/language/Language.h>
+#include <lexiglance/ocr/Onnx.h>
 
 #include <algorithm>
 #include <array>
@@ -56,7 +57,7 @@ namespace lexiglance::ocr
 				const double fx = std::clamp( sx - x0, 0.0, 1.0 );
 				const double fy = std::clamp( sy - y0, 0.0, 1.0 );
 				const auto   at = [&]( int px, int py ) {
-                    return static_cast<double>( image->rgb[( ( static_cast<std::size_t>( py ) * static_cast<std::size_t>( image->width ) ) + static_cast<std::size_t>( px ) ) * 3 + static_cast<std::size_t>( c )] );
+					return static_cast<double>( image->rgb[( ( static_cast<std::size_t>( py ) * static_cast<std::size_t>( image->width ) ) + static_cast<std::size_t>( px ) ) * 3 + static_cast<std::size_t>( c )] );
 				};
 				const double top    = ( at( x0, y0 ) * ( 1.0 - fx ) ) + ( at( x1, y0 ) * fx );
 				const double bottom = ( at( x0, y1 ) * ( 1.0 - fx ) ) + ( at( x1, y1 ) * fx );
@@ -268,7 +269,7 @@ namespace lexiglance::ocr
 		// Nothing downloaded yet: no runtime is loaded either, so the one downloaded with the models is the one used.
 		if ( std::error_code ec; !std::filesystem::exists( directory / "det.onnx", ec ) )
 		{
-			return fail( "PaddleOCR is not downloaded" );
+			return fail( "{}", paddle_absent );
 		}
 		auto detector = OnnxModel::load( directory / "det.onnx", runtime_dir, threads );
 		if ( !detector )

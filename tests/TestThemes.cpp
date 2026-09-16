@@ -115,11 +115,11 @@ namespace
 
 		lg::render::PopupRenderer renderer;
 		const auto                render = [&]( lg::render::Design design, int max_senses = 0 ) {
-            lg::render::PopupStyle style;
-            style.design     = design;
-            style.max_senses = max_senses;
-            renderer.setStyle( style );
-            return renderer.render( result );
+			lg::render::PopupStyle style;
+			style.design     = design;
+			style.max_senses = max_senses;
+			renderer.setStyle( style );
+			return renderer.render( result );
 		};
 		const auto friendly = render( lg::render::Design::Friendly );
 		const auto classic  = render( lg::render::Design::Classic );
@@ -204,13 +204,20 @@ namespace
 		using lg::render::highlightMask;
 		const lg::render::Box text{ .x = 100, .y = 50, .width = 60, .height = 20 };
 
-		// The window: the padding around the text, and room below it for lines.
-		const auto fill = highlightArea( text, { .shape = HighlightShape::Fill, .thickness = 2, .radius = 4, .padding = 3 } );
+		// The window: the room around the text, and room below it for lines.
+		const auto fill = highlightArea( text, { .shape = HighlightShape::Fill, .thickness = 2, .radius = 4, .padding_x = 3, .padding_y = 3 } );
 		test::expect( fill.x == 97 && fill.y == 47 && fill.width == 66 && fill.height == 26 );
-		const auto outline = highlightArea( text, { .shape = HighlightShape::Outline, .thickness = 2, .radius = 0, .padding = 1 } );
+		const auto outline = highlightArea( text, { .shape = HighlightShape::Outline, .thickness = 2, .radius = 0, .padding_x = 1, .padding_y = 1 } );
 		test::expect( outline.x == 97 && outline.width == 66 && outline.height == 26 );
-		const auto underline = highlightArea( text, { .shape = HighlightShape::Underline, .thickness = 2, .radius = 0, .padding = 0 } );
+		const auto underline = highlightArea( text, { .shape = HighlightShape::Underline, .thickness = 2, .radius = 0, .padding_x = 0, .padding_y = 0 } );
 		test::expect( underline.y == 50 && underline.height == 22 );
+		// Room sideways and above are given apart, and either can be taken away again.
+		const auto wide = highlightArea( text, { .shape = HighlightShape::Fill, .thickness = 2, .radius = 0, .padding_x = 6, .padding_y = -2 } );
+		test::expect( wide.x == 94 && wide.width == 72 && wide.y == 52 && wide.height == 16 );
+		// Never past the box itself: a short word keeps something to draw.
+		const lg::render::Box small{ .x = 10, .y = 10, .width = 8, .height = 8 };
+		const auto            pinched = highlightArea( small, { .shape = HighlightShape::Fill, .thickness = 2, .radius = 0, .padding_x = -16, .padding_y = -16 } );
+		test::expect( pinched.width == 4 && pinched.height == 4 );
 		test::expect( highlightArea( text, { .shape = HighlightShape::DoubleUnderline, .thickness = 2 } ).height > underline.height );
 		test::expect( highlightArea( text, { .shape = HighlightShape::WavyUnderline, .thickness = 2 } ).height > underline.height );
 
@@ -219,7 +226,7 @@ namespace
 		// Underlines cover the bottom only; the text above stays visible.
 		for ( const auto shape : { HighlightShape::Underline, HighlightShape::DoubleUnderline, HighlightShape::DottedUnderline, HighlightShape::WavyUnderline } )
 		{
-			const auto mask = highlightMask( w, h, { .shape = shape, .thickness = 2, .radius = 0, .padding = 0 } );
+			const auto mask = highlightMask( w, h, { .shape = shape, .thickness = 2, .radius = 0, .padding_x = 0, .padding_y = 0 } );
 			bool       top  = false;
 			bool       low  = false;
 			for ( int x = 0; x < w; ++x )
@@ -243,7 +250,7 @@ namespace
 		test::expect( highlightMask( 0, 0, {} ).empty() );
 
 		// The preview: two panels with the sample text and the mark.
-		cairo_surface_t* preview = lg::render::highlightPreview( { .shape = HighlightShape::Fill, .thickness = 2, .radius = 4, .padding = 2 }, Color{ .r = 1.0, .g = 0.8, .b = 0.0, .a = 0.5 }, false, 1.0 );
+		cairo_surface_t* preview = lg::render::highlightPreview( { .shape = HighlightShape::Fill, .thickness = 2, .radius = 4, .padding_x = 2, .padding_y = 2 }, Color{ .r = 1.0, .g = 0.8, .b = 0.0, .a = 0.5 }, false, 1.0 );
 		test::expect( cairo_image_surface_get_width( preview ) > 2 * cairo_image_surface_get_height( preview ) );
 		cairo_surface_destroy( preview );
 	} );

@@ -77,6 +77,7 @@ namespace lexiglance::gui
 		accessibility_( new QCheckBox( QStringLiteral( "Ask applications to expose their text (accessibility bus)" ) ) ),
 		known_languages_( new QCheckBox( QStringLiteral( "Only look up text in a supported language (no popups for English interface text)" ) ) ),
 		wheel_( new QCheckBox( QStringLiteral( "Mouse wheel changes the looked-up length while the trigger is held" ) ) ),
+		wheel_lock_( new QCheckBox( QStringLiteral( "Also keep the wheel from the window underneath (uses a mouse hook some anti-cheats dislike)" ) ) ),
 		selection_( new QComboBox() ),
 		ignored_( new QPlainTextEdit() ),
 		ocr_( new OcrGroup( context ) )
@@ -150,6 +151,7 @@ namespace lexiglance::gui
 		form->addRow( QStringLiteral( "Languages" ), languages_row );
 		form->addRow( known_languages_ );
 		form->addRow( wheel_ );
+		form->addRow( wheel_lock_ );
 #ifdef Q_OS_WIN
 		// Windows applications answer UI Automation without being asked.
 		form->setRowVisible( accessibility_, false );
@@ -158,6 +160,8 @@ namespace lexiglance::gui
 				"everything else. Copied text lookup works with text hookers such as Textractor."
 		) ) );
 #else
+		// X11 grabs the two wheel buttons instead, which needs nothing of the user.
+		form->setRowVisible( wheel_lock_, false );
 		form->addRow( note( QStringLiteral(
 				"GTK, Qt, Firefox and LibreOffice expose text automatically. Chromium based browsers and Electron apps need "
 				"--force-renderer-accessibility. Selection lookup works everywhere, including terminals."
@@ -250,6 +254,11 @@ namespace lexiglance::gui
 		} );
 		connect( wheel_, &QCheckBox::toggled, this, [this, commit]( bool v ) {
 			settings().config().scan.wheel_length = v;
+			wheel_lock_->setEnabled( v );
+			commit();
+		} );
+		connect( wheel_lock_, &QCheckBox::toggled, this, [this, commit]( bool v ) {
+			settings().config().scan.wheel_lock = v;
 			commit();
 		} );
 		connect( accessibility_, &QCheckBox::toggled, this, [this, commit]( bool v ) {
@@ -355,7 +364,7 @@ namespace lexiglance::gui
 			QString              text = i == 0 ? QString() : QStringLiteral( "(none)" );
 			if ( i < scan.trigger.size() )
 			{
-				text = qs( scan.trigger[i] );
+				text = qs( config::displayName( scan.trigger[i] ) );
 			}
 			keys_[i]->setCurrentText( text );
 		}
@@ -374,6 +383,8 @@ namespace lexiglance::gui
 		}
 		updateLanguageBoxes();
 		wheel_->setChecked( scan.wheel_length );
+		wheel_lock_->setChecked( scan.wheel_lock );
+		wheel_lock_->setEnabled( scan.wheel_length );
 		selection_->setCurrentIndex( selectionIndex( scan.selection ) );
 
 		QStringList patterns;

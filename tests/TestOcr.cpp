@@ -1,8 +1,14 @@
 #include "Test.h"
 
+#include <lexiglance/ocr/Onnx.h>
 #include <lexiglance/ocr/Paddle.h>
 
+#include <algorithm>
+#include <array>
+#include <fstream>
+#include <ios>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -73,6 +79,49 @@ namespace
 		test::expectEqual( decoded[2].text, std::string( "で" ) );
 		test::expectEqual( decoded[2].last, 5 );
 		test::expect( decoded[2].confidence > 0.79F && decoded[2].confidence < 0.81F );
+	} );
+
+	const test::Registrar ocr_not_set_up( "ocr not set up is not a fault", [] {
+		// Neither state is worth reporting over a fallback engine's own trouble, so both come from the real load: a
+		// literal here would pass while the message the daemon shows drifted away from it.
+		const auto nothing = test::scratch( "ocr-nothing" );
+		const auto absent  = lg::ocr::PaddleOcr::load( nothing, nothing, 1 );
+		test::expect( !absent.has_value() );
+		if ( !absent.has_value() )
+		{
+			test::expect( !lg::ocr::loadFailureActionable( absent.error().message ) );
+		}
+
+		// Models without a runtime to run them: as far as the models go this is set up, so the runtime is what answers.
+		const auto models = test::scratch( "ocr-no-runtime" );
+		std::ofstream( models / "det.onnx", std::ios::binary ) << "not a model";
+		const auto runtimeless = lg::ocr::PaddleOcr::load( models, nothing, 1 );
+		test::expect( !runtimeless.has_value() );
+		if ( !runtimeless.has_value() )
+		{
+			test::expect( !lg::ocr::loadFailureActionable( runtimeless.error().message ) );
+		}
+
+		// Anything else is a reason the user can do something about, so it is the one reported.
+		test::expect( lg::ocr::loadFailureActionable( "ONNX Runtime needs the Microsoft Visual C++ Redistributable" ) );
+		test::expect( lg::ocr::loadFailureActionable( "cannot load onnxruntime.dll (Windows error 126)" ) );
+	} );
+
+	const test::Registrar ocr_missing_libraries( "ocr missing library report", [] {
+		constexpr std::array names{ "one.dll", "two.dll", "three.dll" };
+		// Answers that only the named libraries can be found.
+		const auto found = []( std::vector<std::string> have ) {
+			return [have = std::move( have )]( const char* name ) { return std::ranges::contains( have, std::string( name ) ); };
+		};
+
+		test::expectEqual( lg::ocr::missingLibraries( names, found( { "one.dll", "two.dll", "three.dll" } ) ), std::string() );
+		test::expectEqual( lg::ocr::missingLibraries( names, found( { "two.dll" } ) ), std::string( "one.dll, three.dll" ) );
+		test::expectEqual( lg::ocr::missingLibraries( names, found( {} ) ), std::string( "one.dll, two.dll, three.dll" ) );
+
+#ifndef _WIN32
+		// Nothing outside Windows imports it, so OCR is never held up there waiting for a runtime that does not apply.
+		test::expectEqual( lg::ocr::missingVcRuntime(), std::string() );
+#endif
 	} );
 
 } // namespace

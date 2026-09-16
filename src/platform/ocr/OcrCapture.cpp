@@ -5,6 +5,7 @@
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Utf8.h>
 #include <lexiglance/language/Language.h>
+#include <lexiglance/ocr/Onnx.h>
 #include <lexiglance/ocr/Paddle.h>
 
 #include <lexiglance/core/Hash.h>
@@ -328,10 +329,10 @@ namespace lexiglance::platform
 			long       dark_long  = 0;
 			long       light_long = 0;
 			const auto flush      = [&]( int length, bool dark ) {
-                if ( length >= unit )
-                {
-                    ( dark ? dark_long : light_long ) += length;
-                }
+				if ( length >= unit )
+				{
+					( dark ? dark_long : light_long ) += length;
+				}
 			};
 			const int outer_from = vertical ? x0 : y0;
 			const int outer_to   = vertical ? x1 : y1;
@@ -495,18 +496,18 @@ namespace lexiglance::platform
 			const auto solid_row = [&]( int c ) { return density[static_cast<std::size_t>( c )] * 10 >= width * 9; };
 			const auto text_row  = [&]( int c ) { return c >= 0 && c < mask.across() && !solid_row( c ) && density[static_cast<std::size_t>( c )] >= floor; };
 			const auto near_ink  = [&]( int c ) {
-                if ( !text_row( c ) )
-                {
-                    return false;
-                }
-                for ( int a = std::max( a0, pa - ( 2 * unit ) ); a < std::min( a1, pa + ( 2 * unit ) ); ++a )
-                {
-                    if ( mask.ink( a, c ) )
-                    {
-                        return true;
-                    }
-                }
-                return false;
+				if ( !text_row( c ) )
+				{
+					return false;
+				}
+				for ( int a = std::max( a0, pa - ( 2 * unit ) ); a < std::min( a1, pa + ( 2 * unit ) ); ++a )
+				{
+					if ( mask.ink( a, c ) )
+					{
+						return true;
+					}
+				}
+				return false;
 			};
 
 			int start = -1;
@@ -913,8 +914,8 @@ namespace lexiglance::platform
 			const int  typical  = std::max( 1, line.blob( from, to ).count / std::max( 1, n ) );
 			const bool trailing = line.endsWithPunctuation( from, to, typical );
 			const auto edge     = [&]( int cells, int i ) {
-                const double pitch = static_cast<double>( to - from ) / ( cells - ( trailing && cells > 1 ? 0.5 : 0.0 ) );
-                return from + static_cast<int>( std::lround( pitch * i ) );
+				const double pitch = static_cast<double>( to - from ) / ( cells - ( trailing && cells > 1 ? 0.5 : 0.0 ) );
+				return from + static_cast<int>( std::lround( pitch * i ) );
 			};
 			const auto fit = [&]( int cells ) {
 				int hits = 0;
@@ -1608,10 +1609,10 @@ namespace lexiglance::platform
 				const int  along0  = vertical ? box.y : box.x;
 				const int  along1  = vertical ? box.y + box.height : box.x + box.width;
 				const auto gray    = [&]( int along, int across ) {
-                    const int         x  = vertical ? across : along;
-                    const int         y  = vertical ? along : across;
-                    const std::size_t at = ( ( static_cast<std::size_t>( y ) * static_cast<std::size_t>( image.width ) ) + static_cast<std::size_t>( x ) ) * 3;
-                    return ( ( image.rgb[at] * 299 ) + ( image.rgb[at + 1] * 587 ) + ( image.rgb[at + 2] * 114 ) ) / 1000;
+					const int         x  = vertical ? across : along;
+					const int         y  = vertical ? along : across;
+					const std::size_t at = ( ( static_cast<std::size_t>( y ) * static_cast<std::size_t>( image.width ) ) + static_cast<std::size_t>( x ) ) * 3;
+					return ( ( image.rgb[at] * 299 ) + ( image.rgb[at + 1] * 587 ) + ( image.rgb[at + 2] * 114 ) ) / 1000;
 				};
 				if ( along1 - along0 < 2 || across1 - across0 < 2 )
 				{
@@ -1628,12 +1629,12 @@ namespace lexiglance::platform
 				std::ranges::nth_element( edge, middle );
 				const int  background = *middle;
 				const auto inky       = [&]( int across ) {
-                    int count = 0;
-                    for ( int a = along0; a < along1; ++a )
-                    {
-                        count += std::abs( gray( a, across ) - background ) > 48 ? 1 : 0;
-                    }
-                    return count * 100 > along1 - along0;
+					int count = 0;
+					for ( int a = along0; a < along1; ++a )
+					{
+						count += std::abs( gray( a, across ) - background ) > 48 ? 1 : 0;
+					}
+					return count * 100 > along1 - along0;
 				};
 				int from = std::max( across0, vertical ? box.inner_x : box.inner_y );
 				int to   = std::min( across1, from + ( vertical ? box.inner_width : box.inner_height ) );
@@ -2047,6 +2048,9 @@ namespace lexiglance::platform
 	{
 		// PaddleOCR reads stylised, outlined and vertical text far better; Tesseract is the fallback.
 		std::unique_ptr<ocr::PaddleOcr> paddle;
+		// Why it did not load, kept for the report when Tesseract cannot stand in for it either. Empty unless it was
+		// downloaded and still failed, which is a state the user can do something about.
+		std::string paddle_error;
 		if ( options.engine != config::OcrEngine::Tesseract )
 		{
 			auto loaded = ocr::PaddleOcr::load( paths::ocrDir() / "paddle", paths::ocrDir() / "runtime", 4, options.languages );
@@ -2054,7 +2058,7 @@ namespace lexiglance::platform
 			{
 				paddle = std::move( *loaded );
 				// Load the networks now instead of on the first scan.
-				const ocr::Image blank{ .width = 64, .height = 32, .rgb = std::vector<std::uint8_t>( 64UL * 32UL * 3UL, 255 ) };
+				const ocr::Image blank{ .width = 64, .height = 32, .rgb = std::vector<std::uint8_t>( static_cast<std::size_t>( 64 ) * 32 * 3, 255 ) };
 				( void )paddle->detect( blank );
 				( void )paddle->recognize( blank, { .x = 0, .y = 0, .width = 64, .height = 32, .score = 1.0F } );
 			}
@@ -2064,6 +2068,10 @@ namespace lexiglance::platform
 			}
 			else
 			{
+				if ( ocr::loadFailureActionable( loaded.error().message ) )
+				{
+					paddle_error = loaded.error().message;
+				}
 				log::debug( "ocr: PaddleOCR unavailable ({}), using Tesseract", loaded.error().message );
 			}
 		}
@@ -2100,14 +2108,16 @@ namespace lexiglance::platform
 			}
 			if ( !datapath )
 			{
-				return fail( "no OCR model is installed" );
+				// Neither engine can read anything, so the reason PaddleOCR could not is the one worth reporting:
+				// Tesseract's own "nothing installed" would hide it behind a download that would not help.
+				return paddle_error.empty() ? fail( "no OCR model is installed" ) : fail( "{}", paddle_error );
 			}
 			auto engine = TesseractEngine::load( *datapath, models, options.vertical );
 			if ( !engine )
 			{
 				return std::unexpected( engine.error() );
 			}
-			const std::vector<std::uint8_t> blank( 64UL * 32UL, 255 );
+			const std::vector<std::uint8_t> blank( static_cast<std::size_t>( 64 ) * 32, 255 );
 			( void )( *engine )->recognize( blank, 64, 32 );
 			tesseract = std::move( *engine );
 		}

@@ -30,7 +30,8 @@ same dictionary format as [Yomitan](https://yomitan.wiki/).
 - Recommended dictionaries for each language can be installed from the settings application.
 - Pronunciation audio, and Anki cards through AnkiConnect.
 - Configurable popup designs, colour schemes and highlight styles ([docs/themes.md](docs/themes.md)).
-- A health check that diagnoses common setup problems.
+- A health check that diagnoses common setup problems, with a quick fix button.
+- Statistics: what you have looked up, in which languages and on which days, kept on your computer only.
 - No input injection and no access to other processes, it won't trigger any anti-cheats - feel free to use it in games!
   ([details](docs/anticheat.md)).
 

@@ -26,6 +26,35 @@ ctest --preset debug
 Other presets: `release` (LTO), `release-native` (tuned for your CPU), `asan` / `clang-asan` (sanitizers), `portable`
 (everything but the daemon, for other systems).
 
+## Trying a change on your own desktop
+
+Builds and then replaces the Lexiglance installed on this machine with it, restarting whatever was running:
+
+```sh
+bash .github/scripts/dev-install.sh              # release preset into /usr/local, sudo only if needed
+bash .github/scripts/dev-install.sh debug ~/.local
+```
+
+```powershell
+pwsh .github/scripts/dev-install.ps1             # release preset, into wherever setup.exe put it
+pwsh .github/scripts/dev-install.ps1 -Preset debug -SkipBuild
+```
+
+On Windows the daemon and the settings application are stopped first, because Windows cannot overwrite a running
+program; on Linux the daemon's supervisor is asked to stop and start it. Settings and dictionaries live outside the
+install directory and are left alone either way.
+
+## Building the Windows installer
+
+On Windows, from an install prefix rather than over an existing install:
+
+```powershell
+cmake --preset release
+cmake --build --preset release
+cmake --install build/release --prefix build/stage
+pwsh .github/scripts/windows-installer.ps1 build/release build/stage build/dist
+```
+
 ## Cross-compiling for Windows
 
 With MinGW-w64 (GCC 14) and a static zlib built for it (Fedora: `mingw64-gcc-c++ mingw64-zlib-static`):

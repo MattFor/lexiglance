@@ -37,6 +37,13 @@ namespace lexiglance::log
 
 	void write( Level lvl, std::string_view message );
 
+	// A moment as the clock on the wall shows it ("2026-09-16 20:14:30.123"), which is how log lines are stamped and
+	// how the statistics count a day; UTC on a system without a time zone database.
+	[[nodiscard]] std::string timestamp( std::chrono::system_clock::time_point when );
+
+	// The date of a moment, locally ("2026-09-16").
+	[[nodiscard]] std::string day( std::chrono::system_clock::time_point when );
+
 	[[nodiscard]] std::optional<Level> parseLevel( std::string_view name ) noexcept;
 
 	[[nodiscard]] std::string_view levelName( Level lvl ) noexcept;

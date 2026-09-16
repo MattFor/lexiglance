@@ -37,6 +37,10 @@ namespace lexiglance::gui
 
 	[[nodiscard]] QString chordText( const std::vector<std::string>& keys );
 
+	// The http(s) addresses in already escaped text, as links to follow. Trailing punctuation stays out of them, so a
+	// sentence ending in an address still reads.
+	[[nodiscard]] QString withLinks( QString escaped );
+
 	// "JMdict [2026-09-12]" -> "JMdict".
 	[[nodiscard]] QString shortTitle( const QString& title );
 

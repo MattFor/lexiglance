@@ -71,7 +71,8 @@ target_link_libraries(
     PRIVATE ZLIB::ZLIB lexiglance::options)
 
 # Neural OCR (PaddleOCR through ONNX Runtime, loaded at run time).
-add_library(lexiglance_ocr STATIC ocr/Onnx.cpp ocr/Paddle.cpp)
+add_library(lexiglance_ocr STATIC ocr/Availability.cpp ocr/Onnx.cpp
+                                  ocr/Paddle.cpp)
 add_library(lexiglance::ocr ALIAS lexiglance_ocr)
 target_include_directories(
     lexiglance_ocr SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/onnxruntime)

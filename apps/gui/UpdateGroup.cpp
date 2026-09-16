@@ -1,7 +1,9 @@
 #include "UpdateGroup.h"
 
 #include "Common.h"
+#include "VcRedist.h"
 
+#include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Version.h>
 
@@ -23,21 +25,12 @@
 #include <QVBoxLayout>
 
 #include <filesystem>
+#include <cstdint>
 #include <system_error>
 #include <utility>
 
 namespace lexiglance::gui
 {
-
-	enum class UpdateGroup::Kind
-	{
-		WindowsSetup,    // installed with lexiglance-windows-setup.exe
-		WindowsPortable, // unpacked from lexiglance-windows-portable.zip
-		AppImage,        // lexiglance-x86_64.AppImage
-		Deb,             // the lexiglance-amd64.deb package
-		Source,          // a build tree
-		Other,           // the .tar.gz, or a system or processor there are no releases for
-	};
 
 	namespace
 	{
@@ -123,9 +116,9 @@ namespace lexiglance::gui
 			const QString latest = qs( project_url ) + QStringLiteral( "/releases/latest" );
 			if ( QSysInfo::kernelType() == QStringLiteral( "linux" ) && QSysInfo::currentCpuArchitecture() == QStringLiteral( "x86_64" ) )
 			{
-				return QUrl( latest + QStringLiteral( "/download/lexiglance-x86_64.AppImage" ) );
+				return { latest + QStringLiteral( "/download/lexiglance-x86_64.AppImage" ) };
 			}
-			return QUrl( latest );
+			return { latest };
 		}
 
 		QString updateDirectory()
@@ -232,6 +225,7 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 			memory.remove( QStringLiteral( "update/installing" ) );
 			QDir( updateDirectory() ).removeRecursively();
 			status_->setText( QStringLiteral( "Updated to Lexiglance %1." ).arg( qs( version ) ) );
+			ensureVcRedist();
 		}
 		showState();
 
@@ -481,9 +475,20 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 		}
 		else
 		{
-			update_->setText( ( newer ? QStringLiteral( "Update to %1" ) : ahead ? QStringLiteral( "Install %1" )
-			                                                                     : QStringLiteral( "Reinstall %1" ) )
-			                          .arg( latest_ ) );
+			QString action;
+			if ( newer )
+			{
+				action = QStringLiteral( "Update to %1" );
+			}
+			else if ( ahead )
+			{
+				action = QStringLiteral( "Install %1" );
+			}
+			else
+			{
+				action = QStringLiteral( "Reinstall %1" );
+			}
+			update_->setText( action.arg( latest_ ) );
 		}
 		update_->setToolTip( kind == Kind::Other ? QStringLiteral( "Opens the download of the newest release for this system" ) : QStringLiteral( "Downloads %1 from the newest release and installs it, even when it is this version" ).arg( assetName( kind ) ) );
 		update_->setProperty( "primary", newer );
@@ -501,6 +506,50 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 	{
 		busy_ = busy;
 		update_->setEnabled( !busy );
+	}
+
+	void UpdateGroup::ensureVcRedist()
+	{
+#ifdef Q_OS_WIN
+		if ( vcredist::missing().isEmpty() )
+		{
+			return;
+		}
+		const QString installer = vcredist::installerPath();
+		status_->setText( QStringLiteral( "Updated to Lexiglance %1. Downloading the Visual C++ Redistributable for OCR..." ).arg( qs( version ) ) );
+		progress_->show();
+		setBusy( true );
+		downloader_->download(
+				vcredist::url(),
+				installer,
+				[this]( qint64 received, qint64 total ) { showProgress( progress_, received, total ); },
+				[this, installer]( const QString& error ) {
+					progress_->hide();
+					setBusy( false );
+					if ( !error.isEmpty() )
+					{
+						log::warn( "update: Visual C++ Redistributable download failed ({})", ss( error ) );
+						status_->setText( QStringLiteral( "Updated to Lexiglance %1. OCR still needs the Visual C++ Redistributable (Overview → Health)." ).arg( qs( version ) ) );
+						return;
+					}
+					status_->setText( QStringLiteral( "Updated to Lexiglance %1. Installing the Visual C++ Redistributable; Windows asks for permission." ).arg( qs( version ) ) );
+					vcredist::install( this, installer, [this]( const QString& problem ) {
+						if ( !problem.isEmpty() )
+						{
+							log::warn( "update: Visual C++ Redistributable not installed ({})", ss( problem ) );
+							status_->setText( QStringLiteral( "Updated to Lexiglance %1. %2" ).arg( qs( version ), problem ) );
+							return;
+						}
+						log::info( "update: Visual C++ Redistributable installed; restarting the daemon" );
+						status_->setText( QStringLiteral( "Updated to Lexiglance %1. Visual C++ Redistributable installed." ).arg( qs( version ) ) );
+						// Windows only finds the new libraries in a process that starts after they are there.
+						QProcess::startDetached( daemonExecutable(), { QStringLiteral( "--replace" ) } );
+					} );
+				}
+		);
+#else
+		( void )this;
+#endif
 	}
 
 } // namespace lexiglance::gui

@@ -59,6 +59,12 @@ namespace lexiglance::config
 
 	[[nodiscard]] std::string_view keyName( Key key ) noexcept;
 
+	// keyName as this platform's users know the key: "Super_L" on X11, "Win_L" on Windows.
+	[[nodiscard]] std::string_view displayKeyName( Key key ) noexcept;
+
+	// Any name parseKey accepts, spelled as this platform's users know the key. Unknown names come back unchanged.
+	[[nodiscard]] std::string displayName( std::string_view name );
+
 	[[nodiscard]] bool isMouseButton( Key key ) noexcept;
 
 	// Names accepted by parseKey, for configuration UIs.

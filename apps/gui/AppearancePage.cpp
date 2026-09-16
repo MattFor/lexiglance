@@ -162,13 +162,14 @@ namespace lexiglance::gui
 		offset_y_( spin( -500, 500, QStringLiteral( " px" ) ) ),
 		select_button_( combo( { QStringLiteral( "Right button" ), QStringLiteral( "Middle button" ) } ) ),
 		furigana_( new QCheckBox( QStringLiteral( "Furigana above the headword" ) ) ),
-		reading_( new QCheckBox( QStringLiteral( "The reading next to the headword when furigana is off" ) ) ),
+		reading_( new QCheckBox( QStringLiteral( "The reading next to the headword" ) ) ),
 		inflection_( new QCheckBox( QStringLiteral( "How a conjugated word was formed" ) ) ),
 		tags_( new QCheckBox( QStringLiteral( "Word classes and tags" ) ) ),
 		frequencies_( new QCheckBox( QStringLiteral( "Frequency ranks" ) ) ),
 		pitch_( new QCheckBox( QStringLiteral( "Pitch accent" ) ) ),
 		dictionary_( new QCheckBox( QStringLiteral( "Dictionary names" ) ) ),
 		buttons_( new QCheckBox( QStringLiteral( "Audio and Anki buttons" ) ) ),
+		button_size_( spin( 0, 96, QStringLiteral( " px" ), QStringLiteral( "Automatic" ) ) ),
 		kanji_( new QCheckBox( QStringLiteral( "Kanji entries when no word matches" ) ) ),
 		max_senses_( spin( 0, 50, QString(), QStringLiteral( "All" ) ) ),
 		results_( spin( 1, 200 ) ),
@@ -179,7 +180,8 @@ namespace lexiglance::gui
 		highlight_auto_( new QCheckBox( QStringLiteral( "Choose the colour for the background automatically" ) ) ),
 		highlight_thickness_( spin( 1, 12, QStringLiteral( " px" ) ) ),
 		highlight_radius_( spin( 0, 32, QStringLiteral( " px" ), QStringLiteral( "Square" ) ) ),
-		highlight_padding_( spin( 0, 16, QStringLiteral( " px" ) ) ),
+		highlight_padding_x_( spin( -16, 16, QStringLiteral( " px" ) ) ),
+		highlight_padding_y_( spin( -16, 16, QStringLiteral( " px" ) ) ),
 		compositor_( combo( { QStringLiteral( "Automatic (follow the compositor)" ), QStringLiteral( "Compositor: translucent" ), QStringLiteral( "No compositor: highlighter" ) } ) ),
 		preview_text_( new QLineEdit() ),
 		highlight_preview_( new QLabel() ),
@@ -299,6 +301,8 @@ namespace lexiglance::gui
 		{
 			shown->addRow( box );
 		}
+		button_size_->setToolTip( QStringLiteral( "The size of the speaker and Anki buttons in the popup; automatic matches the headword. The middle mouse button plays the pronunciation wherever the pointer is over the popup." ) );
+		shown->addRow( QStringLiteral( "Button size" ), button_size_ );
 		max_senses_->setToolTip( QStringLiteral( "Definitions shown for each dictionary of an entry; the rest are counted (\"+ 3 more\")." ) );
 		shown->addRow( QStringLiteral( "Definitions per dictionary" ), max_senses_ );
 		shown->addRow( QStringLiteral( "Maximum results" ), results_ );
@@ -319,7 +323,12 @@ namespace lexiglance::gui
 		highlight->addRow( highlight_auto_ );
 		highlight->addRow( QStringLiteral( "Line thickness" ), highlight_thickness_ );
 		highlight->addRow( QStringLiteral( "Corner rounding" ), highlight_radius_ );
-		highlight->addRow( QStringLiteral( "Room around the text" ), highlight_padding_ );
+		// Applications report the box of a word differently; below zero the mark is pulled in over one that is too generous.
+		const QString room = QStringLiteral( "How far the mark reaches past the text. Below zero it is pulled in, for applications that report a box larger than the word looks." );
+		highlight_padding_x_->setToolTip( room );
+		highlight_padding_y_->setToolTip( room );
+		highlight->addRow( QStringLiteral( "Room left and right" ), highlight_padding_x_ );
+		highlight->addRow( QStringLiteral( "Room above and below" ), highlight_padding_y_ );
 		compositor_->setToolTip( QStringLiteral( "With a compositor the highlight is translucent and the popup has rounded corners; without one the highlight marks the background around the glyphs." ) );
 		highlight->addRow( QStringLiteral( "Transparency" ), compositor_ );
 		highlight->addRow( note( QStringLiteral( "Lines use the colour as it is; a highlighter tints the text with it, its opacity being the strength (also when the colour is chosen automatically)." ) ) );
@@ -368,7 +377,7 @@ namespace lexiglance::gui
 		{
 			hook( box, &QCheckBox::toggled );
 		}
-		for ( QSpinBox* box : { font_size_, headword_size_, furigana_size_, width_, height_, corner_radius_, border_width_, padding_, opacity_, offset_x_, offset_y_, max_senses_, results_, dictionaries_, highlight_thickness_, highlight_radius_, highlight_padding_ } )
+		for ( QSpinBox* box : { font_size_, headword_size_, furigana_size_, width_, height_, corner_radius_, border_width_, padding_, opacity_, offset_x_, offset_y_, max_senses_, results_, dictionaries_, button_size_, highlight_thickness_, highlight_radius_, highlight_padding_x_, highlight_padding_y_ } )
 		{
 			hook( box, &QSpinBox::valueChanged );
 		}
@@ -413,7 +422,7 @@ namespace lexiglance::gui
 		const auto& popup = settings().config().popup;
 
 		std::vector<std::unique_ptr<QSignalBlocker>> blockers;
-		for ( QObject* widget : std::initializer_list<QObject*>{ design_, scheme_, theme_, default_font_, font_, font_size_, headword_size_, furigana_size_, scale_, width_, height_, corner_radius_, border_width_, padding_, opacity_, placement_, offset_x_, offset_y_, select_button_, furigana_, reading_, inflection_, tags_, frequencies_, pitch_, dictionary_, buttons_, kanji_, max_senses_, results_, dictionaries_, highlight_style_, highlight_auto_, highlight_thickness_, highlight_radius_, highlight_padding_, compositor_ } )
+		for ( QObject* widget : std::initializer_list<QObject*>{ design_, scheme_, theme_, default_font_, font_, font_size_, headword_size_, furigana_size_, scale_, width_, height_, corner_radius_, border_width_, padding_, opacity_, placement_, offset_x_, offset_y_, select_button_, furigana_, reading_, inflection_, tags_, frequencies_, pitch_, dictionary_, buttons_, button_size_, kanji_, max_senses_, results_, dictionaries_, highlight_style_, highlight_auto_, highlight_thickness_, highlight_radius_, highlight_padding_x_, highlight_padding_y_, compositor_ } )
 		{
 			blockers.push_back( std::make_unique<QSignalBlocker>( widget ) );
 		}
@@ -443,13 +452,14 @@ namespace lexiglance::gui
 		select_button_->setCurrentIndex( popup.select_button == config::MouseButton::Middle ? 1 : 0 );
 		furigana_->setChecked( popup.show_furigana );
 		reading_->setChecked( popup.show_reading );
-		reading_->setEnabled( !popup.show_furigana );
 		inflection_->setChecked( popup.show_inflection );
 		tags_->setChecked( popup.show_tags );
 		frequencies_->setChecked( popup.show_frequencies );
 		pitch_->setChecked( popup.show_pitch );
 		dictionary_->setChecked( popup.show_dictionary );
 		buttons_->setChecked( popup.show_buttons );
+		button_size_->setValue( popup.button_size );
+		button_size_->setEnabled( popup.show_buttons );
 		kanji_->setChecked( popup.show_kanji );
 		max_senses_->setValue( popup.max_senses );
 		results_->setValue( popup.max_results );
@@ -459,7 +469,8 @@ namespace lexiglance::gui
 		highlight_thickness_->setValue( popup.highlight_thickness );
 		highlight_thickness_->setEnabled( popup.highlight_style != config::HighlightStyle::Fill );
 		highlight_radius_->setValue( popup.highlight_radius );
-		highlight_padding_->setValue( popup.highlight_padding );
+		highlight_padding_x_->setValue( popup.highlight_padding_x );
+		highlight_padding_y_->setValue( popup.highlight_padding_y );
 		compositor_->setCurrentIndex( static_cast<int>( popup.compositor ) );
 		updateColorButtons();
 		loading_ = false;
@@ -499,6 +510,7 @@ namespace lexiglance::gui
 		popup.show_pitch          = pitch_->isChecked();
 		popup.show_dictionary     = dictionary_->isChecked();
 		popup.show_buttons        = buttons_->isChecked();
+		popup.button_size         = button_size_->value();
 		popup.show_kanji          = kanji_->isChecked();
 		popup.max_senses          = max_senses_->value();
 		popup.max_results         = results_->value();
@@ -507,10 +519,11 @@ namespace lexiglance::gui
 		popup.highlight_auto      = highlight_auto_->isChecked();
 		popup.highlight_thickness = highlight_thickness_->value();
 		popup.highlight_radius    = highlight_radius_->value();
-		popup.highlight_padding   = highlight_padding_->value();
+		popup.highlight_padding_x = highlight_padding_x_->value();
+		popup.highlight_padding_y = highlight_padding_y_->value();
 		popup.compositor          = static_cast<config::Compositor>( std::clamp( compositor_->currentIndex(), 0, 2 ) );
 		highlight_thickness_->setEnabled( popup.highlight_style != config::HighlightStyle::Fill );
-		reading_->setEnabled( !popup.show_furigana );
+		button_size_->setEnabled( popup.show_buttons );
 		font_->setEnabled( !default_font_->isChecked() );
 		settings().commit();
 		preview_timer_->start();

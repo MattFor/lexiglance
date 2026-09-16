@@ -25,12 +25,13 @@ namespace lexiglance::gui
 			const QList<std::pair<QString, QString>> rows{
 				{ first ? QStringLiteral( "Get a dictionary (do this first)" ) : QStringLiteral( "Get a dictionary" ), page( "dictionaries", "Dictionaries" ) + QStringLiteral( " → Get recommended dictionaries" ) },
 				{ QStringLiteral( "Look up a word" ), QStringLiteral( "Hold <b>%1</b> and point at it, in any program" ).arg( trigger.toHtmlEscaped() ) },
-				{ QStringLiteral( "In the popup" ), QStringLiteral( "Wheel: more or less text · Left‑click an entry: copy it · Right‑click: select text" ) },
+				{ QStringLiteral( "In the popup" ), QStringLiteral( "Wheel: more or less text · Left‑click an entry: copy it · Middle‑click: hear it · Right‑click: select text" ) },
 				{ QStringLiteral( "Games, videos, images" ), page( "scanning", "Scanning" ) + QStringLiteral( " → Download PaddleOCR" ) },
 				{ QStringLiteral( "Other trigger keys" ), page( "scanning", "Scanning" ) + QStringLiteral( " → Trigger" ) },
 				{ QStringLiteral( "The popup's look" ), page( "appearance", "Appearance" ) },
 				{ QStringLiteral( "Type a word in" ), page( "search", "Search" ) },
 				{ QStringLiteral( "Anki cards" ), page( "anki", "Anki" ) },
+				{ QStringLiteral( "Quickly change a value" ), QStringLiteral( "Click the field, then turn the wheel over it to run through the values; <b>0</b> means automatic where the field says so" ) },
 				{ QStringLiteral( "Start with the computer" ), page( "overview", "Overview" ) + QStringLiteral( " → Startup" ) },
 				{ QStringLiteral( "Something does not work" ), page( "overview", "Overview" ) + QStringLiteral( " → Check health" ) },
 			};
@@ -110,7 +111,7 @@ namespace lexiglance::gui
 		return QWidget::eventFilter( watched, event );
 	}
 
-	void HelpOverlay::paintEvent( QPaintEvent* )
+	void HelpOverlay::paintEvent( QPaintEvent* /*event*/ )
 	{
 		QPainter painter( this );
 		painter.fillRect( rect(), QColor( 0, 0, 0, 110 ) );

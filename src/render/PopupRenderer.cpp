@@ -764,7 +764,24 @@ namespace lexiglance::render
 				{
 					wanted.push_back( PopupAction::Audio );
 				}
-				const int    size = style_->px( style_->font_size * 1.55 );
+				// Automatic matches the headword so the speaker stays easy to hit next to large kanji.
+				double head = style_->headword_size;
+				if ( head <= 0.0 )
+				{
+					if ( style_->design == Design::Friendly )
+					{
+						head = style_->font_size * 2.05;
+					}
+					else if ( style_->design == Design::Compact )
+					{
+						head = style_->font_size * 1.35;
+					}
+					else
+					{
+						head = style_->font_size * 1.75;
+					}
+				}
+				const int    size = style_->px( style_->button_size > 0.0 ? style_->button_size : head );
 				const int    gap  = style_->px( 4 );
 				int          x    = padding_ + content_width_ - size;
 				const double y    = std::round( line_top + ( ( line_height - size ) / 2.0 ) );
@@ -780,7 +797,8 @@ namespace lexiglance::render
 
 			void headword( const lookup::TermEntry& entry, std::size_t index )
 			{
-				// As the entry's language writes it; without furigana, the reading goes next to the headword.
+				// As the entry's language writes it; furigana above the kanji and the full reading beside it are
+				// independent, so both can be on at once.
 				auto       segments    = result_->headword( entry );
 				const bool has_reading = std::ranges::any_of( segments, []( const auto& s ) { return !s.reading.empty(); } );
 				if ( !style_->show_furigana )
@@ -823,7 +841,7 @@ namespace lexiglance::render
 					text_height = std::max( text_height, bh );
 				}
 
-				if ( !style_->show_furigana && style_->show_reading && has_reading )
+				if ( style_->show_reading && has_reading )
 				{
 					auto reading        = impl_->layout( impl_->body.get(), classic() || compact() ? std::format( "【{}】", entry.reading ) : std::string( entry.reading ) );
 					const auto [rw, rh] = PopupRenderer::Impl::size( reading.get() );
@@ -856,18 +874,18 @@ namespace lexiglance::render
 				}
 				const auto first = entry.definitions.front().dictionary;
 				const auto add   = [&]( const dict::Dictionary& dictionary, std::string_view name ) {
-                    if ( isNumber( name ) || out.size() >= 5 )
-                    {
-                        return;
-                    }
-                    const auto* tag   = dictionary.findTag( name );
-                    std::string label = friendlyLabel( name, tag != nullptr ? dictionary.string( tag->notes ) : std::string_view() );
-                    if ( std::ranges::contains( seen, label ) )
-                    {
-                        return;
-                    }
-                    seen.push_back( label );
-                    out.push_back( { .label = std::move( label ), .color = theme().tag( tag != nullptr ? dictionary.string( tag->category ) : "" ) } );
+					if ( isNumber( name ) || out.size() >= 5 )
+					{
+						return;
+					}
+					const auto* tag   = dictionary.findTag( name );
+					std::string label = friendlyLabel( name, tag != nullptr ? dictionary.string( tag->notes ) : std::string_view() );
+					if ( std::ranges::contains( seen, label ) )
+					{
+						return;
+					}
+					seen.push_back( label );
+					out.push_back( { .label = std::move( label ), .color = theme().tag( tag != nullptr ? dictionary.string( tag->category ) : "" ) } );
 				};
 				for ( const auto& definition : entry.definitions )
 				{
@@ -1202,14 +1220,14 @@ namespace lexiglance::render
 				std::size_t in_group = 0;
 				std::size_t hidden   = 0;
 				const auto  more     = [&] {
-                    if ( hidden > 0 )
-                    {
-                        auto       layout = impl_->layout( impl_->italic.get(), std::format( "+ {} more", hidden ) );
-                        const auto height = PopupRenderer::Impl::size( layout.get() ).second;
-                        text( std::move( layout ), padding_ + indent, y_, theme().muted, false );
-                        y_ += height + style_->px( 3 );
-                        hidden = 0;
-                    }
+					if ( hidden > 0 )
+					{
+						auto       layout = impl_->layout( impl_->italic.get(), std::format( "+ {} more", hidden ) );
+						const auto height = PopupRenderer::Impl::size( layout.get() ).second;
+						text( std::move( layout ), padding_ + indent, y_, theme().muted, false );
+						y_ += height + style_->px( 3 );
+						hidden = 0;
+					}
 				};
 				for ( std::size_t i = 0; i < entry.definitions.size(); ++i )
 				{

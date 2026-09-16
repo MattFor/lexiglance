@@ -36,7 +36,7 @@ namespace lexiglance::gui
 		{
 			const QString name = field.toLower();
 			const auto    has  = [&]( std::initializer_list<const char*> words ) {
-                return std::ranges::any_of( words, [&]( const char* word ) { return name.contains( QString::fromUtf8( word ) ); } );
+				return std::ranges::any_of( words, [&]( const char* word ) { return name.contains( QString::fromUtf8( word ) ); } );
 			};
 			if ( has( { "audio", "sound", "音声" } ) )
 			{

@@ -3,7 +3,11 @@
 #include <onnxruntime_c_api.h>
 
 #include <array>
+#include <filesystem>
+#include <format>
 #include <mutex>
+#include <string>
+#include <system_error>
 #include <vector>
 
 #ifdef _WIN32
@@ -23,35 +27,86 @@ namespace lexiglance::ocr
 
 #ifdef _WIN32
 		constexpr std::array library_names{ "onnxruntime.dll" };
+	#if defined( _M_ARM64 ) || defined( __aarch64__ )
+		constexpr std::string_view vc_redist_url = "https://aka.ms/vs/17/release/vc_redist.arm64.exe";
+	#else
+		constexpr std::string_view vc_redist_url = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
+	#endif
 #elifdef __APPLE__
 		constexpr std::array library_names{ "libonnxruntime.dylib", "libonnxruntime.1.dylib" };
 #else
 		constexpr std::array library_names{ "libonnxruntime.so", "libonnxruntime.so.1" };
 #endif
 
+		// Why the library at `candidate` did not load, in words the user can act on.
+		std::string loadError( [[maybe_unused]] const std::filesystem::path& candidate )
+		{
+#ifdef _WIN32
+			const DWORD       code    = GetLastError();
+			const std::string missing = missingVcRuntime();
+			if ( !missing.empty() )
+			{
+				// What to do about it on a line of its own: the settings application installs it at a click, and the
+				// address is for anyone reading this outside it. Short first line, so it reads at a glance.
+				return std::format(
+						"ONNX Runtime needs {}, which this computer does not have ({} cannot be found).\n"
+						"Lexiglance can install it: Overview, Check health, Download and install. By hand: {}",
+						vc_runtime_absent,
+						missing,
+						vc_redist_url
+				);
+			}
+			return std::format( "cannot load {} (Windows error {})", candidate.filename().string(), code );
+#else
+			const char* reason = dlerror();
+			return reason != nullptr ? std::string( reason ) : std::string( runtime_absent );
+#endif
+		}
+
+		struct Entry
+		{
+			void*       symbol = nullptr;
+			std::string error;
+		};
+
 		// ONNX Runtime's entry point, from our own copy of the library or else the system's. Not on Windows: the
 		// onnxruntime.dll in System32 is Windows' own, an older release that cannot read the models.
-		void* entryPoint( const std::filesystem::path& directory )
+		Entry entryPoint( const std::filesystem::path& directory )
 		{
+#ifdef _WIN32
+			const std::vector<std::filesystem::path> candidates{ directory / library_names.front() };
+#else
 			std::vector<std::filesystem::path> candidates{ directory / library_names.front() };
-#ifndef _WIN32
 			candidates.insert( candidates.end(), library_names.begin(), library_names.end() );
 #endif
+			Entry entry;
 			for ( const auto& candidate : candidates )
 			{
 #ifdef _WIN32
 				if ( HMODULE library = LoadLibraryExW( candidate.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH ); library != nullptr )
 				{
-					return reinterpret_cast<void*>( GetProcAddress( library, "OrtGetApiBase" ) );
+					entry.symbol = reinterpret_cast<void*>( GetProcAddress( library, "OrtGetApiBase" ) );
+					return entry;
 				}
 #else
 				if ( void* library = dlopen( candidate.c_str(), RTLD_NOW | RTLD_LOCAL ); library != nullptr )
 				{
-					return dlsym( library, "OrtGetApiBase" );
+					entry.symbol = dlsym( library, "OrtGetApiBase" );
+					return entry;
 				}
 #endif
+				// The first candidate is our own copy, whose absence is the ordinary "not downloaded yet" case.
+				std::error_code ec;
+				if ( std::filesystem::exists( candidate, ec ) )
+				{
+					entry.error = loadError( candidate );
+				}
 			}
-			return nullptr;
+			if ( entry.error.empty() )
+			{
+				entry.error = runtime_absent;
+			}
+			return entry;
 		}
 
 		struct Runtime
@@ -65,21 +120,21 @@ namespace lexiglance::ocr
 		// every call tries again, since the runtime can be downloaded while the daemon runs.
 		Runtime runtime( const std::filesystem::path& directory )
 		{
-			static Runtime        instance;
-			static std::mutex     mutex;
-			const std::lock_guard lock( mutex );
+			static Runtime         instance;
+			static std::mutex      mutex;
+			const std::scoped_lock lock( mutex );
 			if ( instance.api != nullptr )
 			{
 				return instance;
 			}
-			void* entry = entryPoint( directory );
-			if ( entry == nullptr )
+			Entry entry = entryPoint( directory );
+			if ( entry.symbol == nullptr )
 			{
-				instance.error = "ONNX Runtime is not installed";
+				instance.error = std::move( entry.error );
 				return instance;
 			}
 			using GetApiBase  = const OrtApiBase* ( * )();
-			const auto    get = reinterpret_cast<GetApiBase>( entry );
+			const auto    get = reinterpret_cast<GetApiBase>( entry.symbol );
 			const OrtApi* api = get != nullptr ? get()->GetApi( api_version ) : nullptr;
 			if ( api == nullptr )
 			{

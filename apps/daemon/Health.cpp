@@ -391,11 +391,12 @@ namespace lexiglance::daemon
 				);
 			}
 
+			// Worded to read after "Last lookup: " as well, which is where the settings application puts it.
 			const std::scoped_lock lock( problems_mutex_ );
 			if ( !last_capture_.empty() )
 			{
 				const auto ago = std::chrono::duration_cast<std::chrono::seconds>( Clock::now() - last_capture_time_ );
-				checks.push_back( { .id = "last-capture", .title = "Last lookup on screen", .status = Severity::Info, .detail = std::format( "{} ago: {}.", readableDuration( ago ), last_capture_ ) } );
+				checks.push_back( { .id = "last-capture", .title = "Last lookup on screen", .status = Severity::Info, .detail = std::format( "{}, {} ago.", last_capture_, readableDuration( ago ) ) } );
 			}
 			else
 			{
@@ -403,7 +404,7 @@ namespace lexiglance::daemon
 						{ .id     = "last-capture",
 				          .title  = "Last lookup on screen",
 				          .status = Severity::Info,
-				          .detail = "None since the daemon started: hold the trigger over a word to try one." }
+				          .detail = "none since Lexiglance started: hold the trigger over a word to try one." }
 				);
 			}
 		}

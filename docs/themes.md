@@ -37,7 +37,8 @@ file...** copies one in. They are easy to write by hand:
     "highlight_style": "fill",
     "highlight_color": "#e39a6455",
     "highlight_radius": 4,
-    "highlight_padding": 2
+    "highlight_padding_x": 2,
+    "highlight_padding_y": 2
   }
 }
 ```
@@ -58,7 +59,8 @@ those of the `popup` section of `config.json`.
 | `show_tags`, `show_dictionary`                                   | `true` or `false`                                                                                                                                      |
 | `highlight_style`                                                | `underline`, `double-underline`, `dotted-underline`, `wavy-underline`, `outline`, `fill`, `brackets`                                                   |
 | `highlight_color`                                                | `#rrggbbaa`; the alpha is how strongly a fill tints                                                                                                    |
-| `highlight_thickness`, `highlight_radius`, `highlight_padding`   | pixels                                                                                                                                                 |
+| `highlight_thickness`, `highlight_radius`                        | pixels                                                                                                                                                 |
+| `highlight_padding_x`, `highlight_padding_y`                     | pixels of room around the text, sideways and above and below; below zero pulls the mark in (`highlight_padding` still sets both)                       |
 | `highlight_auto`                                                 | `true` picks the colour from the background under the text                                                                                             |
 
 The palette colours `colors` can set: `background`, `text`, `muted`, `border`, `separator`, `scrollbar`, `accent`,

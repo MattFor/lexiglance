@@ -343,6 +343,11 @@ namespace lexiglance::platform
 
 			~WindowsBackend() override
 			{
+				if ( wheel_hook_ != nullptr )
+				{
+					UnhookWindowsHookEx( wheel_hook_ );
+					wheel_hook_ = nullptr;
+				}
 				if ( clipboard_listening_ )
 				{
 					RemoveClipboardFormatListener( host_ );
@@ -438,8 +443,8 @@ namespace lexiglance::platform
 					const auto now     = Clock::now();
 					DWORD      timeout = INFINITE;
 					const auto until   = [&]( Clock::time_point when ) {
-                        const auto wait = std::chrono::ceil<std::chrono::milliseconds>( when - now ).count();
-                        timeout         = std::min( timeout, static_cast<DWORD>( std::clamp<long long>( wait, 0, 0x7FFFFFFF ) ) );
+						const auto wait = std::chrono::ceil<std::chrono::milliseconds>( when - now ).count();
+						timeout         = std::min( timeout, static_cast<DWORD>( std::clamp<long long>( wait, 0, 0x7FFFFFFF ) ) );
 					};
 					if ( scan_pending_ )
 					{
@@ -449,7 +454,7 @@ namespace lexiglance::platform
 					{
 						until( badge_until_ );
 					}
-					if ( source_ != nullptr )
+					if ( watching() )
 					{
 						until( source_checked_ + source_interval );
 					}
@@ -464,7 +469,7 @@ namespace lexiglance::platform
 						badge_until_ = {};
 						paintPopup();
 					}
-					if ( source_ != nullptr && Clock::now() >= source_checked_ + source_interval )
+					if ( watching() && Clock::now() >= source_checked_ + source_interval )
 					{
 						checkSource();
 					}
@@ -500,6 +505,7 @@ namespace lexiglance::platform
 				select_middle_  = config.popup.select_button == config::MouseButton::Middle;
 				highlight_auto_ = config.popup.highlight_auto;
 				wheel_length_   = config.scan.wheel_length;
+				wheel_lock_     = config.scan.wheel_lock;
 				if ( compositor_mode_ != config.popup.compositor )
 				{
 					compositor_mode_ = config.popup.compositor;
@@ -528,6 +534,7 @@ namespace lexiglance::platform
 				}
 				trigger_active_ = false;
 				syncKeyboard();
+				updateWheelLock();
 			}
 
 			void showPopup( PopupContent content ) override
@@ -537,7 +544,7 @@ namespace lexiglance::platform
 					return;
 				}
 				const Rect before = popup_shown_ ? popup_rect_ : Rect{};
-				watchSource( windowOf( content.source ) );
+				watchSource( windowOf( content.source ), true );
 				popup_     = std::move( content );
 				scroll_    = 0;
 				selecting_ = false;
@@ -576,6 +583,7 @@ namespace lexiglance::platform
 				paintPopup( true );
 				raise( popup_window_ );
 				popup_shown_ = true;
+				updateWheelLock();
 				vacate( before );
 				publishOverlays();
 			}
@@ -587,7 +595,8 @@ namespace lexiglance::platform
 				{
 					ShowWindow( popup_window_, SW_HIDE );
 					popup_shown_ = false;
-					selecting_   = false;
+					updateWheelLock();
+					selecting_ = false;
 					if ( GetCapture() == popup_window_ )
 					{
 						ReleaseCapture();
@@ -614,8 +623,8 @@ namespace lexiglance::platform
 				highlight_color_ = color;
 				const auto area  = render::highlightArea( { .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height }, look_ );
 				highlight_rect_  = { .x = area.x, .y = area.y, .width = area.width, .height = area.height };
-				// Underlines take the rows below the text (and its padding).
-				highlight_lines_ = std::max( 0, area.height - rect.height - ( 2 * std::max( 0, look_.padding ) ) );
+				// Underlines take the rows below the text (and the room around it).
+				highlight_lines_ = render::highlightDepth( look_ );
 				const bool fill  = look_.shape == render::HighlightShape::Fill;
 				if ( highlight_auto_ || ( fill && !transparent_.load( std::memory_order_relaxed ) ) )
 				{
@@ -722,7 +731,7 @@ namespace lexiglance::platform
 					std::string names;
 					for ( const config::Key key : group )
 					{
-						names.append( names.empty() ? "" : " or " ).append( config::keyName( key ) );
+						names.append( names.empty() ? "" : " or " ).append( config::displayKeyName( key ) );
 					}
 					chord.append( chord.empty() ? "" : " + " ).append( names );
 				}
@@ -917,6 +926,11 @@ namespace lexiglance::platform
 							SetCapture( popup_window_ );
 							beginSelection( x, y );
 						}
+						// The middle button is free unless it is the one that selects text.
+						else if ( message == WM_MBUTTONDOWN )
+						{
+							playAt( y + scroll_ );
+						}
 						return 0;
 					case WM_MOUSEMOVE:
 						if ( selecting_ )
@@ -1010,7 +1024,7 @@ namespace lexiglance::platform
 				{
 					if ( pressed )
 					{
-						record( std::string( config::keyName( *key ) ) );
+						record( std::string( config::displayKeyName( *key ) ) );
 					}
 					else
 					{
@@ -1038,7 +1052,7 @@ namespace lexiglance::platform
 						// Like on X11, the main buttons only click; the others can be part of a trigger.
 						if ( pressed && button.key != config::Key::MouseLeft && button.key != config::Key::MouseRight )
 						{
-							record( std::string( config::keyName( button.key ) ) );
+							record( std::string( config::displayKeyName( button.key ) ) );
 						}
 						else if ( released )
 						{
@@ -1101,6 +1115,39 @@ namespace lexiglance::platform
 				} );
 			}
 
+			// Low-level mouse hooks do not gate raw input, so the turn still reaches handleMouse() and lengthens or
+			// shortens the looked-up text while the window under the pointer no longer sees it. This is the one place
+			// Lexiglance takes input away from another application, hence the setting it waits for (docs/anticheat.md).
+			static LRESULT CALLBACK wheelHook( int code, WPARAM message, LPARAM data )
+			{
+				if ( code == HC_ACTION && message == WM_MOUSEWHEEL )
+				{
+					return 1;
+				}
+				return CallNextHookEx( nullptr, code, message, data );
+			}
+
+			// X11's counterpart grabs the two wheel buttons; here the hook goes up and comes down under the same
+			// conditions, so it is installed only while the trigger is held over an open popup.
+			void updateWheelLock()
+			{
+				const bool wanted = wheel_lock_ && wheel_length_ && trigger_active_ && popup_shown_;
+				if ( wanted == ( wheel_hook_ != nullptr ) )
+				{
+					return;
+				}
+				if ( wanted )
+				{
+					// The hook runs on whichever thread installed it: this one, the one pumping messages in run().
+					wheel_hook_ = SetWindowsHookExW( WH_MOUSE_LL, &WindowsBackend::wheelHook, GetModuleHandleW( nullptr ), 0 );
+				}
+				else
+				{
+					UnhookWindowsHookEx( wheel_hook_ );
+					wheel_hook_ = nullptr;
+				}
+			}
+
 			void updateTrigger()
 			{
 				const bool held = chordHeld();
@@ -1112,12 +1159,14 @@ namespace lexiglance::platform
 					{
 						events_.trigger_changed( true );
 					}
+					updateWheelLock();
 					scan( true );
 				}
 				else if ( !held && trigger_active_ )
 				{
 					trigger_active_ = false;
 					scan_pending_   = false;
+					updateWheelLock();
 					if ( events_.trigger_released )
 					{
 						events_.trigger_released();
@@ -1232,23 +1281,37 @@ namespace lexiglance::platform
 				return info;
 			}
 
-			// The popup follows the window its text came from: closing it, minimising it or moving it to another virtual
-			// desktop closes the popup too.
-			void watchSource( HWND window )
+			// The popup follows the window its text came from: closing it, minimising it, moving it to another virtual
+			// desktop or simply going somewhere else (Alt+Tab) closes the popup too. `shown`: a popup is up, so the
+			// window with the keyboard is worth remembering even when the text came from nowhere in particular.
+			void watchSource( HWND window, bool shown = false )
 			{
 				source_         = window;
 				source_checked_ = Clock::now();
+				// Our own windows never take the focus, so anything else in front means the user has moved on.
+				foreground_ = shown || window != nullptr ? GetForegroundWindow() : nullptr;
+			}
+
+			[[nodiscard]] bool watching() const noexcept
+			{
+				return source_ != nullptr || foreground_ != nullptr;
 			}
 
 			void checkSource()
 			{
 				source_checked_ = Clock::now();
-				BOOL cloaked    = FALSE;
-				// Windows on other virtual desktops are cloaked.
-				( void )DwmGetWindowAttribute( source_, DWMWA_CLOAKED, &cloaked, sizeof( cloaked ) );
-				if ( IsWindow( source_ ) == FALSE || IsIconic( source_ ) != FALSE || IsWindowVisible( source_ ) == FALSE || cloaked != FALSE )
+				bool gone       = foreground_ != nullptr && GetForegroundWindow() != foreground_;
+				if ( !gone && source_ != nullptr )
 				{
-					source_ = nullptr;
+					BOOL cloaked = FALSE;
+					// Windows on other virtual desktops are cloaked.
+					( void )DwmGetWindowAttribute( source_, DWMWA_CLOAKED, &cloaked, sizeof( cloaked ) );
+					gone = IsWindow( source_ ) == FALSE || IsIconic( source_ ) != FALSE || IsWindowVisible( source_ ) == FALSE || cloaked != FALSE;
+				}
+				if ( gone )
+				{
+					source_     = nullptr;
+					foreground_ = nullptr;
 					if ( events_.source_closed )
 					{
 						events_.source_closed();
@@ -1502,6 +1565,17 @@ namespace lexiglance::platform
 				copy( content_y );
 			}
 
+			// The middle button plays an entry's pronunciation without aiming at the speaker.
+			void playAt( int content_y )
+			{
+				const auto entry = popup_.image ? popup_.image->entryAt( content_y ) : std::nullopt;
+				if ( entry && events_.popup_action )
+				{
+					log::debug( "popup middle click on entry {}", *entry );
+					events_.popup_action( *entry, render::PopupAction::Audio );
+				}
+			}
+
 			// Dragging with the selection button selects popup text; releasing copies it.
 			void beginSelection( int x, int y )
 			{
@@ -1722,8 +1796,10 @@ namespace lexiglance::platform
 			LayeredCanvas                 popup_canvas_;
 			LayeredCanvas                 highlight_canvas_;
 
-			bool              popup_shown_ = false;
-			HWND              source_      = nullptr;
+			bool popup_shown_ = false;
+			HWND source_      = nullptr;
+			// The window that had the keyboard when the popup opened; the popup goes when another one takes it.
+			HWND              foreground_ = nullptr;
 			Clock::time_point source_checked_;
 			PopupContent      popup_;
 			render::PopupSize popup_size_;
@@ -1745,6 +1821,7 @@ namespace lexiglance::platform
 			std::bitset<32>       down_;
 			bool                  trigger_active_ = false;
 			int                   wheel_          = 0;
+			HHOOK                 wheel_hook_     = nullptr;
 			config::SelectionMode selection_mode_ = config::SelectionMode::Off;
 
 			std::chrono::milliseconds delay_{ 20 };
@@ -1772,6 +1849,7 @@ namespace lexiglance::platform
 			config::Compositor                                                  compositor_mode_ = config::Compositor::Auto;
 			bool                                                                highlight_auto_  = false;
 			bool                                                                wheel_length_    = true;
+			bool                                                                wheel_lock_      = false;
 			bool                                                                marker_          = false;
 			render::Color                                                       marker_color_;
 			bool                                                                select_middle_ = false;

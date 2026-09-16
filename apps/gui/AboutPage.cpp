@@ -27,8 +27,15 @@ namespace lexiglance::gui
 	namespace
 	{
 
-		const QString author_url = QStringLiteral( "https://github.com/MattFor" );
-		const QString donate_url = QStringLiteral( "https://tip.mattfor.com" );
+		QString authorUrl()
+		{
+			return QStringLiteral( "https://github.com/MattFor" );
+		}
+
+		QString donateUrl()
+		{
+			return QStringLiteral( "https://tip.mattfor.com" );
+		}
 
 		struct Component
 		{
@@ -74,9 +81,26 @@ namespace lexiglance::gui
 			return link( QUrl::fromLocalFile( local ).toString(), local );
 		}
 
+		// The system this runs on, without Qt's version: short enough to sit beside the version.
+		QString platformName()
+		{
+			return QStringLiteral( "%1 (%2)" ).arg( QSysInfo::prettyProductName(), QSysInfo::currentCpuArchitecture() );
+		}
+
 		QString systemDescription()
 		{
-			return QStringLiteral( "%1 (%2), Qt %3" ).arg( QSysInfo::prettyProductName(), QSysInfo::currentCpuArchitecture(), QString::fromLatin1( qVersion() ) );
+			return QStringLiteral( "%1, Qt %2" ).arg( platformName(), QString::fromLatin1( qVersion() ) );
+		}
+
+		// Which build this is: one made from the release tag, or one from anywhere else, named by the commit it came
+		// from when that is known. It belongs in a bug report, so it is said plainly wherever the version is.
+		QString buildName()
+		{
+			if ( channel == "stable" )
+			{
+				return QStringLiteral( "stable build" );
+			}
+			return commit.empty() ? QStringLiteral( "dev build" ) : QStringLiteral( "dev build %1" ).arg( qs( commit ) );
 		}
 
 		QPushButton* opener( const QString& text, const QString& url, QWidget* parent )
@@ -115,9 +139,10 @@ namespace lexiglance::gui
 		auto* tagline = new QLabel( QStringLiteral( "A system-wide pop-up dictionary: point at a word in any application and read what it means." ) );
 		tagline->setWordWrap( true );
 		identity->addWidget( tagline );
-		auto* byline = new QLabel( QStringLiteral( "Version %1 · by %2 · free software under the MIT licence" ).arg( qs( version ), link( author_url, QStringLiteral( "MattFor" ) ) ) );
+		auto* byline = new QLabel( QStringLiteral( "Version %1 · %2 · %3 · by %4 · free software under the MIT licence" ).arg( qs( version ), buildName(), platformName().toHtmlEscaped(), link( authorUrl(), QStringLiteral( "MattFor" ) ) ) );
 		byline->setTextFormat( Qt::RichText );
 		byline->setOpenExternalLinks( true );
+		byline->setWordWrap( true );
 		identity->addWidget( byline );
 
 		const QString project = qs( project_url );
@@ -134,10 +159,10 @@ namespace lexiglance::gui
 		identity->addLayout( links );
 		header->addLayout( identity, 1 );
 		// Top right, apart from the links: a tip for the project.
-		auto* donate = opener( QStringLiteral( "♥  Support Lexiglance" ), donate_url, this );
+		auto* donate = opener( QStringLiteral( "♥  Support Lexiglance" ), donateUrl(), this );
 		donate->setObjectName( QStringLiteral( "donateButton" ) );
 		donate->setCursor( Qt::PointingHandCursor );
-		donate->setToolTip( QStringLiteral( "Lexiglance is free; a tip helps it keep going (%1)" ).arg( donate_url ) );
+		donate->setToolTip( QStringLiteral( "Lexiglance is free; a tip helps it keep going (%1)" ).arg( donateUrl() ) );
 		header->addWidget( donate, 0, Qt::AlignVCenter | Qt::AlignRight );
 		layout->addLayout( header );
 
@@ -174,8 +199,10 @@ namespace lexiglance::gui
 			}
 			else
 			{
-				daemon_ = QStringLiteral( "%1, %2 backend, text capture: %3" )
-				                  .arg( qs( ( *status )["version"].asString() ), qs( ( *status )["backend"].asString() ), qs( ( *status )["capture"].asString() ) );
+				// The reason in full as well, since this text is meant to be pasted into a bug report.
+				const QString problem = qs( ( *status )["capture_problem"].asString() );
+				daemon_               = QStringLiteral( "%1, %2 backend, text capture: %3%4" )
+				                                .arg( qs( ( *status )["version"].asString() ), qs( ( *status )["backend"].asString() ), qs( ( *status )["capture"].asString() ), problem.isEmpty() ? QString() : " (" + problem + ")" );
 			}
 			render();
 		} );
@@ -202,12 +229,12 @@ namespace lexiglance::gui
 	{
 		const QString muted = palette().color( QPalette::PlaceholderText ).name();
 		const auto    row   = []( const QString& label, const QString& value ) {
-            return QStringLiteral( "<tr><td style=\"padding-right: 18px\">%1</td><td>%2</td></tr>" ).arg( label, value );
+			return QStringLiteral( "<tr><td style=\"padding-right: 18px\">%1</td><td>%2</td></tr>" ).arg( label, value );
 		};
 
 		QString html = QStringLiteral( "<h3>System</h3><table cellspacing=\"3\">" );
-		html += row( QStringLiteral( "Lexiglance" ), qs( version ) );
-		html += row( QStringLiteral( "Daemon" ), daemon_.toHtmlEscaped() );
+		html += row( QStringLiteral( "Lexiglance" ), QStringLiteral( "%1 (%2)" ).arg( qs( version ), buildName() ) );
+		html += row( QStringLiteral( "Daemon" ), withLinks( daemon_.toHtmlEscaped() ) );
 		html += row( QStringLiteral( "Languages" ), languageNames().toHtmlEscaped() );
 		html += row( QStringLiteral( "System" ), systemDescription().toHtmlEscaped() );
 		html += QStringLiteral( "</table>" );
@@ -220,11 +247,13 @@ namespace lexiglance::gui
 		std::error_code ec;
 		std::filesystem::create_directories( lang::languagesDirectory(), ec );
 		html += row( QStringLiteral( "Languages" ), folder( lang::languagesDirectory() ) );
-		html += row( QStringLiteral( "Log" ), folder( paths::stateDir() ) );
+		// Two logs: what the daemon did, and what this window did.
+		html += row( QStringLiteral( "Daemon log" ), folder( paths::stateDir() / "daemon.log" ) );
+		html += row( QStringLiteral( "Application log" ), folder( paths::stateDir() / "application.log" ) );
 		html += QStringLiteral( "</table>" );
 
 		html += QStringLiteral( "<h3>Licence</h3><p>Lexiglance is free software under the %1. Copyright © 2026 %2.</p>" )
-		                .arg( link( qs( project_url ) + QStringLiteral( "/blob/master/LICENSE" ), QStringLiteral( "MIT licence" ) ), link( author_url, QStringLiteral( "MattFor" ) ) );
+		                .arg( link( qs( project_url ) + QStringLiteral( "/blob/master/LICENSE" ), QStringLiteral( "MIT licence" ) ), link( authorUrl(), QStringLiteral( "MattFor" ) ) );
 
 		html += QStringLiteral( "<h3>Attributions</h3>" );
 		html += QStringLiteral( "<p style=\"color: %1\">Dictionaries, programs and data Lexiglance uses, with their licences. The dictionary format is Yomitan's.</p>" ).arg( muted );
@@ -245,7 +274,7 @@ namespace lexiglance::gui
 
 	QString AboutPage::systemInformation() const
 	{
-		return QStringLiteral( "Lexiglance %1\nDaemon: %2\nSystem: %3\nSettings: %4\n" ).arg( qs( version ), daemon_, systemDescription(), qs( paths::configDir().string() ) );
+		return QStringLiteral( "Lexiglance %1 (%2)\nDaemon: %3\nSystem: %4\nSettings: %5\n" ).arg( qs( version ), buildName(), daemon_, systemDescription(), qs( paths::configDir().string() ) );
 	}
 
 } // namespace lexiglance::gui

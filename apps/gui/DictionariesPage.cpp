@@ -331,9 +331,9 @@ namespace lexiglance::gui
 	{
 		std::uint64_t on_disk = 0;
 		const auto    enabled = std::ranges::count_if( installed_, [&]( const auto& d ) {
-            on_disk += d.size;
-            return d.enabled;
-        } );
+			on_disk += d.size;
+			return d.enabled;
+		} );
 		showSummary( QStringLiteral( "%1 of %2 dictionaries enabled · %3 on disk" ).arg( enabled ).arg( installed_.size() ).arg( formatBytes( on_disk ) ) );
 	}
 
@@ -684,25 +684,25 @@ namespace lexiglance::gui
 		const auto                  installed = [this]( const Recommendation& r ) { return std::ranges::any_of( installed_, [&]( const InstalledDictionary& d ) { return r.matches( d.title ); } ); };
 		std::vector<Recommendation> list;
 		const auto                  fill = [&list, &installed, tree, language] {
-            tree->clear();
-            list = recommendations( ss( language->currentData().toString() ) );
-            for ( const auto& r : list )
-            {
-                const bool done = installed( r );
-                auto*      item = new QTreeWidgetItem( tree );
-                item->setText( 0, done ? r.name + QStringLiteral( "  ✓" ) : r.name );
-                item->setText( 1, r.category );
-                item->setText( 2, r.description );
-                item->setToolTip( 2, r.description + "\n\n" + r.homepage );
-                item->setCheckState( 0, done ? Qt::Unchecked : Qt::Checked );
-                if ( done )
-                {
-                    item->setFlags( item->flags() & ~Qt::ItemIsEnabled );
-                    item->setToolTip( 0, QStringLiteral( "Already installed" ) );
-                }
-            }
-            tree->resizeColumnToContents( 0 );
-            tree->resizeColumnToContents( 1 );
+			tree->clear();
+			list = recommendations( ss( language->currentData().toString() ) );
+			for ( const auto& r : list )
+			{
+				const bool done = installed( r );
+				auto*      item = new QTreeWidgetItem( tree );
+				item->setText( 0, done ? r.name + QStringLiteral( "  ✓" ) : r.name );
+				item->setText( 1, r.category );
+				item->setText( 2, r.description );
+				item->setToolTip( 2, r.description + "\n\n" + r.homepage );
+				item->setCheckState( 0, done ? Qt::Unchecked : Qt::Checked );
+				if ( done )
+				{
+					item->setFlags( item->flags() & ~Qt::ItemIsEnabled );
+					item->setToolTip( 0, QStringLiteral( "Already installed" ) );
+				}
+			}
+			tree->resizeColumnToContents( 0 );
+			tree->resizeColumnToContents( 1 );
 		};
 		// The preferred language first, unless its dictionaries are all installed: then the next one that has some left.
 		const int preferred = std::max( 0, language->findData( qs( settings().config().language ) ) );

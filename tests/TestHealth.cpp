@@ -225,29 +225,31 @@ namespace
 		// New configurations start friendly.
 		test::expect( config.popup.design == lg::config::PopupDesign::Friendly );
 
-		auto& popup             = config.popup;
-		popup.design            = lg::config::PopupDesign::Compact;
-		popup.scheme            = lg::config::ColorScheme::Sakura;
-		popup.placement         = lg::config::PopupPlacement::AboveText;
-		popup.background_color  = "#101820";
-		popup.accent_color      = "#ff8800";
-		popup.colors            = { { .name = "muted", .value = "#777777" } };
-		popup.corner_radius     = 4;
-		popup.border_width      = 0;
-		popup.padding           = 20;
-		popup.opacity           = 85;
-		popup.headword_size     = 40;
-		popup.furigana_size     = 20;
-		popup.show_reading      = false;
-		popup.show_inflection   = false;
-		popup.show_dictionary   = false;
-		popup.show_buttons      = false;
-		popup.show_kanji        = false;
-		popup.max_senses        = 3;
-		popup.highlight_style   = lg::config::HighlightStyle::WavyUnderline;
-		popup.highlight_radius  = 6;
-		popup.highlight_padding = 5;
-		const auto parsed       = lg::config::Config::parse( config.toJson() );
+		auto& popup               = config.popup;
+		popup.design              = lg::config::PopupDesign::Compact;
+		popup.scheme              = lg::config::ColorScheme::Sakura;
+		popup.placement           = lg::config::PopupPlacement::AboveText;
+		popup.background_color    = "#101820";
+		popup.accent_color        = "#ff8800";
+		popup.colors              = { { .name = "muted", .value = "#777777" } };
+		popup.corner_radius       = 4;
+		popup.border_width        = 0;
+		popup.padding             = 20;
+		popup.opacity             = 85;
+		popup.headword_size       = 40;
+		popup.furigana_size       = 20;
+		popup.show_reading        = false;
+		popup.show_inflection     = false;
+		popup.show_dictionary     = false;
+		popup.show_buttons        = false;
+		popup.show_kanji          = false;
+		popup.max_senses          = 3;
+		popup.highlight_style     = lg::config::HighlightStyle::WavyUnderline;
+		popup.highlight_radius    = 6;
+		popup.highlight_padding_x = 5;
+		popup.highlight_padding_y = -3;
+		popup.button_size         = 28;
+		const auto parsed         = lg::config::Config::parse( config.toJson() );
 		if ( !test::expect( parsed.has_value() ) )
 		{
 			return;
@@ -270,7 +272,12 @@ namespace
 		test::expectEqual( p.max_senses, 3 );
 		test::expect( p.highlight_style == lg::config::HighlightStyle::WavyUnderline );
 		test::expectEqual( p.highlight_radius, 6 );
-		test::expectEqual( p.highlight_padding, 5 );
+		test::expectEqual( p.highlight_padding_x, 5 );
+		test::expectEqual( p.highlight_padding_y, -3 );
+		test::expectEqual( p.button_size, 28 );
+		// The single room of older settings files becomes both.
+		const auto older = lg::config::Config::parse( R"({"popup":{"highlight_padding":4}})" );
+		test::expect( older && older->popup.highlight_padding_x == 4 && older->popup.highlight_padding_y == 4 );
 
 		// Out of range values are clamped; malformed colours and unknown names fall back to the defaults.
 		const auto odd = lg::config::Config::parse(

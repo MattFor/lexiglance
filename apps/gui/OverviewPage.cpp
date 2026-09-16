@@ -4,7 +4,9 @@
 #include "DesktopEntry.h"
 #include "Settings.h"
 #include "UpdateGroup.h"
+#include "VcRedist.h"
 
+#include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Process.h>
 #include <lexiglance/core/Version.h>
@@ -19,6 +21,7 @@
 #include <QHBoxLayout>
 #include <QLocale>
 #include <QMessageBox>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -171,6 +174,7 @@ namespace lexiglance::gui
 			layout->setSpacing( 2 );
 			value->setObjectName( QStringLiteral( "tileValue" ) );
 			value->setWordWrap( true );
+			value->setTextFormat( Qt::RichText );
 			auto* label = new QLabel( caption );
 			label->setObjectName( QStringLiteral( "tileCaption" ) );
 			layout->addWidget( value );
@@ -224,6 +228,10 @@ namespace lexiglance::gui
 			{
 				return connected ? QStringLiteral( "Restart" ) : QStringLiteral( "Start Lexiglance" );
 			}
+			if ( action == QStringLiteral( "install-vcredist" ) )
+			{
+				return QStringLiteral( "Download and install" );
+			}
 			if ( action == QStringLiteral( "resume" ) )
 			{
 				return QStringLiteral( "Resume scanning" );
@@ -249,6 +257,20 @@ namespace lexiglance::gui
 				return QStringLiteral( "Open Anki" );
 			}
 			return QStringLiteral( "Fix" );
+		}
+
+		// Whether Fix issues can carry the action out on its own. Opening a page is a hand-off to the user, who still
+		// has to choose a dictionary or a deck there, so it is not one of these.
+		bool automatic( const QString& action )
+		{
+			return !action.isEmpty() && !action.startsWith( QStringLiteral( "open-" ) );
+		}
+
+		// The capture summary for its tile: what reads the screen on one line, what it is made of ("(PaddleOCR:
+		// Japanese)") under it, so a long list does not stretch the tile.
+		QString captureLines( const QString& summary )
+		{
+			return summary.toHtmlEscaped().replace( QStringLiteral( " (" ), QStringLiteral( "<br>(" ) );
 		}
 
 		// The daemon's own last words: its latest warnings and errors.
@@ -290,11 +312,16 @@ namespace lexiglance::gui
 		speed_value_( new QLabel( QStringLiteral( "–" ) ) ),
 		capture_value_( new QLabel( QStringLiteral( "–" ) ) ),
 		check_( new QPushButton( QStringLiteral( "Check health" ) ) ),
+		fix_all_( new QPushButton( QStringLiteral( "Fix issues" ) ) ),
 		health_summary_( new QLabel() ),
+		health_progress_( new QProgressBar() ),
 		show_passed_( new QCheckBox() ),
 		health_rows_( new QVBoxLayout() ),
 		trigger_state_( new QLabel() ),
 		last_capture_( new QLabel() ),
+		health_box_( new QGroupBox( QStringLiteral( "Health" ) ) ),
+		scroll_( new QScrollArea() ),
+		downloader_( new Downloader( this ) ),
 		restart_timer_( new QTimer( this ) ),
 		health_timer_( new QTimer( this ) )
 	{
@@ -303,10 +330,14 @@ namespace lexiglance::gui
 		layout->setContentsMargins( 28, 24, 28, 24 );
 		layout->setSpacing( 14 );
 
-		layout->addWidget( heading( QStringLiteral( "Lexiglance" ) ) );
+		auto* title = new QHBoxLayout();
+		title->setSpacing( 12 );
+		title->addWidget( heading( QStringLiteral( "Lexiglance" ) ), 0, Qt::AlignBaseline );
 		auto* tagline = new QLabel( QStringLiteral( "System-wide pop-up dictionary, version %1" ).arg( qs( version ) ) );
 		tagline->setEnabled( false );
-		layout->addWidget( tagline );
+		title->addWidget( tagline, 0, Qt::AlignBaseline );
+		title->addStretch( 1 );
+		layout->addLayout( title );
 
 		auto* status_box    = new QGroupBox( QStringLiteral( "Status" ) );
 		auto* status_layout = new QVBoxLayout( status_box );
@@ -337,14 +368,18 @@ namespace lexiglance::gui
 		layout->addWidget( status_box );
 
 		// Health: every part a lookup depends on, checked, with what fixes what is wrong.
-		auto* health_box    = new QGroupBox( QStringLiteral( "Health" ) );
-		auto* health_layout = new QVBoxLayout( health_box );
+		auto* health_layout = new QVBoxLayout( health_box_ );
 		auto* check_row     = new QHBoxLayout();
 		check_->setProperty( "primary", true );
 		check_row->addWidget( check_ );
+		fix_all_->setToolTip( QStringLiteral( "Carries out every fix below that needs no decision: resuming scanning, turning a setting on, installing what is missing, restarting Lexiglance." ) );
+		fix_all_->hide();
+		check_row->addWidget( fix_all_ );
 		health_summary_->setWordWrap( true );
 		check_row->addWidget( health_summary_, 1 );
 		health_layout->addLayout( check_row );
+		health_progress_->hide();
+		health_layout->addWidget( health_progress_ );
 		trigger_state_->setWordWrap( true );
 		health_layout->addWidget( trigger_state_ );
 		last_capture_->setWordWrap( true );
@@ -355,7 +390,7 @@ namespace lexiglance::gui
 		health_layout->addLayout( health_rows_ );
 		show_passed_->hide();
 		health_layout->addWidget( show_passed_ );
-		layout->addWidget( health_box );
+		layout->addWidget( health_box_ );
 
 		auto* test_box    = new QGroupBox( QStringLiteral( "Try it" ) );
 		auto* test_layout = new QVBoxLayout( test_box );
@@ -432,18 +467,30 @@ namespace lexiglance::gui
 		} );
 		layout->addStretch( 1 );
 
-		auto* scroll = new QScrollArea();
-		scroll->setWidget( content );
-		scroll->setWidgetResizable( true );
-		scroll->setFrameShape( QFrame::NoFrame );
-		scroll->setHorizontalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
+		scroll_->setWidget( content );
+		scroll_->setWidgetResizable( true );
+		scroll_->setFrameShape( QFrame::NoFrame );
+		scroll_->setHorizontalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
 		auto* outer = new QVBoxLayout( this );
 		outer->setContentsMargins( 0, 0, 0, 0 );
-		outer->addWidget( scroll );
+		outer->addWidget( scroll_ );
+
+		// The capture tile points at the health report; following that brings it into view rather than opening a page.
+		capture_value_->setTextInteractionFlags( Qt::LinksAccessibleByMouse | Qt::TextSelectableByMouse );
+		connect( capture_value_, &QLabel::linkActivated, this, [this]( const QString& ) {
+			scroll_->ensureWidgetVisible( health_box_ );
+			check_->setFocus( Qt::MouseFocusReason );
+			// An empty list under it would make the click look like it did nothing.
+			if ( checks_.empty() )
+			{
+				checkHealth( true );
+			}
+		} );
 
 		connect( pause_, &QPushButton::clicked, this, [this] { client().call( "scan.pause", paused_ ? "{\"paused\":false}" : "{\"paused\":true}" ); } );
 		connect( restart_, &QPushButton::clicked, this, [this] { restart(); } );
 		connect( check_, &QPushButton::clicked, this, [this] { checkHealth( true ); } );
+		connect( fix_all_, &QPushButton::clicked, this, [this] { fixAll(); } );
 		connect( show_passed_, &QCheckBox::toggled, this, [this] { showChecks( checks_ ); } );
 		connect( autostart_, &QCheckBox::toggled, this, [this]( bool enabled ) {
 			setAutostart( enabled );
@@ -509,6 +556,7 @@ namespace lexiglance::gui
 			else if ( name == "capture.result" )
 			{
 				const bool found = params["found"].asBool();
+				saw_lookup_      = true;
 				last_capture_->setText( QStringLiteral( "Last lookup: <span style=\"color:%1\">%2</span> <span style=\"color:gray\">(%3)</span>" )
 				                                .arg( found ? QStringLiteral( "#3fa45b" ) : QStringLiteral( "#d19a1f" ), qs( params["summary"].asString() ).toHtmlEscaped(), qs( params["where"].asString() ).toHtmlEscaped() ) );
 			}
@@ -528,7 +576,7 @@ namespace lexiglance::gui
 		health_timer_->setSingleShot( true );
 		health_timer_->setInterval( 1200 );
 		connect( health_timer_, &QTimer::timeout, this, [this] {
-			if ( checking_ || restarting_ )
+			if ( checking_ || restarting_ || fixing_ )
 			{
 				health_timer_->start();
 				return;
@@ -619,7 +667,10 @@ namespace lexiglance::gui
 		dictionaries_value_->setText( QString::number( status["dictionaries"].asInt() ) );
 		lookups_value_->setText( QLocale().toString( static_cast<qlonglong>( lookups ) ) );
 		speed_value_->setText( lookups > 0 ? QStringLiteral( "%1 µs" ).arg( status["average_lookup_us"].asDouble(), 0, 'f', 1 ) : QStringLiteral( "–" ) );
-		capture_value_->setText( qs( status["capture"].asString( "unavailable" ) ) );
+		// The reason is in the health report; from here it is a line pointing there rather than the whole explanation.
+		const QString capture = captureLines( qs( status["capture"].asString( "unavailable" ) ) );
+		const bool    ailing  = !status["capture_problem"].asString().empty();
+		capture_value_->setText( ailing ? capture + QStringLiteral( "<br><a href=\"health\">see Health</a>" ) : capture );
 		details_->setText( QStringLiteral( "Daemon %1 (pid %2) · %3 desktop · scale %4×" )
 		                           .arg( qs( status["version"].asString() ) )
 		                           .arg( status["pid"].asInt() )
@@ -629,7 +680,8 @@ namespace lexiglance::gui
 
 	void OverviewPage::checkHealth( bool interactive )
 	{
-		if ( checking_ )
+		// While a fix is being carried out the summary says what is happening; checking again would talk over it.
+		if ( checking_ || fixing_ )
 		{
 			return;
 		}
@@ -713,11 +765,23 @@ namespace lexiglance::gui
 		int errors   = 0;
 		int warnings = 0;
 		int passed   = 0;
+		int fixable  = 0;
 		for ( const auto& check : checks )
 		{
 			errors += check.status == health::Severity::Error ? 1 : 0;
 			warnings += check.status == health::Severity::Warning ? 1 : 0;
 			passed += check.status == health::Severity::Ok ? 1 : 0;
+			fixable += check.status != health::Severity::Ok && automatic( qs( check.fix ) ) ? 1 : 0;
+			// The last lookup has a line of its own above, kept current as lookups happen, so it gets no row as well.
+			// Until one happens while this window is open, that line is what the daemon remembers.
+			if ( check.id == "last-capture" )
+			{
+				if ( !saw_lookup_ )
+				{
+					last_capture_->setText( QStringLiteral( "Last lookup: %1" ).arg( qs( check.detail ).toHtmlEscaped() ) );
+				}
+				continue;
+			}
 			if ( check.status == health::Severity::Ok && !show_passed_->isChecked() )
 			{
 				continue;
@@ -733,9 +797,11 @@ namespace lexiglance::gui
 			icon->setFixedWidth( 18 );
 			icon->setAlignment( Qt::AlignTop | Qt::AlignHCenter );
 			layout->addWidget( icon, 0, Qt::AlignTop );
-			auto* text = new QLabel( QStringLiteral( "<b>%1</b><br>%2" ).arg( qs( check.title ).toHtmlEscaped(), qs( check.detail ).toHtmlEscaped().replace( QLatin1Char( '\n' ), QStringLiteral( "<br>" ) ) ) );
+			auto* text = new QLabel( QStringLiteral( "<b>%1</b><br>%2" ).arg( qs( check.title ).toHtmlEscaped(), withLinks( qs( check.detail ).toHtmlEscaped() ).replace( QLatin1Char( '\n' ), QStringLiteral( "<br>" ) ) ) );
 			text->setWordWrap( true );
-			text->setTextInteractionFlags( Qt::TextSelectableByMouse );
+			// Details name where to download what is missing; TextBrowserInteraction keeps the text selectable too.
+			text->setTextInteractionFlags( Qt::TextBrowserInteraction );
+			text->setOpenExternalLinks( true );
 			layout->addWidget( text, 1 );
 			if ( !check.fix.empty() )
 			{
@@ -765,12 +831,16 @@ namespace lexiglance::gui
 			summary += QStringLiteral( " <span style=\"color:gray\">· %1 checks passed · %2</span>" ).arg( passed ).arg( QDateTime::currentDateTime().toString( QStringLiteral( "HH:mm:ss" ) ) );
 		}
 		health_summary_->setText( summary );
+		fix_all_->setVisible( fixable > 0 );
+		fix_all_->setEnabled( !fixing_ );
+		fix_all_->setText( fixable == 1 ? QStringLiteral( "Fix it" ) : QStringLiteral( "Fix %1 issues" ).arg( fixable ) );
 		show_passed_->setVisible( passed > 0 );
 		show_passed_->setText( QStringLiteral( "Show the %1 passed checks too" ).arg( passed ) );
 	}
 
 	void OverviewPage::fix( const QString& action )
 	{
+		log::info( "health: fixing \"{}\"", ss( action ) );
 		const auto recheck = [this] { QTimer::singleShot( 2000, this, [this] { checkHealth( true ); } ); };
 		if ( action == QStringLiteral( "restart" ) )
 		{
@@ -792,10 +862,123 @@ namespace lexiglance::gui
 			settings().commit();
 			recheck();
 		}
+		else if ( action == QStringLiteral( "install-vcredist" ) )
+		{
+			installRuntime();
+		}
 		else if ( action.startsWith( QStringLiteral( "open-" ) ) )
 		{
 			showPage( action.mid( 5 ) );
 		}
+	}
+
+	void OverviewPage::fixAll()
+	{
+		if ( fixing_ || restarting_ )
+		{
+			return;
+		}
+		QStringList actions;
+		for ( const auto& check : checks_ )
+		{
+			const QString action = qs( check.fix );
+			if ( check.status != health::Severity::Ok && automatic( action ) && !actions.contains( action ) )
+			{
+				actions.append( action );
+			}
+		}
+		if ( actions.isEmpty() )
+		{
+			return;
+		}
+		fixing_ = true;
+		fix_all_->setEnabled( false );
+		log::info( "health: fixing {} ({})", actions.size() == 1 ? "one problem" : ss( QStringLiteral( "%1 problems" ).arg( actions.size() ) ), ss( actions.join( QStringLiteral( ", " ) ) ) );
+
+		// Settings first: they are what a daemon started further down reads.
+		bool changed = false;
+		if ( actions.contains( QStringLiteral( "enable-ocr" ) ) )
+		{
+			settings().config().scan.ocr = config::OcrMode::Fallback;
+			changed                      = true;
+		}
+		if ( actions.contains( QStringLiteral( "enable-accessibility" ) ) )
+		{
+			settings().config().scan.accessibility = true;
+			changed                                = true;
+		}
+		if ( changed )
+		{
+			settings().commit();
+		}
+		if ( actions.contains( QStringLiteral( "resume" ) ) )
+		{
+			client().call( "scan.pause", R"({"paused":false})" );
+		}
+		// Installing the runtime ends in a restart of its own, which is what anything else that asked for one wanted.
+		if ( actions.contains( QStringLiteral( "install-vcredist" ) ) )
+		{
+			installRuntime();
+			return;
+		}
+		fixing_ = false;
+		if ( actions.contains( QStringLiteral( "restart" ) ) )
+		{
+			restart();
+			return;
+		}
+		// The daemon needs a moment to act on what changed before checking again says anything.
+		QTimer::singleShot( 2000, this, [this] { checkHealth( true ); } );
+	}
+
+	void OverviewPage::installRuntime()
+	{
+		// Installed by hand in the meantime: then only the daemon has yet to be started on it.
+		if ( vcredist::missing().isEmpty() )
+		{
+			fixing_ = false;
+			restart();
+			return;
+		}
+		const auto failed = [this]( const QString& reason ) {
+			health_progress_->hide();
+			check_->setEnabled( true );
+			fixing_ = false;
+			fix_all_->setEnabled( true );
+			health_summary_->setText( QStringLiteral( "<span style=\"color:#e0605a\">Not installed: %1</span>" ).arg( reason.toHtmlEscaped() ) );
+		};
+		fixing_ = true;
+		fix_all_->setEnabled( false );
+		check_->setEnabled( false );
+		health_summary_->setText( QStringLiteral( "Downloading the Microsoft Visual C++ Redistributable..." ) );
+		health_progress_->show();
+		const QString installer = vcredist::installerPath();
+		downloader_->download(
+				vcredist::url(),
+				installer,
+				[this]( qint64 received, qint64 total ) { showProgress( health_progress_, received, total ); },
+				[this, installer, failed]( const QString& error ) {
+					health_progress_->hide();
+					if ( !error.isEmpty() )
+					{
+						failed( QStringLiteral( "the download failed (%1)" ).arg( error ) );
+						return;
+					}
+					health_summary_->setText( QStringLiteral( "Installing the Microsoft Visual C++ Redistributable; Windows asks for permission." ) );
+					vcredist::install( this, installer, [this, failed]( const QString& problem ) {
+						if ( !problem.isEmpty() )
+						{
+							failed( problem );
+							return;
+						}
+						// Windows lets a program find the new libraries only as it starts, so the daemon starts again.
+						health_summary_->setText( QStringLiteral( "The Visual C++ Redistributable is installed; starting Lexiglance again..." ) );
+						check_->setEnabled( true );
+						fixing_ = false;
+						restart();
+					} );
+				}
+		);
 	}
 
 	void OverviewPage::restart()
@@ -820,6 +1003,14 @@ namespace lexiglance::gui
 
 	void OverviewPage::finishRestart( bool ok, const QString& message )
 	{
+		if ( ok )
+		{
+			log::info( "{}", ss( message ) );
+		}
+		else
+		{
+			log::warn( "restart failed: {}", ss( message ) );
+		}
 		restarting_ = false;
 		restart_timer_->stop();
 		restart_->setEnabled( true );

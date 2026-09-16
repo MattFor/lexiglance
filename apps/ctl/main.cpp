@@ -58,6 +58,22 @@ namespace
 		std::println( "  status | pause | resume | reload | hide           control the running daemon" );
 		std::println( "  show <text>                                       show a popup at the pointer" );
 		std::println( "  health                                            check that everything works (exit 1 on problems)" );
+		std::println( "  stats [reset]                                     what has been looked up so far, or forget it" );
+	}
+
+	// A detail of several lines, with the later ones under the first instead of against the margin.
+	std::string indented( std::string_view detail )
+	{
+		std::string out;
+		for ( const char c : detail )
+		{
+			out.push_back( c );
+			if ( c == '\n' )
+			{
+				out.append( 9, ' ' );
+			}
+		}
+		return out;
 	}
 
 	// Prints the daemon's self-checks, one per line; exits with 1 when any failed.
@@ -103,7 +119,7 @@ namespace
 				case lg::health::Severity::Ok:
 					break;
 			}
-			std::println( "{}{:<8}{} {}: {}", colour ? paint : "", mark, colour ? "\x1b[0m" : "", check.title, check.detail );
+			std::println( "{}{:<8}{} {}: {}", colour ? paint : "", mark, colour ? "\x1b[0m" : "", check.title, indented( check.detail ) );
 			if ( !check.fix.empty() )
 			{
 				std::println( "         fix: {}", check.fix );
@@ -448,6 +464,14 @@ namespace
 		if ( command == "health" )
 		{
 			return healthCommand();
+		}
+		if ( command == "stats" )
+		{
+			if ( args.empty() )
+			{
+				return call( "stats" );
+			}
+			return args.front() == "reset" ? call( "stats.reset" ) : 2;
 		}
 		if ( command == "pause" || command == "resume" )
 		{

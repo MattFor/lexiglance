@@ -46,6 +46,10 @@ namespace lexiglance::gui
 		void fetchAll( const QString& what, std::vector<std::pair<QUrl, QString>> files, std::function<QString()> finish );
 		void downloadTesseract();
 		void downloadPaddle();
+		// Windows: the redistributable on its own, for a machine whose models are downloaded but cannot run.
+		void downloadRedist();
+		// Windows: runs the downloaded redistributable, then starts the daemon again on it.
+		void installRedist();
 
 		Context         context_;
 		Downloader*     downloader_;
@@ -56,10 +60,13 @@ namespace lexiglance::gui
 		QPlainTextEdit* windows_;
 		QLabel*         status_;
 		QPushButton*    download_;
+		QPushButton*    runtime_;
 		QProgressBar*   progress_;
 		bool            loading_ = false;
 		// Codes of the languages the daemon reads (turned on, with dictionaries).
 		std::vector<std::string> in_use_;
+		// Where the Visual C++ Redistributable is being downloaded to, while it is; empty otherwise.
+		QString redist_;
 	};
 
 } // namespace lexiglance::gui

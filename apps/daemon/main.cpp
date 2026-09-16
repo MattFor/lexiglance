@@ -3,6 +3,7 @@
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Process.h>
+#include <lexiglance/core/Thread.h>
 #include <lexiglance/core/Version.h>
 #include <lexiglance/ipc/Socket.h>
 
@@ -100,17 +101,6 @@ namespace
 		return true;
 	}
 
-	void rotateLog( const std::filesystem::path& file )
-	{
-		std::error_code ec;
-		if ( std::filesystem::file_size( file, ec ) > 2U << 20U )
-		{
-			auto old = file;
-			old += ".old";
-			std::filesystem::rename( file, old, ec );
-		}
-	}
-
 #ifdef _WIN32
 	// The daemon asked to quit when its console is closed or interrupted (logging off ends the desktop backend itself).
 	std::atomic<lg::daemon::Daemon*> running{ nullptr };
@@ -191,9 +181,9 @@ namespace
 			config_problem = config.error().message;
 			config         = lg::config::Config{};
 		}
+		lg::thread::setName( "daemon" );
 		lg::log::setLevel( verbose ? lg::log::Level::Debug : lg::log::parseLevel( config->log_level ).value_or( lg::log::Level::Info ) );
 		const auto log_file = lg::paths::stateDir() / "daemon.log";
-		lg::log::setFile( log_file );
 
 		// One daemon per user, decided before anything touches the desktop.
 		( void )lg::paths::ensureDirectory( lg::paths::runtimeDir(), true );
@@ -211,10 +201,10 @@ namespace
 			lg::log::error( "Lexiglance is already running (pid {}); `lexiglanced --replace` restarts it", lock.holder() );
 			return 1;
 		}
-		// Only the daemon that runs rotates the log, closed meanwhile (Windows cannot rename an open file).
-		lg::log::setFile( {} );
-		rotateLog( log_file );
+		// Only the daemon that runs writes the log (and rotates it when it has grown too large).
 		lg::log::setFile( log_file );
+		lg::log::info( "---- lexiglanced {} ({} build{}) ----", lg::version, lg::channel, lg::commit.empty() ? std::string() : std::format( " {}", lg::commit ) );
+		lg::log::info( "program {}, settings {}, dictionaries {}", lg::process::executable().string(), lg::paths::configFile().string(), lg::paths::dictionariesDir().string() );
 		if ( !config_problem.empty() )
 		{
 			lg::log::error( "{} (using defaults)", config_problem );

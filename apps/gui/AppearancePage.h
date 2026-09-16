@@ -80,6 +80,7 @@ namespace lexiglance::gui
 		QCheckBox*                   pitch_;
 		QCheckBox*                   dictionary_;
 		QCheckBox*                   buttons_;
+		QSpinBox*                    button_size_;
 		QCheckBox*                   kanji_;
 		QSpinBox*                    max_senses_;
 		QSpinBox*                    results_;
@@ -90,7 +91,8 @@ namespace lexiglance::gui
 		QCheckBox*                   highlight_auto_;
 		QSpinBox*                    highlight_thickness_;
 		QSpinBox*                    highlight_radius_;
-		QSpinBox*                    highlight_padding_;
+		QSpinBox*                    highlight_padding_x_;
+		QSpinBox*                    highlight_padding_y_;
 		QComboBox*                   compositor_;
 		QLineEdit*                   preview_text_;
 		QLabel*                      highlight_preview_;

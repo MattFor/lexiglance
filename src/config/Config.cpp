@@ -240,7 +240,7 @@ namespace lexiglance::config
 			readString( object, key, value );
 			const bool hex = ( value.size() == 7 || value.size() == 9 ) && value.front() == '#' &&
 			                 std::ranges::all_of( std::string_view( value ).substr( 1 ), []( char c ) { return ( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' ) || ( c >= 'A' && c <= 'F' ); } );
-			target = hex ? std::move( value ) : std::string();
+			target         = hex ? std::move( value ) : std::string();
 		}
 
 		std::string_view themeName( Theme theme )
@@ -281,6 +281,7 @@ namespace lexiglance::config
 		readStrings( root, "disabled_languages", config.disabled_languages );
 		readString( root, "log_level", config.log_level );
 		readBool( root, "paused", config.paused );
+		readBool( root, "statistics", config.statistics );
 
 		const json::Value& scan = root["scan"];
 		readStrings( scan, "trigger", config.scan.trigger );
@@ -304,6 +305,7 @@ namespace lexiglance::config
 		readBool( scan, "japanese_only", config.scan.known_languages_only ); // its earlier name
 		readBool( scan, "known_languages_only", config.scan.known_languages_only );
 		readBool( scan, "wheel_length", config.scan.wheel_length );
+		readBool( scan, "wheel_lock", config.scan.wheel_lock );
 		const auto selection  = scan["selection"].asString();
 		config.scan.selection = parseSelection( selection );
 
@@ -330,7 +332,11 @@ namespace lexiglance::config
 		const auto theme           = popup["theme"].asString();
 		config.popup.theme         = parseTheme( theme );
 		readInt( popup, "highlight_radius", config.popup.highlight_radius, 0, 32 );
-		readInt( popup, "highlight_padding", config.popup.highlight_padding, 0, 16 );
+		// One room for both directions, from before they could be told apart; each may still be given its own.
+		readInt( popup, "highlight_padding", config.popup.highlight_padding_x, -16, 16 );
+		config.popup.highlight_padding_y = config.popup.highlight_padding_x;
+		readInt( popup, "highlight_padding_x", config.popup.highlight_padding_x, -16, 16 );
+		readInt( popup, "highlight_padding_y", config.popup.highlight_padding_y, -16, 16 );
 		config.popup.design    = design_names.parse( popup["design"].asString(), PopupDesign::Friendly );
 		config.popup.scheme    = scheme_names.parse( popup["scheme"].asString(), ColorScheme::Default );
 		config.popup.placement = placement_names.parse( popup["placement"].asString(), PopupPlacement::BelowText );
@@ -350,6 +356,7 @@ namespace lexiglance::config
 		readBool( popup, "show_buttons", config.popup.show_buttons );
 		readBool( popup, "show_kanji", config.popup.show_kanji );
 		readInt( popup, "max_senses", config.popup.max_senses, 0, 50 );
+		readInt( popup, "button_size", config.popup.button_size, 0, 96 );
 		for ( const json::Member& color : popup["colors"].members() )
 		{
 			std::string value;
@@ -457,6 +464,7 @@ namespace lexiglance::config
 		writeStrings( out, "disabled_languages", disabled_languages );
 		out.field( "log_level", log_level );
 		out.field( "paused", paused );
+		out.field( "statistics", statistics );
 
 		out.key( "scan" ).beginObject();
 		writeStrings( out, "trigger", scan.trigger );
@@ -475,6 +483,7 @@ namespace lexiglance::config
 		out.field( "ocr_engine", engineName( scan.ocr_engine ) );
 		out.field( "known_languages_only", scan.known_languages_only );
 		out.field( "wheel_length", scan.wheel_length );
+		out.field( "wheel_lock", scan.wheel_lock );
 		writeStrings( out, "ocr_windows", scan.ocr_windows );
 		out.endObject();
 
@@ -500,7 +509,8 @@ namespace lexiglance::config
 		out.field( "highlight_auto", popup.highlight_auto );
 		out.field( "select_button", popup.select_button == MouseButton::Middle ? "middle" : "right" );
 		out.field( "highlight_radius", popup.highlight_radius );
-		out.field( "highlight_padding", popup.highlight_padding );
+		out.field( "highlight_padding_x", popup.highlight_padding_x );
+		out.field( "highlight_padding_y", popup.highlight_padding_y );
 		out.field( "design", design_names.name( popup.design ) );
 		out.field( "scheme", scheme_names.name( popup.scheme ) );
 		out.field( "placement", placement_names.name( popup.placement ) );
@@ -520,6 +530,7 @@ namespace lexiglance::config
 		out.field( "show_buttons", popup.show_buttons );
 		out.field( "show_kanji", popup.show_kanji );
 		out.field( "max_senses", popup.max_senses );
+		out.field( "button_size", popup.button_size );
 		out.key( "colors" ).beginObject();
 		for ( const auto& color : popup.colors )
 		{

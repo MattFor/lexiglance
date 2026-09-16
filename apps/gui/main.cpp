@@ -1,18 +1,25 @@
 #include "DesktopEntry.h"
 #include "MainWindow.h"
 
+#include <lexiglance/core/Log.h>
+#include <lexiglance/core/Paths.h>
+#include <lexiglance/core/Process.h>
+#include <lexiglance/core/Thread.h>
 #include <lexiglance/core/Version.h>
 
 #include <QApplication>
 #include <QLoggingCategory>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QSysInfo>
 #include <QThread>
 #include <QTimer>
 
 #include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <print>
+#include <string>
 
 #ifdef _WIN32
 	#ifndef NOMINMAX
@@ -34,6 +41,55 @@ namespace
 #else
 		return QString::number( ::getuid() );
 #endif
+	}
+
+	// Qt's own warnings go into the log too, so a window that misbehaves leaves a trace behind.
+	void logQtMessage( QtMsgType type, const QMessageLogContext& context, const QString& message )
+	{
+		const std::string text = context.category != nullptr && std::string_view( context.category ) != "default" ? std::format( "qt {}: {}", context.category, message.toStdString() ) : std::format( "qt: {}", message.toStdString() );
+		switch ( type )
+		{
+			case QtDebugMsg:
+				lexiglance::log::debug( "{}", text );
+				return;
+			case QtInfoMsg:
+				lexiglance::log::info( "{}", text );
+				return;
+			case QtWarningMsg:
+				lexiglance::log::warn( "{}", text );
+				return;
+			case QtCriticalMsg:
+			case QtFatalMsg:
+				lexiglance::log::error( "{}", text );
+				return;
+		}
+	}
+
+	// This window keeps a log of its own beside the daemon's: what it did, what it downloaded and what went wrong, so a
+	// problem here can be looked into afterwards as well.
+	void startLogging( const QStringList& arguments )
+	{
+		namespace lg = lexiglance;
+		lg::thread::setName( "settings" );
+		lg::log::setLevel( arguments.contains( QStringLiteral( "--verbose" ) ) || arguments.contains( QStringLiteral( "-v" ) ) ? lg::log::Level::Debug : lg::log::Level::Info );
+		// Earlier builds called it settings.log; keep writing into the same file under the new name.
+		const auto      log_file = lg::paths::stateDir() / "application.log";
+		const auto      legacy   = lg::paths::stateDir() / "settings.log";
+		std::error_code ec;
+		if ( !std::filesystem::exists( log_file, ec ) && std::filesystem::exists( legacy, ec ) )
+		{
+			std::filesystem::rename( legacy, log_file, ec );
+		}
+		lg::log::setFile( log_file );
+		lg::log::info( "---- lexiglance {} ({} build{}) ----", lg::version, lg::channel, lg::commit.empty() ? std::string() : std::format( " {}", lg::commit ) );
+		lg::log::info(
+				"program {}, {} ({}), Qt {}",
+				lg::process::executable().string(),
+				QSysInfo::prettyProductName().toStdString(),
+				QSysInfo::currentCpuArchitecture().toStdString(),
+				qVersion()
+		);
+		qInstallMessageHandler( &logQtMessage );
 	}
 
 	int run( int argc, char** argv )
@@ -61,6 +117,7 @@ namespace
 		QApplication::setQuitOnLastWindowClosed( false );
 
 		const QStringList arguments = QApplication::arguments();
+		startLogging( arguments );
 
 		// For documentation and checks: draws a page of the window into an image and exits (works offscreen, with
 		// QT_QPA_PLATFORM=offscreen). --screenshot <page> <file.png> [milliseconds to wait for the daemon's data]
@@ -111,6 +168,7 @@ namespace
 			if ( !updated || waited >= 40 )
 			{
 				const QString request = query.isEmpty() ? QStringLiteral( "show %1\n" ).arg( page ) : QStringLiteral( "find %1\n" ).arg( query );
+				lexiglance::log::info( "another settings window is open: asked it to {}", request.trimmed().toStdString() );
 				existing.write( request.toUtf8() );
 				existing.waitForBytesWritten( 250 );
 				return 0;

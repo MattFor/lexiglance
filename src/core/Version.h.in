@@ -6,7 +6,11 @@
 namespace lexiglance
 {
 
-	inline constexpr std::string_view version          = "@PROJECT_VERSION@";
+	inline constexpr std::string_view version = "@PROJECT_VERSION@";
+	// "stable" for a build made from this version's release tag, "dev" for any other (cmake/BuildChannel.cmake), with
+	// the commit it was configured at when git knew it. About shows both, so a bug report says which build it is.
+	inline constexpr std::string_view channel          = "@LEXIGLANCE_CHANNEL@";
+	inline constexpr std::string_view commit           = "@LEXIGLANCE_COMMIT@";
 	inline constexpr std::string_view project_url      = "@PROJECT_HOMEPAGE_URL@";
 	inline constexpr std::string_view app_name         = "Lexiglance";
 	inline constexpr std::string_view app_id           = "lexiglance";

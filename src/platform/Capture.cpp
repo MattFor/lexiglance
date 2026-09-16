@@ -1,6 +1,7 @@
 #include "Capture.h"
 
 #include <lexiglance/core/Glob.h>
+#include <lexiglance/ocr/Onnx.h>
 
 #include <algorithm>
 
@@ -20,8 +21,25 @@ namespace lexiglance::platform
 	{
 		std::string out = accessibility_ ? accessibility_->describe() : std::string( "no accessibility" );
 		out.append( " + " );
-		out.append( ocr_ ? ocr_->describe() : ocr_state_ );
+		if ( ocr_ )
+		{
+			out.append( ocr_->describe() );
+		}
+		else if ( mode_ == config::OcrMode::Off )
+		{
+			out.append( "OCR off" );
+		}
+		else
+		{
+			// Why is in problem() and the health report; the settings application points at it from here.
+			out.append( "OCR unavailable" );
+		}
 		return out;
+	}
+
+	std::string ChainCapture::problem() const
+	{
+		return mode_ != config::OcrMode::Off && !ocr_ ? ocr_state_ : std::string();
 	}
 
 	bool ChainCapture::prefersOcr( const WindowInfo& window ) const
@@ -115,8 +133,15 @@ namespace lexiglance::platform
 		}
 		else if ( !ocr_ )
 		{
+			// A Windows without Microsoft's runtime is the one reason the settings application can put right by
+			// itself; everything else is a download to choose on the Scanning page.
+			const bool runtime = ocr_state_.contains( ocr::vc_runtime_absent );
 			out.push_back(
-					{ .id = "ocr", .title = "Text in images, games and videos (OCR)", .status = health::Severity::Error, .detail = ocr_state_, .fix = "open-scanning" }
+					{ .id     = "ocr",
+			          .title  = "Text in images, games and videos (OCR)",
+			          .status = health::Severity::Error,
+			          .detail = ocr_state_,
+			          .fix    = runtime ? "install-vcredist" : "open-scanning" }
 			);
 		}
 		else

@@ -140,6 +140,7 @@ namespace lexiglance::platform
 				net_wm_window_type_popup( XInternAtom( display, "_NET_WM_WINDOW_TYPE_POPUP_MENU", False ) ),
 				net_wm_window_type_tooltip( XInternAtom( display, "_NET_WM_WINDOW_TYPE_TOOLTIP", False ) ),
 				net_wm_name( XInternAtom( display, "_NET_WM_NAME", False ) ),
+				net_active_window( XInternAtom( display, "_NET_ACTIVE_WINDOW", False ) ),
 				utf8_string( XInternAtom( display, "UTF8_STRING", False ) ),
 				selection_property( XInternAtom( display, "LEXIGLANCE_SELECTION", False ) ),
 				xsettings_settings( XInternAtom( display, "_XSETTINGS_SETTINGS", False ) ),
@@ -158,6 +159,7 @@ namespace lexiglance::platform
 			Atom net_wm_window_type_popup;
 			Atom net_wm_window_type_tooltip;
 			Atom net_wm_name;
+			Atom net_active_window;
 			Atom utf8_string;
 			Atom selection_property;
 			Atom xsettings_settings;
@@ -291,7 +293,8 @@ namespace lexiglance::platform
 				XFixesSelectSelectionInput( display_, root_, XA_PRIMARY, XFixesSetSelectionOwnerNotifyMask );
 				// A compositor starting or stopping changes how our windows must be made.
 				XFixesSelectSelectionInput( display_, root_, atoms_->compositor_selection, XFixesSetSelectionOwnerNotifyMask | XFixesSelectionWindowDestroyNotifyMask | XFixesSelectionClientCloseNotifyMask );
-				XSelectInput( display_, root_, StructureNotifyMask );
+				// PropertyChangeMask: the window manager writes _NET_ACTIVE_WINDOW on the root when the focus moves.
+				XSelectInput( display_, root_, StructureNotifyMask | PropertyChangeMask );
 
 				rebuildKeymap();
 				syncKeyboard();
@@ -396,7 +399,7 @@ namespace lexiglance::platform
 					return;
 				}
 				const Rect before = popup_mapped_ ? popup_rect_ : Rect{};
-				watchSource( static_cast<Window>( content.source ) );
+				watchSource( static_cast<Window>( content.source ), true );
 				popup_     = std::move( content );
 				scroll_    = 0;
 				selecting_ = false;
@@ -482,8 +485,8 @@ namespace lexiglance::platform
 				highlight_color_ = color;
 				const auto area  = render::highlightArea( { .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height }, look_ );
 				highlight_rect_  = { .x = area.x, .y = area.y, .width = area.width, .height = area.height };
-				// Underlines take the rows below the text (and its padding).
-				highlight_lines_ = std::max( 0, area.height - rect.height - ( 2 * std::max( 0, look_.padding ) ) );
+				// Underlines take the rows below the text (and the room around it).
+				highlight_lines_ = render::highlightDepth( look_ );
 				const bool fill  = look_.shape == render::HighlightShape::Fill;
 				if ( highlight_auto_ || ( fill && !transparent_ ) )
 				{
@@ -615,7 +618,7 @@ namespace lexiglance::platform
 					bool        found = false;
 					for ( const config::Key key : group )
 					{
-						names.append( names.empty() ? "" : " or " ).append( config::keyName( key ) );
+						names.append( names.empty() ? "" : " or " ).append( config::displayKeyName( key ) );
 						const unsigned bit = 1U << static_cast<unsigned>( key );
 						found              = found || config::isMouseButton( key ) || std::ranges::any_of( key_masks_, [bit]( std::uint32_t mask ) { return ( mask & bit ) != 0; } );
 					}
@@ -1113,10 +1116,27 @@ namespace lexiglance::platform
 				XFlush( display_ );
 			}
 
-			// The popup follows the window its text came from: closing it, minimising it or leaving its workspace closes the
-			// popup too.
-			void watchSource( Window window )
+			// The window the desktop says has the keyboard, or 0 when the window manager does not tell.
+			[[nodiscard]] Window activeWindow() const
 			{
+				int        format = 0;
+				const auto data   = readProperty( display_, root_, atoms_->net_active_window, XA_WINDOW, format );
+				if ( format != 32 || data.size() < sizeof( long ) )
+				{
+					return 0;
+				}
+				long value = 0;
+				std::memcpy( &value, data.data(), sizeof( value ) );
+				return static_cast<Window>( value );
+			}
+
+			// The popup follows the window its text came from: closing it, minimising it, leaving its workspace or
+			// simply going somewhere else (Alt+Tab) closes the popup too. `shown`: a popup is up, so the window with
+			// the keyboard is worth remembering even when the text came from nowhere in particular.
+			void watchSource( Window window, bool shown = false )
+			{
+				// Our own windows never take the focus, so another window in front means the user has moved on.
+				active_ = shown ? activeWindow() : 0;
 				if ( window == source_ )
 				{
 					return;
@@ -1135,6 +1155,7 @@ namespace lexiglance::platform
 			void sourceClosed()
 			{
 				source_ = 0;
+				active_ = 0;
 				if ( events_.source_closed )
 				{
 					events_.source_closed();
@@ -1193,6 +1214,17 @@ namespace lexiglance::platform
 					return;
 				}
 				copy( content_y );
+			}
+
+			// The middle button plays an entry's pronunciation without aiming at the speaker.
+			void playAt( int content_y )
+			{
+				const auto entry = popup_.image ? popup_.image->entryAt( content_y ) : std::nullopt;
+				if ( entry && events_.popup_action )
+				{
+					log::debug( "popup middle click on entry {}", *entry );
+					events_.popup_action( *entry, render::PopupAction::Audio );
+				}
 			}
 
 			// Dragging with the selection button selects popup text; releasing copies it.
@@ -1404,7 +1436,7 @@ namespace lexiglance::platform
 				}
 				const bool big_endian = data[0] != 0;
 				const auto u16        = [&]( std::size_t at ) -> std::uint32_t {
-                    return big_endian ? ( std::uint32_t{ data[at] } << 8U ) | data[at + 1] : ( std::uint32_t{ data[at + 1] } << 8U ) | data[at];
+					return big_endian ? ( std::uint32_t{ data[at] } << 8U ) | data[at + 1] : ( std::uint32_t{ data[at + 1] } << 8U ) | data[at];
 				};
 				const auto u32 = [&]( std::size_t at ) -> std::uint32_t { return big_endian ? ( u16( at ) << 16U ) | u16( at + 2 ) : ( u16( at + 2 ) << 16U ) | u16( at ); };
 				const auto pad = []( std::size_t n ) { return ( n + 3 ) & ~std::size_t{ 3 }; };
@@ -1703,7 +1735,7 @@ namespace lexiglance::platform
 				{
 					if ( ( key_masks_[code] & ( 1U << static_cast<unsigned>( key ) ) ) != 0 )
 					{
-						return std::string( config::keyName( static_cast<config::Key>( key ) ) );
+						return std::string( config::displayKeyName( static_cast<config::Key>( key ) ) );
 					}
 				}
 				return {};
@@ -1919,6 +1951,11 @@ namespace lexiglance::platform
 							{
 								beginSelection( event.xbutton.x, event.xbutton.y );
 							}
+							// The middle button is free unless it is the one that selects text.
+							else if ( event.xbutton.button == Button2 )
+							{
+								playAt( event.xbutton.y + scroll_ );
+							}
 							paintPopup();
 						}
 						break;
@@ -1956,6 +1993,11 @@ namespace lexiglance::platform
 						if ( event.xproperty.window == xsettings_owner_ && event.xproperty.atom == atoms_->xsettings_settings )
 						{
 							loadDesktopSettings();
+						}
+						// Another window took the keyboard while a popup was up: it was left behind, so it goes.
+						else if ( active_ != 0 && event.xproperty.window == root_ && event.xproperty.atom == atoms_->net_active_window && activeWindow() != active_ )
+						{
+							sourceClosed();
 						}
 						break;
 					case MappingNotify:
@@ -1997,10 +2039,12 @@ namespace lexiglance::platform
 			int      depth_       = 24;
 			bool     transparent_ = false;
 
-			Window            popup_window_ = 0;
-			SurfacePtr        popup_surface_;
-			bool              popup_mapped_ = false;
-			Window            source_       = 0;
+			Window     popup_window_ = 0;
+			SurfacePtr popup_surface_;
+			bool       popup_mapped_ = false;
+			Window     source_       = 0;
+			// The window that had the keyboard when the popup opened; the popup goes when another one takes it.
+			Window            active_ = 0;
 			PopupContent      popup_;
 			render::PopupSize popup_size_;
 			Rect              popup_rect_;

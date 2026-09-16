@@ -1,5 +1,5 @@
 add_executable(lexiglanced main.cpp Anki.cpp Audio.cpp Daemon.cpp Health.cpp
-                           IpcServer.cpp)
+                           IpcServer.cpp Stats.cpp)
 
 target_link_libraries(lexiglanced PRIVATE lexiglance::platform lexiglance::net
                                           lexiglance::options)

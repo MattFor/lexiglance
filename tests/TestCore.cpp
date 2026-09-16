@@ -161,6 +161,28 @@ namespace
 		test::expect( chord && chord->size() == 2 && ( *chord )[1] == lg::config::KeyGroup{ lg::config::Key::AltL } );
 		test::expectEqual( lg::config::keyName( lg::config::Key::SuperL ), std::string_view( "Super_L" ) );
 		test::expect( lg::config::isMouseButton( lg::config::Key::MouseBack ) );
+
+		// Both spellings of the Windows key parse everywhere, so a configuration written on either platform loads on
+		// the other; only what the user is shown follows the platform.
+		for ( const char* name : { "Win_L", "LWin", "Super_L" } )
+		{
+			const auto left = lg::config::parseKey( name );
+			test::expect( left && *left == lg::config::KeyGroup{ lg::config::Key::SuperL } );
+		}
+		const auto right = lg::config::parseKey( "RWin" );
+		test::expect( right && *right == lg::config::KeyGroup{ lg::config::Key::SuperR } );
+#ifdef _WIN32
+		test::expectEqual( lg::config::displayKeyName( lg::config::Key::SuperL ), std::string_view( "Win_L" ) );
+		test::expectEqual( lg::config::displayName( "Super" ), std::string( "Win" ) );
+		test::expectEqual( lg::config::displayName( "Meta" ), std::string( "Win" ) );
+		test::expectEqual( lg::config::displayName( "Super_R" ), std::string( "Win_R" ) );
+#else
+		test::expectEqual( lg::config::displayKeyName( lg::config::Key::SuperL ), std::string_view( "Super_L" ) );
+		test::expectEqual( lg::config::displayName( "Super" ), std::string( "Super" ) );
+#endif
+		// Other keys and names it cannot place are left alone on every platform.
+		test::expectEqual( lg::config::displayName( "Alt_L" ), std::string( "Alt_L" ) );
+		test::expectEqual( lg::config::displayName( "Hyper" ), std::string( "Hyper" ) );
 	} );
 
 	const test::Registrar ipc_framing( "ipc framing", [] {
@@ -215,10 +237,10 @@ namespace
 		// after it (the entry comment) must not be taken for the size.
 		std::string bytes;
 		const auto  put = [&]( std::uint64_t value, int size ) {
-            for ( int i = 0; i < size; ++i )
-            {
-                bytes.push_back( static_cast<char>( ( value >> ( 8 * i ) ) & 0xFFU ) );
-            }
+			for ( int i = 0; i < size; ++i )
+			{
+				bytes.push_back( static_cast<char>( ( value >> ( 8 * i ) ) & 0xFFU ) );
+			}
 		};
 		put( 0x04034b50, 4 );
 		put( 20, 2 );
@@ -301,6 +323,7 @@ namespace
 		config.popup.compositor          = lg::config::Compositor::Off;
 		config.popup.max_dictionaries    = 3;
 		config.scan.wheel_length         = false;
+		config.scan.wheel_lock           = true;
 		config.scan.known_languages_only = false;
 		config.scan.ocr_engine           = lg::config::OcrEngine::Tesseract;
 
@@ -312,6 +335,7 @@ namespace
 		test::expect( parsed->popup.compositor == lg::config::Compositor::Off );
 		test::expectEqual( parsed->popup.max_dictionaries, 3 );
 		test::expect( !parsed->scan.wheel_length );
+		test::expect( parsed->scan.wheel_lock );
 		test::expect( !parsed->scan.known_languages_only );
 		test::expect( parsed->scan.ocr_engine == lg::config::OcrEngine::Tesseract );
 		// Out-of-range and unknown values fall back to safe ones.

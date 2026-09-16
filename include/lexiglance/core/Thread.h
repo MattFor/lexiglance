@@ -24,6 +24,10 @@ namespace lexiglance
 
 		void setName( std::string_view name ) noexcept;
 
+		// The name this thread was given, or empty when it has none. Every log line it writes carries it, so a log of
+		// several threads at once can still be followed.
+		[[nodiscard]] std::string_view name() noexcept;
+
 		// Lowers the calling thread's scheduling priority so bulk work never competes with games or the desktop.
 		void setBackgroundPriority() noexcept;
 

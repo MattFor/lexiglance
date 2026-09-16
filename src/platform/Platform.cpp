@@ -48,7 +48,7 @@ namespace lexiglance::platform
 				shape = render::HighlightShape::Brackets;
 				break;
 		}
-		return { .shape = shape, .thickness = popup.highlight_thickness, .radius = popup.highlight_radius, .padding = popup.highlight_padding };
+		return { .shape = shape, .thickness = popup.highlight_thickness, .radius = popup.highlight_radius, .padding_x = popup.highlight_padding_x, .padding_y = popup.highlight_padding_y };
 	}
 
 } // namespace lexiglance::platform

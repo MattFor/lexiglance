@@ -46,6 +46,7 @@ namespace lexiglance::gui
 		// A box for each language, with its code.
 		std::vector<std::pair<QCheckBox*, std::string>> language_boxes_;
 		QCheckBox*                                      wheel_;
+		QCheckBox*                                      wheel_lock_;
 		QComboBox*                                      selection_;
 		QPlainTextEdit*                                 ignored_;
 		OcrGroup*                                       ocr_;

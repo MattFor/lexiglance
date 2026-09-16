@@ -22,7 +22,7 @@ namespace lexiglance::gui::themes
 	{
 
 		// The popup settings a theme consists of (the same names as in config.json).
-		constexpr std::array<std::string_view, 22> look_keys{
+		constexpr std::array<std::string_view, 24> look_keys{
 			"design",
 			"scheme",
 			"background_color",
@@ -40,7 +40,10 @@ namespace lexiglance::gui::themes
 			"highlight_color",
 			"highlight_thickness",
 			"highlight_radius",
+			// The single room of older themes, then the two a theme can give on its own.
 			"highlight_padding",
+			"highlight_padding_x",
+			"highlight_padding_y",
 			"highlight_auto",
 			"font_family",
 			"show_tags",
@@ -48,7 +51,7 @@ namespace lexiglance::gui::themes
 		};
 
 		// Of these, a highlight preset sets only these.
-		constexpr std::array<std::string_view, 6> highlight_keys{ "highlight_style", "highlight_color", "highlight_thickness", "highlight_radius", "highlight_padding", "highlight_auto" };
+		constexpr std::array<std::string_view, 8> highlight_keys{ "highlight_style", "highlight_color", "highlight_thickness", "highlight_radius", "highlight_padding", "highlight_padding_x", "highlight_padding_y", "highlight_auto" };
 
 		Theme preset( const char* name, const char* description, const char* json )
 		{
@@ -124,7 +127,8 @@ namespace lexiglance::gui::themes
 			popup.highlight_color     = theme.highlight_color;
 			popup.highlight_thickness = theme.highlight_thickness;
 			popup.highlight_radius    = theme.highlight_radius;
-			popup.highlight_padding   = theme.highlight_padding;
+			popup.highlight_padding_x = theme.highlight_padding_x;
+			popup.highlight_padding_y = theme.highlight_padding_y;
 			popup.highlight_auto      = theme.highlight_auto;
 			return true;
 		}

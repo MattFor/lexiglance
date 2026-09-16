@@ -8,7 +8,8 @@ touch a game's process, its memory or its input stream. Lexiglance does none of 
 - It never opens, reads, writes, traces (`ptrace`) or injects into another process, and never uses `LD_PRELOAD`.
 - It never hooks graphics APIs, Vulkan layers or overlays inside other programs.
 - It never synthesises input (no XTest, `uinput` or `SendInput`) and never grabs keys or the pointer. The one exception
-  is the mouse wheel while the trigger is held over an open popup (see the table below), which can be turned off.
+  is the mouse wheel while the trigger is held over an open popup (see the table below), which can be turned off; on
+  Windows that one has to be turned on first.
 - It never reads `/dev/input`, and needs no root or extra permissions.
 - It never records the screen. Only OCR looks at pixels: a region around the pointer (about 1000 × 500 pixels, cut to
   the window under it), only while the trigger is held, kept in memory and never saved.
@@ -27,8 +28,8 @@ touch a game's process, its memory or its input stream. Lexiglance does none of 
 
 ## On Windows
 
-The same rules, with Windows' own means. There is no grab at all: the wheel is only observed, so the window under the
-pointer still scrolls while it changes the looked-up length.
+The same rules, with Windows' own means. Nothing is grabbed unless you ask for it: by default the wheel is only
+observed, so the window under the pointer still scrolls while it changes the looked-up length.
 
 | Need                                             | Mechanism                                                                       | Why it is safe                                                                                                                           |
 |--------------------------------------------------|---------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
@@ -39,6 +40,20 @@ pointer still scrolls while it changes the looked-up length.
 | Text in games, images and video                  | `BitBlt` of the screen                                                          | What every screenshot tool does, through the desktop compositor rather than the game.                                                    |
 | Show the popup                                   | Layered windows with `WS_EX_NOACTIVATE`, the highlight also `WS_EX_TRANSPARENT` | They never take the focus, and the highlight lets every click through.                                                                   |
 | Copied text (optional)                           | `AddClipboardFormatListener`                                                    | The clipboard's own change notification.                                                                                                 |
+
+### Keeping the wheel from the window underneath
+
+X11 can take just the two wheel buttons with an ordinary button grab. Windows has no equivalent, only
+`SetWindowsHookEx(WH_MOUSE_LL, ...)` — a global low-level mouse hook, which is exactly the mechanism some anti-cheat
+systems treat as suspicious in its own right, whatever it is used for.
+
+So it is off by default and Lexiglance installs no hook at all. Turning on **Scanning -> Also keep the wheel from the
+window underneath** installs one, and only while the trigger is held over an open popup; it comes down again the
+moment the trigger is let go. It swallows the wheel and nothing else, and it never synthesises input. Even then the
+trigger keys stay passive, because low-level hooks do not gate Raw Input — which is also how Lexiglance still sees the
+turn it has taken away from the other window.
+
+If you play anything with kernel-level anti-cheat, leave this off.
 
 ## Excluding games completely
 

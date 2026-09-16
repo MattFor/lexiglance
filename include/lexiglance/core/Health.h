@@ -28,7 +28,8 @@ namespace lexiglance::health
 		Severity    status = Severity::Ok;
 		std::string detail;
 		// The action that fixes it, understood by the settings application: "restart", "resume", "enable-ocr",
-		// "enable-accessibility", "open-dictionaries", "open-scanning", "open-anki"; empty when there is none.
+		// "enable-accessibility", "install-vcredist" (Windows), "open-dictionaries", "open-scanning", "open-anki";
+		// empty when there is none. All but the "open-" ones are carried out by its Fix issues button.
 		std::string fix;
 	};
 

@@ -7,6 +7,7 @@ Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+!include "x64.nsh"
 
 !ifndef VERSION
     !error "pass /DVERSION=x.y.z"
@@ -61,6 +62,50 @@ VIAddVersionKey "LegalCopyright" "MattFor, MIT license"
 !insertmacro STOP_RUNNING ""
 !insertmacro STOP_RUNNING "un."
 
+; Reading text from the screen loads Microsoft's own onnxruntime.dll, which is built with MSVC and imports its
+; redistributable; Lexiglance itself brings the UCRT along and needs none of it. Interactive installs ask; a silent
+; self-update (/relaunch=...) installs it without asking so people coming from an older build get OCR working; a silent
+; install with no relaunch (CI) leaves it alone.
+Function OfferVcRedist
+    ${If} ${IsNativeARM64}
+        StrCpy $R1 "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\ARM64"
+        StrCpy $R2 "https://aka.ms/vs/17/release/vc_redist.arm64.exe"
+    ${Else}
+        StrCpy $R1 "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64"
+        StrCpy $R2 "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    ${EndIf}
+    SetRegView 64
+    ReadRegDWORD $R0 HKLM $R1 "Installed"
+    SetRegView lastused
+    ${If} $R0 == 1
+        Return
+    ${EndIf}
+    ${If} ${Silent}
+        ${GetParameters} $0
+        ClearErrors
+        ${GetOptions} $0 "/relaunch=" $1
+        ${If} ${Errors}
+            Return
+        ${EndIf}
+    ${Else}
+        MessageBox MB_YESNO|MB_ICONQUESTION "Reading text from the screen (OCR) needs the Microsoft Visual C++ Redistributable, which this computer does not have. Everything else works without it.$\n$\nDownload and install it now?" IDNO offered
+    ${EndIf}
+    StrCpy $R3 "$TEMP\lexiglance-vc-redist.exe"
+    nsExec::Exec '"$SYSDIR\curl.exe" -sSL -o "$R3" "$R2"'
+    Pop $R4
+    ${If} $R4 == 0
+    ${AndIf} ${FileExists} "$R3"
+        ; It asks for administrator rights itself; /norestart so it never reboots behind the user's back.
+        ExecWait '"$R3" /install /passive /norestart'
+        Delete "$R3"
+    ${Else}
+        ${IfNot} ${Silent}
+            ExecShell "open" "$R2"
+        ${EndIf}
+    ${EndIf}
+    offered:
+FunctionEnd
+
 Section
     Call StopRunning
     ; An earlier version's programs go completely, so none of its files linger next to the new ones.
@@ -105,6 +150,8 @@ Section
     ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
     IntFmt $0 "0x%08X" $0
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "EstimatedSize" $0
+
+    Call OfferVcRedist
 SectionEnd
 
 ; Straight into Lexiglance, which starts its daemon. A silent install (CI) starts nothing, unless it is Lexiglance

@@ -23,13 +23,15 @@ namespace lexiglance::render
 		Brackets
 	};
 
-	// Device pixels.
+	// Device pixels. The room around the text may be negative, to pull the mark in over a box that is reported wider
+	// or taller than the text looks.
 	struct HighlightLook
 	{
 		HighlightShape shape     = HighlightShape::Underline;
 		int            thickness = 2;
 		int            radius    = 3;
-		int            padding   = 2;
+		int            padding_x = 2;
+		int            padding_y = 2;
 
 		[[nodiscard]] bool operator==( const HighlightLook& ) const = default;
 	};
@@ -42,8 +44,11 @@ namespace lexiglance::render
 		int height = 0;
 	};
 
-	// The highlight's window around the matched text's box: the padding, and room below the text for underlines.
+	// The highlight's window around the matched text's box: the room around it, and room below the text for underlines.
 	[[nodiscard]] Box highlightArea( const Box& text, const HighlightLook& look ) noexcept;
+
+	// The rows an underline takes below the text box; 0 for the shapes drawn around it.
+	[[nodiscard]] int highlightDepth( const HighlightLook& look ) noexcept;
 
 	// Paints the highlight into a context the size of its window: lines opaque in `color`, a fill with its alpha.
 	void drawHighlight( cairo_t* cr, int width, int height, const HighlightLook& look, const Color& color );

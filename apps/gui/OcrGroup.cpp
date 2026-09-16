@@ -2,7 +2,9 @@
 
 #include "DaemonClient.h"
 #include "Settings.h"
+#include "VcRedist.h"
 
+#include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/language/Language.h>
 
@@ -10,6 +12,7 @@
 #include <QFile>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QMessageBox>
 #include <QProcess>
 #include <QSignalBlocker>
 #include <QSysInfo>
@@ -171,6 +174,27 @@ namespace lexiglance::gui
 			return moved ? QString() : QStringLiteral( "cannot install ONNX Runtime" );
 		}
 
+		// Whether to fetch the Visual C++ redistributable along with PaddleOCR: where to put it, or empty when this
+		// machine already has it or the user would rather not. Downloading the runtime is the moment it starts to
+		// matter, and for a portable copy or a build from source it is the only moment there is.
+		QString askVcRedist( QWidget* parent )
+		{
+			// Empty off Windows, so nothing below happens there.
+			const QString missing = vcredist::missing();
+			if ( missing.isEmpty() )
+			{
+				return {};
+			}
+			const auto answer = QMessageBox::question(
+					parent,
+					QStringLiteral( "Microsoft Visual C++ Redistributable" ),
+					QStringLiteral( "Reading text from the screen needs the Microsoft Visual C++ Redistributable, which this computer does not have "
+			                        "(%1). Everything else in Lexiglance works without it.\n\nInstall it as well? Windows will ask for permission." )
+							.arg( missing )
+			);
+			return answer == QMessageBox::Yes ? vcredist::installerPath() : QString();
+		}
+
 		int modeIndex( config::OcrMode mode )
 		{
 			switch ( mode )
@@ -246,6 +270,7 @@ namespace lexiglance::gui
 		windows_( new QPlainTextEdit() ),
 		status_( new QLabel() ),
 		download_( new QPushButton( QIcon::fromTheme( QStringLiteral( "folder-download" ) ), QString() ) ),
+		runtime_( new QPushButton( QIcon::fromTheme( QStringLiteral( "folder-download" ) ), QStringLiteral( "Install the Visual C++ Redistributable" ) ) ),
 		progress_( new QProgressBar() )
 	{
 		auto* layout = new QVBoxLayout( this );
@@ -271,6 +296,10 @@ namespace lexiglance::gui
 		status_->setWordWrap( true );
 		status_->setTextInteractionFlags( Qt::TextSelectableByMouse );
 		row->addWidget( status_, 1 );
+		// Only on a Windows that has no Visual C++ Redistributable, which PaddleOCR's runtime imports (updateDownloadButton).
+		runtime_->setToolTip( QStringLiteral( "Microsoft's runtime, which their build of ONNX Runtime needs and PaddleOCR cannot read anything without. Windows will ask for permission, and Lexiglance starts again on it." ) );
+		runtime_->hide();
+		row->addWidget( runtime_ );
 		row->addWidget( download_ );
 		layout->addLayout( row );
 		progress_->hide();
@@ -296,6 +325,7 @@ namespace lexiglance::gui
 				downloadPaddle();
 			}
 		} );
+		connect( runtime_, &QPushButton::clicked, this, [this] { downloadRedist(); } );
 
 		context_.client->onEvent( [this]( std::string_view name, const json::Value& params ) {
 			if ( name == "config.changed" )
@@ -375,7 +405,9 @@ namespace lexiglance::gui
 
 	void OcrGroup::showStatus( const json::Value& status )
 	{
-		status_->setText( QStringLiteral( "Text capture: " ) + qs( status["capture"].asString() ) );
+		// The reason in full here, where the download that fixes it is: the overview keeps to the summary.
+		const QString problem = qs( status["capture_problem"].asString() );
+		status_->setText( QStringLiteral( "Text capture: " ) + qs( status["capture"].asString() ) + ( problem.isEmpty() ? QString() : "\n" + problem ) );
 		// Models are for the languages the daemon reads: turned on, with dictionaries.
 		std::vector<std::string> in_use;
 		for ( const json::Value& code : status["languages"].items() )
@@ -394,6 +426,8 @@ namespace lexiglance::gui
 		const bool tesseract = engine_->currentIndex() == 2;
 		const auto languages = ocrLanguages();
 		model_->setEnabled( engine_->currentIndex() != 1 );
+		// Nothing PaddleOCR downloads runs without Microsoft's runtime, and Tesseract needs none of it.
+		runtime_->setVisible( !tesseract && !vcredist::missing().isEmpty() );
 		if ( tesseract )
 		{
 			download_->setText( modelInstalled( model_->currentIndex() == 1 ? "best" : "fast", languages ) ? QStringLiteral( "Re-download models" ) : QStringLiteral( "Download Tesseract models" ) );
@@ -424,6 +458,7 @@ namespace lexiglance::gui
 	void OcrGroup::fetchAll( const QString& what, std::vector<std::pair<QUrl, QString>> files, std::function<QString()> finish )
 	{
 		download_->setEnabled( false );
+		runtime_->setEnabled( false );
 		status_->setText( QStringLiteral( "Downloading %1..." ).arg( what ) );
 		auto remaining = std::make_shared<std::size_t>( files.size() );
 		auto failure   = std::make_shared<QString>();
@@ -462,14 +497,24 @@ namespace lexiglance::gui
 							*failure = ( *after )();
 						}
 						download_->setEnabled( true );
+						runtime_->setEnabled( true );
 						progress_->hide();
 						if ( !failure->isEmpty() )
 						{
+							// Whatever was downloaded towards the runtime is not installed after a failure.
+							QFile::remove( std::exchange( redist_, QString() ) );
 							status_->setText( QStringLiteral( "Download failed: " ) + *failure );
 							return;
 						}
-						// The daemon rebuilds its text capture with the new files, and says so when it is ready (status.changed).
 						updateDownloadButton();
+						// Windows' own runtime, which came along with the files: installed, and then the daemon is
+				        // started again, since it can only find the new libraries as it starts.
+						if ( !redist_.isEmpty() )
+						{
+							installRedist();
+							return;
+						}
+						// The daemon rebuilds its text capture with the new files, and says so when it is ready (status.changed).
 						status_->setText( QStringLiteral( "Text capture: loading what was downloaded..." ) );
 						context_.client->call( "capture.reset", "{}", [this]( const json::Value*, const QString& reset_error ) {
 							if ( !reset_error.isEmpty() )
@@ -506,7 +551,43 @@ namespace lexiglance::gui
 		{
 			files.emplace_back( QUrl( QStringLiteral( "https://github.com/microsoft/onnxruntime/releases/download/v%1/%2%3" ).arg( onnx_runtime_version, archive, archive_suffix ) ), runtime + "/" + archive + archive_suffix );
 		}
+		// That runtime is Microsoft's own build and imports their redistributable, which Lexiglance itself does not.
+		// It is installed once everything is downloaded (installRedist), not here.
+		redist_ = askVcRedist( this );
+		if ( !redist_.isEmpty() )
+		{
+			files.emplace_back( vcredist::url(), redist_ );
+		}
 		fetchAll( QStringLiteral( "PaddleOCR" ), std::move( files ), [runtime, archive, unpack] { return unpack ? unpackRuntime( runtime, archive ) : QString(); } );
+	}
+
+	void OcrGroup::downloadRedist()
+	{
+		redist_ = vcredist::installerPath();
+		fetchAll( QStringLiteral( "the Visual C++ Redistributable" ), { { vcredist::url(), redist_ } }, {} );
+	}
+
+	void OcrGroup::installRedist()
+	{
+		const QString installer = std::exchange( redist_, QString() );
+		status_->setText( QStringLiteral( "Installing the Microsoft Visual C++ Redistributable; Windows asks for permission." ) );
+		download_->setEnabled( false );
+		runtime_->setEnabled( false );
+		log::info( "installing the Visual C++ Redistributable ({})", ss( installer ) );
+		vcredist::install( this, installer, [this]( const QString& error ) {
+			download_->setEnabled( true );
+			runtime_->setEnabled( true );
+			updateDownloadButton();
+			if ( !error.isEmpty() )
+			{
+				log::error( "the Visual C++ Redistributable was not installed: {}", ss( error ) );
+				status_->setText( QStringLiteral( "Download failed: " ) + error );
+				return;
+			}
+			log::info( "the Visual C++ Redistributable is installed; starting the daemon again" );
+			status_->setText( QStringLiteral( "Text capture: starting Lexiglance again on the new runtime..." ) );
+			context_.client->startDaemon( true );
+		} );
 	}
 
 } // namespace lexiglance::gui

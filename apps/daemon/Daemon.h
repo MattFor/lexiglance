@@ -4,6 +4,7 @@
 #include "Anki.h"
 #include "Audio.h"
 #include "IpcServer.h"
+#include "Stats.h"
 
 #include <lexiglance/config/Config.h>
 #include <lexiglance/core/Health.h>
@@ -128,6 +129,8 @@ namespace lexiglance::daemon
 		[[nodiscard]] std::vector<const lang::Language*> languagesInUse( const config::Config& cfg ) const;
 		// A word the dictionaries have, for previews and trials without a text of their own; IPC thread.
 		[[nodiscard]] lookup::LookupResult sampleLookup( const std::shared_ptr<const lookup::DictionarySet>& set, const config::Config& cfg );
+		// Writes what this daemon is working with (dictionaries, languages, what reads the screen, the popup) to the log.
+		void logSetup( const config::Config& cfg );
 
 		void               onScan( platform::Point point, const platform::WindowInfo& window );
 		void               onClickOutside();
@@ -166,10 +169,12 @@ namespace lexiglance::daemon
 
 		void    refreshCapture( CaptureState& state, const config::Config& cfg );
 		Reading readRequest( CaptureState& state, CaptureRequest& request, const config::Config& cfg );
-		void    captureLoop( const std::stop_token& stop );
-		void    renderLoop( const std::stop_token& stop );
-		void    importLoop( const std::stop_token& stop );
-		void    runImport( const ImportJob& job );
+		// Tallies a screen lookup for the Statistics page (in memory and, now and then, on disk).
+		void recordScreenLookup( const CaptureRequest& request, const lookup::LookupResult& result, std::string_view source, std::string_view text );
+		void captureLoop( const std::stop_token& stop );
+		void renderLoop( const std::stop_token& stop );
+		void importLoop( const std::stop_token& stop );
+		void runImport( const ImportJob& job );
 
 		void reportCapture( const CaptureRequest& request, std::string_view text, std::string_view unread, std::string_view source, std::chrono::milliseconds took, std::size_t entries, CaptureReport& reported );
 
@@ -201,14 +206,16 @@ namespace lexiglance::daemon
 		std::atomic<std::uint64_t> shown_key_{ 0 };
 		// The latest capture's key, and the generation the popup was last dismissed at: a popup on its way that shows what
 		// the latest capture found stays valid although newer scans were made.
-		std::atomic<std::uint64_t>            latest_key_{ 0 };
-		std::atomic<std::uint64_t>            cancelled_{ 0 };
-		std::atomic<std::uint64_t>            lookups_{ 0 };
-		std::atomic<std::uint64_t>            lookup_nanoseconds_{ 0 };
-		std::atomic<std::uint64_t>            capture_resets_{ 0 };
-		mutable std::mutex                    capture_status_mutex_;
-		std::string                           capture_status_ = "starting";
-		std::chrono::steady_clock::time_point started_        = std::chrono::steady_clock::now();
+		std::atomic<std::uint64_t> latest_key_{ 0 };
+		std::atomic<std::uint64_t> cancelled_{ 0 };
+		std::atomic<std::uint64_t> lookups_{ 0 };
+		std::atomic<std::uint64_t> lookup_nanoseconds_{ 0 };
+		std::atomic<std::uint64_t> capture_resets_{ 0 };
+		mutable std::mutex         capture_status_mutex_;
+		std::string                capture_status_ = "starting";
+		// Why a part of the capture is not working, in full; the status only summarises it.
+		std::string                           capture_problem_;
+		std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
 		// Since when the capture and render threads work on their current item (steady clock ticks; 0 while idle): one
 		// stuck in a call to a hung application shows in the health report.
 		std::atomic<std::chrono::steady_clock::rep> capture_busy_since_{ 0 };
@@ -236,6 +243,10 @@ namespace lexiglance::daemon
 		int          forced_length_ = 0;
 		std::string  autoplayed_;
 		AudioPlayer  audio_;
+		// What has been looked up over time, for the Statistics page; kept between runs. `unsaved_stats_` counts the
+		// lookups since it was last written (capture thread only).
+		Statistics  stats_;
+		std::size_t unsaved_stats_ = 0;
 		// Network work behind the popup buttons (audio downloads, AnkiConnect).
 		std::unique_ptr<ThreadPool> actions_;
 

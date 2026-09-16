@@ -118,7 +118,11 @@ namespace lexiglance::config
 		// Only text starting in the script of a supported language is looked up (no popups for English interface text).
 		bool known_languages_only = true;
 		// While the trigger is held over a popup the wheel changes the looked-up length (instead of scrolling).
-		bool                     wheel_length = true;
+		bool wheel_length = true;
+		// Windows only: while the wheel changes the length, keep it from the window under the pointer as well. X11 does
+		// this with a grab of the two wheel buttons; Windows has only the low-level mouse hook that anticheat.md warns
+		// about, so it is asked for rather than assumed.
+		bool                     wheel_lock = false;
 		std::vector<std::string> ocr_windows{ "steam_app_*", "*.exe*" };
 	};
 
@@ -155,9 +159,12 @@ namespace lexiglance::config
 		bool highlight_auto = false;
 		// Dragging with this button selects popup text; releasing copies it.
 		MouseButton select_button = MouseButton::Right;
-		// Rounding of the highlight's corners and the room it leaves around the text (px).
-		int highlight_radius  = 3;
-		int highlight_padding = 2;
+		// Rounding of the highlight's corners (px), and the room it leaves around the text, sideways and above and
+		// below. The room may be negative: some applications report a box taller or wider than the text looks, and
+		// pulling the mark in makes it sit on the word again.
+		int highlight_radius    = 3;
+		int highlight_padding_x = 2;
+		int highlight_padding_y = 2;
 
 		PopupDesign    design    = PopupDesign::Friendly;
 		ColorScheme    scheme    = ColorScheme::Default;
@@ -179,12 +186,14 @@ namespace lexiglance::config
 		int headword_size = 0;
 		int furigana_size = 0;
 		// What entries show besides their definitions.
-		bool show_reading    = true; // the reading next to the headword when furigana is off
-		bool show_inflection = true; // how a conjugated word was formed
-		bool show_dictionary = true; // the names of the dictionaries
-		bool show_buttons    = true; // audio and Anki buttons
-		bool show_kanji      = true; // kanji entries when no word matches
-		int  max_senses      = 0;    // definitions per dictionary of an entry; 0 shows all
+		bool show_reading    = false; // the full reading next to the headword (with or without furigana)
+		bool show_inflection = true;  // how a conjugated word was formed
+		bool show_dictionary = true;  // the names of the dictionaries
+		bool show_buttons    = true;  // audio and Anki buttons
+		bool show_kanji      = true;  // kanji entries when no word matches
+		int  max_senses      = 0;     // definitions per dictionary of an entry; 0 shows all
+		// The audio and Anki buttons' size in px; 0 follows the headword (about the same height).
+		int button_size = 0;
 	};
 
 	struct AudioSettings
@@ -247,9 +256,11 @@ namespace lexiglance::config
 		// none of theirs).
 		std::string language = "ja";
 		// Languages not looked up (codes), so text is only told apart among the others and OCR only reads those.
-		std::vector<std::string>          disabled_languages;
-		std::string                       log_level = "info";
-		bool                              paused    = false;
+		std::vector<std::string> disabled_languages;
+		std::string              log_level = "info";
+		bool                     paused    = false;
+		// Whether the daemon counts what it looks up, for the Statistics page. The tally never leaves this computer.
+		bool                              statistics = true;
 		ScanSettings                      scan;
 		PopupSettings                     popup;
 		AudioSettings                     audio;

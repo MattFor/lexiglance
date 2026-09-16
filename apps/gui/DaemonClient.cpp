@@ -2,6 +2,7 @@
 
 #include "Common.h"
 
+#include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
 
 #include <QProcess>
@@ -51,6 +52,14 @@ namespace lexiglance::gui
 	bool DaemonClient::startDaemon( bool replace )
 	{
 		const bool started = QProcess::startDetached( daemonExecutable(), replace ? QStringList{ QStringLiteral( "--replace" ) } : QStringList{} );
+		if ( started )
+		{
+			log::info( "started {}{}", ss( daemonExecutable() ), replace ? " --replace" : "" );
+		}
+		else
+		{
+			log::error( "cannot start {}", ss( daemonExecutable() ) );
+		}
 		expectDaemon();
 		return started;
 	}
@@ -80,11 +89,12 @@ namespace lexiglance::gui
 		if ( reply )
 		{
 			pending_.emplace( id, std::move( reply ) );
-			QTimer::singleShot( timeout_ms, this, [this, id] {
+			QTimer::singleShot( timeout_ms, this, [this, id, method = std::string( method ), timeout_ms] {
 				if ( const auto it = pending_.find( id ); it != pending_.end() )
 				{
 					const Reply late = std::move( it->second );
 					pending_.erase( it );
+					log::warn( "the daemon did not answer {} within {} ms", method, timeout_ms );
 					late( nullptr, QStringLiteral( "The daemon did not answer in time" ) );
 				}
 			} );
@@ -152,6 +162,7 @@ namespace lexiglance::gui
 
 	void DaemonClient::notifyConnection( bool connected )
 	{
+		log::info( "{} the daemon ({})", connected ? "connected to" : "disconnected from", paths::ipcEndpoint() );
 		for ( const auto& handler : connection_handlers_ )
 		{
 			handler( connected );

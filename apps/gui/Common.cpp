@@ -1,11 +1,13 @@
 #include "Common.h"
 
+#include <lexiglance/config/Keys.h>
 #include <lexiglance/core/Paths.h>
 
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QVersionNumber>
 
@@ -31,9 +33,15 @@ namespace lexiglance::gui
 		QStringList parts;
 		for ( const auto& key : keys )
 		{
-			parts << qs( key );
+			parts << qs( config::displayName( key ) );
 		}
 		return parts.isEmpty() ? QStringLiteral( "(none)" ) : parts.join( QStringLiteral( " + " ) );
+	}
+
+	QString withLinks( QString escaped )
+	{
+		static const QRegularExpression address( QStringLiteral( R"((https?://[^\s<]*[^\s<.,;:!?)]))" ) );
+		return escaped.replace( address, QStringLiteral( R"(<a href="\1">\1</a>)" ) );
 	}
 
 	QString shortTitle( const QString& title )

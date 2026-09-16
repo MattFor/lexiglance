@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QString>
 
+#include <cstdint>
 #include <functional>
 
 namespace lexiglance::gui
@@ -22,7 +23,15 @@ namespace lexiglance::gui
 	{
 	public:
 		// How this copy was installed, which decides what an update downloads and how it goes in place.
-		enum class Kind;
+		enum class Kind : std::uint8_t
+		{
+			WindowsSetup,    // installed with lexiglance-windows-setup.exe
+			WindowsPortable, // unpacked from lexiglance-windows-portable.zip
+			AppImage,        // lexiglance-x86_64.AppImage
+			Deb,             // the lexiglance-amd64.deb package
+			Source,          // a build tree
+			Other,           // the .tar.gz, or a system or processor there are no releases for
+		};
 
 		explicit UpdateGroup( QWidget* parent = nullptr );
 
@@ -38,6 +47,9 @@ namespace lexiglance::gui
 		void showState();
 		void fail( const QString& message );
 		void setBusy( bool busy );
+		// Windows: after an update, fetch the Visual C++ Redistributable when OCR would need it and this machine has
+		// none, so people coming from a build that never offered it get it without opening Health.
+		void ensureVcRedist();
 
 		Downloader*   downloader_;
 		QLabel*       status_;

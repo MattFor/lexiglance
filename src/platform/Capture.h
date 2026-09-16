@@ -17,6 +17,8 @@ namespace lexiglance::platform
 	public:
 		ChainCapture( std::unique_ptr<TextCapture> accessibility, std::unique_ptr<TextCapture> ocr, config::OcrMode mode, std::vector<std::string> ocr_windows, std::string ocr_state );
 
+		[[nodiscard]] std::string problem() const override;
+
 		[[nodiscard]] std::string_view name() const noexcept override
 		{
 			return "chain";

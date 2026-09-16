@@ -20,48 +20,52 @@ namespace lexiglance::config
 		const std::vector<Alias>& aliases()
 		{
 			static const std::vector<Alias> table{
-				{ "Shift", { Key::ShiftL, Key::ShiftR } },
-				{ "Shift_L", { Key::ShiftL } },
-				{ "Shift_R", { Key::ShiftR } },
-				{ "Control", { Key::ControlL, Key::ControlR } },
-				{ "Ctrl", { Key::ControlL, Key::ControlR } },
-				{ "Control_L", { Key::ControlL } },
-				{ "Control_R", { Key::ControlR } },
-				{ "Alt", { Key::AltL, Key::AltR } },
-				{ "Alt_L", { Key::AltL } },
-				{ "LAlt", { Key::AltL } },
-				{ "Alt_R", { Key::AltR } },
-				{ "RAlt", { Key::AltR } },
-				{ "AltGr", { Key::AltR } },
-				{ "Super", { Key::SuperL, Key::SuperR } },
-				{ "Win", { Key::SuperL, Key::SuperR } },
-				{ "Windows", { Key::SuperL, Key::SuperR } },
-				{ "Meta", { Key::SuperL, Key::SuperR } },
-				{ "Cmd", { Key::SuperL, Key::SuperR } },
-				{ "Super_L", { Key::SuperL } },
-				{ "Super_R", { Key::SuperR } },
-				{ "Caps_Lock", { Key::CapsLock } },
-				{ "Menu", { Key::Menu } },
-				{ "Space", { Key::Space } },
-				{ "Tab", { Key::Tab } },
-				{ "Escape", { Key::Escape } },
-				{ "F1", { Key::F1 } },
-				{ "F2", { Key::F2 } },
-				{ "F3", { Key::F3 } },
-				{ "F4", { Key::F4 } },
-				{ "F5", { Key::F5 } },
-				{ "F6", { Key::F6 } },
-				{ "F7", { Key::F7 } },
-				{ "F8", { Key::F8 } },
-				{ "F9", { Key::F9 } },
-				{ "F10", { Key::F10 } },
-				{ "F11", { Key::F11 } },
-				{ "F12", { Key::F12 } },
-				{ "MouseLeft", { Key::MouseLeft } },
-				{ "MouseMiddle", { Key::MouseMiddle } },
-				{ "MouseRight", { Key::MouseRight } },
-				{ "MouseBack", { Key::MouseBack } },
-				{ "MouseForward", { Key::MouseForward } },
+				{ .name = "Shift", .keys = { Key::ShiftL, Key::ShiftR } },
+				{ .name = "Shift_L", .keys = { Key::ShiftL } },
+				{ .name = "Shift_R", .keys = { Key::ShiftR } },
+				{ .name = "Control", .keys = { Key::ControlL, Key::ControlR } },
+				{ .name = "Ctrl", .keys = { Key::ControlL, Key::ControlR } },
+				{ .name = "Control_L", .keys = { Key::ControlL } },
+				{ .name = "Control_R", .keys = { Key::ControlR } },
+				{ .name = "Alt", .keys = { Key::AltL, Key::AltR } },
+				{ .name = "Alt_L", .keys = { Key::AltL } },
+				{ .name = "LAlt", .keys = { Key::AltL } },
+				{ .name = "Alt_R", .keys = { Key::AltR } },
+				{ .name = "RAlt", .keys = { Key::AltR } },
+				{ .name = "AltGr", .keys = { Key::AltR } },
+				{ .name = "Super", .keys = { Key::SuperL, Key::SuperR } },
+				{ .name = "Win", .keys = { Key::SuperL, Key::SuperR } },
+				{ .name = "Windows", .keys = { Key::SuperL, Key::SuperR } },
+				{ .name = "Meta", .keys = { Key::SuperL, Key::SuperR } },
+				{ .name = "Cmd", .keys = { Key::SuperL, Key::SuperR } },
+				{ .name = "Super_L", .keys = { Key::SuperL } },
+				{ .name = "Super_R", .keys = { Key::SuperR } },
+				{ .name = "Win_L", .keys = { Key::SuperL } },
+				{ .name = "LWin", .keys = { Key::SuperL } },
+				{ .name = "Win_R", .keys = { Key::SuperR } },
+				{ .name = "RWin", .keys = { Key::SuperR } },
+				{ .name = "Caps_Lock", .keys = { Key::CapsLock } },
+				{ .name = "Menu", .keys = { Key::Menu } },
+				{ .name = "Space", .keys = { Key::Space } },
+				{ .name = "Tab", .keys = { Key::Tab } },
+				{ .name = "Escape", .keys = { Key::Escape } },
+				{ .name = "F1", .keys = { Key::F1 } },
+				{ .name = "F2", .keys = { Key::F2 } },
+				{ .name = "F3", .keys = { Key::F3 } },
+				{ .name = "F4", .keys = { Key::F4 } },
+				{ .name = "F5", .keys = { Key::F5 } },
+				{ .name = "F6", .keys = { Key::F6 } },
+				{ .name = "F7", .keys = { Key::F7 } },
+				{ .name = "F8", .keys = { Key::F8 } },
+				{ .name = "F9", .keys = { Key::F9 } },
+				{ .name = "F10", .keys = { Key::F10 } },
+				{ .name = "F11", .keys = { Key::F11 } },
+				{ .name = "F12", .keys = { Key::F12 } },
+				{ .name = "MouseLeft", .keys = { Key::MouseLeft } },
+				{ .name = "MouseMiddle", .keys = { Key::MouseMiddle } },
+				{ .name = "MouseRight", .keys = { Key::MouseRight } },
+				{ .name = "MouseBack", .keys = { Key::MouseBack } },
+				{ .name = "MouseForward", .keys = { Key::MouseForward } },
 			};
 			return table;
 		}
@@ -99,8 +103,20 @@ namespace lexiglance::config
 			"MouseForward",
 		};
 
+		// Windows labels this key with a logo, not with X11's name for it; configuration files keep the canonical
+		// spelling above, which parseKey accepts everywhere.
+#ifdef _WIN32
+		constexpr std::string_view super_either = "Win";
+		constexpr std::string_view super_left   = "Win_L";
+		constexpr std::string_view super_right  = "Win_R";
+#else
+		constexpr std::string_view super_either = "Super";
+		constexpr std::string_view super_left   = "Super_L";
+		constexpr std::string_view super_right  = "Super_R";
+#endif
+
 		constexpr std::array<std::string_view, 17> suggestions{
-			"Super",
+			super_either,
 			"Alt_L",
 			"Alt_R",
 			"Shift",
@@ -109,8 +125,8 @@ namespace lexiglance::config
 			"Control",
 			"Control_L",
 			"Control_R",
-			"Super_L",
-			"Super_R",
+			super_left,
+			super_right,
 			"Menu",
 			"Caps_Lock",
 			"MouseMiddle",
@@ -162,6 +178,37 @@ namespace lexiglance::config
 	{
 		const auto index = static_cast<std::size_t>( key );
 		return index < canonical.size() ? canonical[index] : std::string_view( "?" );
+	}
+
+	std::string_view displayKeyName( Key key ) noexcept
+	{
+		if ( key == Key::SuperL )
+		{
+			return super_left;
+		}
+		if ( key == Key::SuperR )
+		{
+			return super_right;
+		}
+		return keyName( key );
+	}
+
+	std::string displayName( std::string_view name )
+	{
+		const auto group = parseKey( name );
+		if ( !group )
+		{
+			return std::string( name );
+		}
+		if ( *group == KeyGroup{ Key::SuperL, Key::SuperR } )
+		{
+			return std::string( super_either );
+		}
+		if ( group->size() == 1 && ( group->front() == Key::SuperL || group->front() == Key::SuperR ) )
+		{
+			return std::string( displayKeyName( group->front() ) );
+		}
+		return std::string( name );
 	}
 
 	bool isMouseButton( Key key ) noexcept

@@ -18,8 +18,10 @@ add_executable(
     ScanningPage.cpp
     SearchPage.cpp
     Settings.cpp
+    StatisticsPage.cpp
     Themes.cpp
     UpdateGroup.cpp
+    VcRedist.cpp
     resources.qrc)
 set_target_properties(lexiglance PROPERTIES AUTORCC ON)
 
@@ -38,8 +40,11 @@ qt_add_resources(
     FILES
     ${LEXIGLANCE_ICON_THEME})
 
-target_link_libraries(lexiglance PRIVATE lexiglance::core lexiglance::options
-                                         Qt6::Widgets Qt6::Network)
+# lexiglance::ocr for the Visual C++ runtime check behind Health's Fix issues
+# and the PaddleOCR download (VcRedist.cpp).
+target_link_libraries(
+    lexiglance PRIVATE lexiglance::core lexiglance::ocr lexiglance::options
+                       Qt6::Widgets Qt6::Network)
 
 install(TARGETS lexiglance RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 

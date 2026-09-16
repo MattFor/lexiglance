@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.30)
 
 project(
     lexiglance
-    VERSION 1.0.1
+    VERSION 1.1.0
     DESCRIPTION
         "System-wide pop-up dictionary compatible with Yomitan dictionaries"
     HOMEPAGE_URL "https://github.com/MattFor/lexiglance"
@@ -47,6 +47,7 @@ option(
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(CompilerOptions)
 include(GNUInstallDirs)
+include(BuildChannel)
 
 find_package(Threads REQUIRED)
 # A static build must not pick the DLL's import library, or its executables need
@@ -165,6 +166,26 @@ if(WIN32 AND NOT LEXIGLANCE_STATIC)
                 DIRECTORIES
                 "${LEXIGLANCE_TOOLCHAIN_BIN}"
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    # OpenSSL's libcurl needs a CA bundle next to the programs (MSYS2's tree is
+    # not there once Lexiglance is installed).
+    find_file(
+        LEXIGLANCE_CURL_CA_BUNDLE
+        NAMES ca-bundle.crt curl-ca-bundle.crt
+        PATHS "${LEXIGLANCE_TOOLCHAIN_BIN}/../etc/ssl/certs"
+              "${LEXIGLANCE_TOOLCHAIN_BIN}/../ssl/certs"
+              "${LEXIGLANCE_TOOLCHAIN_BIN}/../etc/pki/tls/certs"
+        NO_DEFAULT_PATH)
+    if(LEXIGLANCE_CURL_CA_BUNDLE)
+        install(
+            FILES "${LEXIGLANCE_CURL_CA_BUNDLE}"
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+            RENAME curl-ca-bundle.crt)
+    else()
+        message(
+            WARNING
+                "No CA bundle found next to the toolchain; HTTPS audio/Anki may fail after install"
+        )
+    endif()
 endif()
 install(FILES LICENSE README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
 

@@ -1,17 +1,21 @@
 #include "Audio.h"
 
+#include <lexiglance/core/Hash.h>
 #include <lexiglance/core/Md5.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/net/Http.h>
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <optional>
 #include <ranges>
+#include <system_error>
 #include <vector>
 
 #ifdef _WIN32
@@ -216,6 +220,30 @@ namespace lexiglance::daemon
 			return ".mp3";
 		}
 
+		// Windows refuses to truncate a file that a player still has open, and MCI and the external players all keep
+		// the clip they are playing open. Naming each clip after its URL means a new clip never lands on the name of
+		// the one still playing, and replaying a clip reuses the file already on disk instead of rewriting it.
+		std::filesystem::path clipFile( const std::filesystem::path& directory, const AudioPlayer::Clip& clip )
+		{
+			auto file = directory / std::format( "audio-{:016x}", hash64( clip.url ) );
+			file += extensionOf( clip.data );
+			return file;
+		}
+
+		// The clips of earlier lookups, once their player has let go of them.
+		void sweepClips( const std::filesystem::path& directory, const std::filesystem::path& keep )
+		{
+			std::error_code ec;
+			for ( const auto& entry : std::filesystem::directory_iterator( directory, ec ) )
+			{
+				if ( entry.path() != keep && entry.path().filename().string().starts_with( "audio-" ) )
+				{
+					std::error_code ignored;
+					std::filesystem::remove( entry.path(), ignored );
+				}
+			}
+		}
+
 #else
 
 		Result<pid_t> spawn( std::vector<std::string>& command )
@@ -375,17 +403,23 @@ namespace lexiglance::daemon
 			return made;
 		}
 #ifdef _WIN32
-		auto file = directory / "audio";
-		file += extensionOf( ( *clip )->data );
+		const auto file = clipFile( directory, **clip );
+		sweepClips( directory, file );
+		// Replaying a word finds its clip already on disk, where rewriting it could fail while a player holds it.
+		std::error_code ec;
+		const bool      reusable = std::filesystem::file_size( file, ec ) == ( *clip )->data.size();
 #else
-		const auto file = directory / "audio";
+		const auto file     = directory / "audio";
+		const bool reusable = false;
 #endif
+		if ( !reusable )
 		{
 			std::ofstream out( file, std::ios::binary | std::ios::trunc );
 			out.write( ( *clip )->data.data(), static_cast<std::streamsize>( ( *clip )->data.size() ) );
 			if ( !out )
 			{
-				return fail( "cannot write {}", file.string() );
+				// Without the reason this reads as a broken path, which it almost never is.
+				return fail( "cannot write {}: {}", file.string(), std::error_code( errno, std::generic_category() ).message() );
 			}
 		}
 

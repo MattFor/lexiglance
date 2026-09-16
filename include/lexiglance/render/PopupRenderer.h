@@ -56,6 +56,8 @@ namespace lexiglance::render
 		bool rounded      = true;
 		bool audio_button = true;
 		bool anki_button  = false;
+		// The buttons' side in CSS pixels; 0 follows the headword size.
+		double button_size = 0.0;
 
 		Design design = Design::Friendly;
 		// The window (CSS pixels): inner margin, corner rounding, border; the background's opacity (0 to 1).
@@ -66,7 +68,7 @@ namespace lexiglance::render
 		// Headword and furigana sizes (CSS pixels); 0 follows the design.
 		double headword_size   = 0.0;
 		double furigana_size   = 0.0;
-		bool   show_reading    = true;
+		bool   show_reading    = false; // full reading beside the headword; independent of furigana
 		bool   show_inflection = true;
 		bool   show_dictionary = true;
 		bool   show_kanji      = true;
@@ -155,6 +157,20 @@ namespace lexiglance::render
 				}
 			}
 			return nullptr;
+		}
+
+		// Which entry a point belongs to, for an action aimed at the popup rather than at a button (the middle button
+		// plays the pronunciation wherever it is pressed). One region is one entry, in the order they are shown.
+		[[nodiscard]] std::optional<std::size_t> entryAt( int y ) const noexcept
+		{
+			for ( std::size_t index = 0; index < regions_.size(); ++index )
+			{
+				if ( y >= regions_[index].top && y < regions_[index].bottom )
+				{
+					return index;
+				}
+			}
+			return std::nullopt;
 		}
 
 		[[nodiscard]] const Button* buttonAt( int x, int y ) const noexcept

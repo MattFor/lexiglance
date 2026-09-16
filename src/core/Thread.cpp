@@ -21,8 +21,26 @@ namespace lexiglance
 	namespace thread
 	{
 
+		namespace
+		{
+
+			// What this thread is called here, whatever the system made of it (Linux keeps 15 characters).
+			std::string& nameStorage() noexcept
+			{
+				static thread_local std::string value;
+				return value;
+			}
+
+		} // namespace
+
+		std::string_view name() noexcept
+		{
+			return nameStorage();
+		}
+
 		void setName( std::string_view name ) noexcept
 		{
+			nameStorage().assign( name );
 #ifdef _WIN32
 			const std::wstring wide( name.begin(), name.end() );
 			( void )SetThreadDescription( GetCurrentThread(), wide.c_str() );

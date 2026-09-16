@@ -154,9 +154,9 @@ namespace lexiglance::dict
 			{
 				const auto entries = archive->entries();
 				const auto it      = std::ranges::find_if( entries, []( const ZipArchive::Entry& entry ) {
-                    const auto slash = entry.name.find( '/' );
-                    return slash != std::string::npos && std::string_view( entry.name ).substr( slash + 1 ) == "index.json";
-                } );
+					const auto slash = entry.name.find( '/' );
+					return slash != std::string::npos && std::string_view( entry.name ).substr( slash + 1 ) == "index.json";
+				} );
 				if ( it == entries.end() )
 				{
 					return fail( "{}: not a Yomitan dictionary (index.json missing)", path.string() );
@@ -1001,10 +1001,10 @@ namespace lexiglance::dict
 	{
 		const auto started = std::chrono::steady_clock::now();
 		const auto report  = [&]( std::string_view stage, std::uint64_t done, std::uint64_t total ) {
-            if ( options.on_progress )
-            {
-                options.on_progress( { .stage = stage, .done = done, .total = total } );
-            }
+			if ( options.on_progress )
+			{
+				options.on_progress( { .stage = stage, .done = done, .total = total } );
+			}
 		};
 
 		report( "reading", 0, 0 );

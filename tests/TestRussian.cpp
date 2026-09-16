@@ -190,7 +190,7 @@ namespace
 		}
 		const auto& d        = *dictionary;
 		const auto  contains = [&]( std::string_view key, std::string_view expression ) {
-            return std::ranges::any_of( d.findTerms( key ), [&]( std::uint32_t index ) { return d.string( d.terms()[index].expression ) == expression; } );
+			return std::ranges::any_of( d.findTerms( key ), [&]( std::uint32_t index ) { return d.string( d.terms()[index].expression ) == expression; } );
 		};
 		test::expect( contains( "ёлка", "ёлка" ) && contains( "елка", "ёлка" ) && contains( "идет", "идёт" ) );
 		test::expect( contains( "книга", "книга" ) && contains( "кни́га", "книга" ) );
@@ -211,9 +211,9 @@ namespace
 		}
 		lg::lookup::Translator translator;
 		const auto             front = [&]( std::string_view text ) {
-            auto result = translator.lookup( set, text );
-            test::expect( result.language == &russian() );
-            return result;
+			auto result = translator.lookup( set, text );
+			test::expect( result.language == &russian() );
+			return result;
 		};
 
 		// A form-of entry stands for its word, saying what the text is of it.
