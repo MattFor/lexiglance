@@ -2,6 +2,7 @@
 #include "Daemon.h"
 
 #include <lexiglance/core/Log.h>
+#include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Process.h>
 #include <lexiglance/core/Version.h>
 #include <lexiglance/dictionary/Classify.h>
@@ -17,7 +18,12 @@
 #include <string>
 #include <vector>
 
-#include <unistd.h>
+#ifdef _WIN32
+	#include <io.h>
+	#include <process.h>
+#else
+	#include <unistd.h>
+#endif
 
 // The health report: every part a lookup depends on, checked the way it is used, each with what fixes it.
 namespace lexiglance::daemon
@@ -126,6 +132,60 @@ namespace lexiglance::daemon
 			return out;
 		}
 
+		bool directoryWritable( const std::filesystem::path& directory )
+		{
+			std::error_code ec;
+			std::filesystem::create_directories( directory, ec );
+#ifdef _WIN32
+			return ::_waccess( directory.c_str(), 2 ) == 0;
+#else
+			return ::access( directory.c_str(), W_OK ) == 0;
+#endif
+		}
+
+		bool recommendationInstalled( const lang::Recommendation& item, const std::vector<std::string>& titles )
+		{
+			return std::ranges::any_of( titles, [&]( const std::string& title ) {
+				return ( !item.title.empty() && title == item.title ) || ( !item.title_prefix.empty() && title.starts_with( item.title_prefix ) );
+			} );
+		}
+
+		void appendEnabledLanguages( std::vector<health::Check>& checks, const config::Config& cfg )
+		{
+			Check                    check{ .id = "languages", .title = "Languages" };
+			const auto               enabled = lang::enabledLanguages( cfg.disabled_languages );
+			std::vector<std::string> names;
+			names.reserve( enabled.size() );
+			for ( const lang::Language* language : enabled )
+			{
+				names.emplace_back( language->name() );
+			}
+			if ( enabled.empty() )
+			{
+				check.status = Severity::Error;
+				check.detail = "Every built-in language is turned off, so Lexiglance will not recognise text.";
+				check.fix    = "open-scanning";
+			}
+			else
+			{
+				check.detail = std::format( "{} on: {}.", names.size() == 1 ? "One language" : std::format( "{} languages", names.size() ), joined( names, ", " ) );
+				if ( !cfg.language.empty() && std::ranges::none_of( enabled, [&]( const lang::Language* language ) { return language->code() == cfg.language; } ) )
+				{
+					check.status = Severity::Warning;
+					if ( const lang::Language* preferred = lang::findLanguage( cfg.language ) )
+					{
+						check.detail += std::format( " The preferred language, {}, is turned off.", preferred->name() );
+					}
+					else
+					{
+						check.detail += std::format( " The preferred language code \"{}\" is unknown or turned off.", cfg.language );
+					}
+					check.fix = "open-scanning";
+				}
+			}
+			checks.push_back( std::move( check ) );
+		}
+
 	} // namespace
 
 	void Daemon::checkDaemon( std::vector<health::Check>& checks, const config::Config& cfg, bool interactive ) const
@@ -134,7 +194,12 @@ namespace lexiglance::daemon
 		{
 			Check      check{ .id = "daemon", .title = "Lexiglance daemon" };
 			const auto uptime = std::chrono::duration_cast<std::chrono::seconds>( Clock::now() - started_ );
-			check.detail      = std::format( "Version {}, pid {}, running for {} ({}).", version, ::getpid(), readableDuration( uptime ), process::executable().string() );
+#ifdef _WIN32
+			const int  pid    = _getpid();
+#else
+			const int  pid    = ::getpid();
+#endif
+			check.detail      = std::format( "Version {}, pid {}, running for {} ({}).", version, pid, readableDuration( uptime ), process::executable().string() );
 			if ( process::executableReplaced() )
 			{
 				check.status = Severity::Warning;
@@ -215,110 +280,177 @@ namespace lexiglance::daemon
 
 	void Daemon::checkLanguages( std::vector<health::Check>& checks, const config::Config& cfg )
 	{
-		// The languages turned on that the enabled word dictionaries are in (all that are on, when none is known):
-		// fonts and lookups are checked for these.
-		const auto languages = languagesInUse( cfg );
+		checkDictionaries( checks, cfg );
+		appendEnabledLanguages( checks, cfg );
+		checkRecommendedDictionaries( checks, cfg );
+		checkFonts( checks, cfg );
+	}
 
-		// Dictionaries, and a lookup through the same code as a popup's.
+	void Daemon::checkDictionaries( std::vector<health::Check>& checks, const config::Config& cfg )
+	{
+		const auto  languages = languagesInUse( cfg );
+		const auto  set       = dictionaries_.load();
+		std::size_t words     = 0;
+		std::size_t kanji     = 0;
+		std::size_t meta      = 0;
+		for ( const auto& loaded : set->all() )
 		{
-			const auto  set   = dictionaries_.load();
-			std::size_t words = 0;
-			std::size_t kanji = 0;
-			std::size_t meta  = 0;
-			for ( const auto& loaded : set->all() )
+			words += loaded.dictionary->terms().empty() ? 0 : 1;
+			kanji += loaded.dictionary->kanji().empty() ? 0 : 1;
+			meta += loaded.dictionary->meta().empty() ? 0 : 1;
+		}
+		Check check{ .id = "dictionaries", .title = "Dictionaries" };
+		if ( words == 0 )
+		{
+			check.status = Severity::Error;
+			check.detail = set->all().empty() ? "No dictionary is installed and enabled, so nothing can be looked up."
+			                                  : "No word dictionary is enabled (only kanji or frequency lists), so words cannot be looked up.";
+			check.fix    = "open-dictionaries";
+		}
+		else
+		{
+			check.detail = std::format( "{} enabled: {} with words, {} with kanji, {} with frequencies or pitch accents.", set->all().size(), words, kanji, meta );
+		}
+		{
+			const std::scoped_lock lock( problems_mutex_ );
+			if ( !load_errors_.empty() )
 			{
-				words += loaded.dictionary->terms().empty() ? 0 : 1;
-				kanji += loaded.dictionary->kanji().empty() ? 0 : 1;
-				meta += loaded.dictionary->meta().empty() ? 0 : 1;
-			}
-			Check check{ .id = "dictionaries", .title = "Dictionaries" };
-			if ( words == 0 )
-			{
-				check.status = Severity::Error;
-				check.detail = set->all().empty() ? "No dictionary is installed and enabled, so nothing can be looked up."
-				                                  : "No word dictionary is enabled (only kanji or frequency lists), so words cannot be looked up.";
-				check.fix    = "open-dictionaries";
-			}
-			else
-			{
-				check.detail = std::format( "{} enabled: {} with words, {} with kanji, {} with frequencies or pitch accents.", set->all().size(), words, kanji, meta );
-			}
-			{
-				const std::scoped_lock lock( problems_mutex_ );
-				if ( !load_errors_.empty() )
-				{
-					check.status = std::max( check.status, Severity::Warning );
-					check.detail += std::format( " {} could not be opened: {}", load_errors_.size(), joined( std::span( load_errors_ ).first( std::min<std::size_t>( 2, load_errors_.size() ) ), "; " ) );
-					check.fix = "open-dictionaries";
-				}
-			}
-			checks.push_back( std::move( check ) );
-
-			if ( words > 0 )
-			{
-				Check                    lookup{ .id = "lookup", .title = "Looking words up" };
-				const auto               started = Clock::now();
-				std::size_t              found   = 0;
-				std::vector<std::string> tried;
-				for ( const lang::Language* language : languages )
-				{
-					for ( const std::string_view word : language->sampleWords() )
-					{
-						found += ipc_translator_.lookup( set, word, lookupOptions( cfg ) ).terms.empty() ? 0 : 1;
-						tried.emplace_back( word );
-					}
-				}
-				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>( Clock::now() - started ).count();
-				if ( found == 0 )
-				{
-					lookup.status = Severity::Warning;
-					lookup.detail = std::format( "None of {} is in the enabled dictionaries: are the right ones enabled?", joined( tried, ", " ) );
-					lookup.fix    = "open-dictionaries";
-				}
-				else
-				{
-					lookup.detail = std::format( "Everyday words are found ({} µs for {} lookups).", elapsed, tried.size() );
-				}
-				checks.push_back( std::move( lookup ) );
+				check.status = std::max( check.status, Severity::Warning );
+				check.detail += std::format( " {} could not be opened: {}", load_errors_.size(), joined( std::span( load_errors_ ).first( std::min<std::size_t>( 2, load_errors_.size() ) ), "; " ) );
+				check.fix = "open-dictionaries";
 			}
 		}
+		checks.push_back( std::move( check ) );
 
-		// Popups need glyphs for the languages of the dictionaries.
+		if ( words == 0 )
 		{
-			Check                    check{ .id = "font", .title = "Fonts" };
-			std::vector<std::string> drawn;
-			std::vector<std::string> missing;
-			std::vector<std::string> borrowed;
-			for ( const lang::Language* language : languages )
-			{
-				const auto coverage = render::checkFont( language->sampleText(), cfg.popup.font_family );
-				if ( coverage.missing > 0 )
-				{
-					missing.emplace_back( language->name() );
-					continue;
-				}
-				drawn.push_back( std::format( "{} with {}", language->name(), coverage.family.empty() ? std::string( "the default font" ) : coverage.family ) );
-				if ( !cfg.popup.font_family.empty() && !coverage.family.empty() && coverage.family != cfg.popup.font_family )
-				{
-					borrowed.emplace_back( language->name() );
-				}
-			}
-			if ( !missing.empty() )
-			{
-				check.status = Severity::Error;
-				check.detail = std::format( "No installed font has every character of {} text, so popups show boxes for it. Install a font that has, such as Noto Sans (Noto Sans CJK JP for Japanese).", joined( missing, " and " ) );
-			}
-			else
-			{
-				check.detail = std::format( "Text is drawn: {}.", joined( drawn, "; " ) );
-				if ( !borrowed.empty() )
-				{
-					check.status = Severity::Info;
-					check.detail += std::format( " The chosen font, {}, has no {} of its own.", cfg.popup.font_family, joined( borrowed, " or " ) );
-				}
-			}
-			checks.push_back( std::move( check ) );
+			return;
 		}
+
+		Check                    lookup{ .id = "lookup", .title = "Looking words up" };
+		const auto               started = Clock::now();
+		std::size_t              found   = 0;
+		std::vector<std::string> tried;
+		tried.reserve( languages.size() * 4 );
+		for ( const lang::Language* language : languages )
+		{
+			for ( const std::string_view word : language->sampleWords() )
+			{
+				found += ipc_translator_.lookup( set, word, lookupOptions( cfg ) ).terms.empty() ? 0 : 1;
+				tried.emplace_back( word );
+			}
+		}
+		const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>( Clock::now() - started ).count();
+		if ( found == 0 )
+		{
+			lookup.status = Severity::Warning;
+			lookup.detail = std::format( "None of {} is in the enabled dictionaries: are the right ones enabled?", joined( tried, ", " ) );
+			lookup.fix    = "open-dictionaries";
+		}
+		else
+		{
+			lookup.detail = std::format( "Everyday words are found ({} µs for {} lookups).", elapsed, tried.size() );
+		}
+		checks.push_back( std::move( lookup ) );
+	}
+
+	void Daemon::checkRecommendedDictionaries( std::vector<health::Check>& checks, const config::Config& cfg )
+	{
+		const lang::Language* preferred = lang::findLanguage( cfg.language );
+		const auto            enabled   = lang::enabledLanguages( cfg.disabled_languages );
+		if ( preferred == nullptr || !std::ranges::contains( enabled, preferred ) )
+		{
+			preferred = enabled.empty() ? nullptr : enabled.front();
+		}
+		if ( preferred == nullptr || preferred->recommendedDictionaries().empty() )
+		{
+			return;
+		}
+
+		std::vector<std::string> titles;
+		if ( const auto installed = installed_.load() )
+		{
+			titles.reserve( installed->size() );
+			for ( const auto& dictionary : *installed )
+			{
+				titles.push_back( dictionary->info().title );
+			}
+		}
+		std::vector<std::string> missing;
+		std::size_t              offered = 0;
+		for ( const lang::Recommendation& item : preferred->recommendedDictionaries() )
+		{
+			if ( item.download.empty() )
+			{
+				continue;
+			}
+			++offered;
+			if ( !recommendationInstalled( item, titles ) )
+			{
+				missing.push_back( item.name.empty() ? item.title : item.name );
+			}
+		}
+		if ( offered > 0 && missing.empty() )
+		{
+			checks.push_back(
+					{ .id = "recommended-dictionaries", .title = "Recommended dictionaries", .detail = std::format( "The recommended dictionaries for {} are installed.", preferred->name() ) }
+			);
+		}
+		else if ( !missing.empty() )
+		{
+			const bool none = missing.size() == offered;
+			checks.push_back(
+					{ .id     = "recommended-dictionaries",
+			          .title  = "Recommended dictionaries",
+			          .status = none ? Severity::Warning : Severity::Info,
+			          .detail = none ? std::format(
+											   "None of the recommended dictionaries for {} are installed ({}). Get them on the Dictionaries page.",
+											   preferred->name(),
+											   joined( missing, ", " )
+									   )
+			                         : std::format( "Still missing for {}: {}. Get them on the Dictionaries page.", preferred->name(), joined( missing, ", " ) ),
+			          .fix    = "open-dictionaries" }
+			);
+		}
+	}
+
+	void Daemon::checkFonts( std::vector<health::Check>& checks, const config::Config& cfg )
+	{
+		const auto               languages = languagesInUse( cfg );
+		Check                    check{ .id = "font", .title = "Fonts" };
+		std::vector<std::string> drawn;
+		std::vector<std::string> missing;
+		std::vector<std::string> borrowed;
+		drawn.reserve( languages.size() );
+		for ( const lang::Language* language : languages )
+		{
+			const auto coverage = render::checkFont( language->sampleText(), cfg.popup.font_family );
+			if ( coverage.missing > 0 )
+			{
+				missing.emplace_back( language->name() );
+				continue;
+			}
+			drawn.push_back( std::format( "{} with {}", language->name(), coverage.family.empty() ? std::string( "the default font" ) : coverage.family ) );
+			if ( !cfg.popup.font_family.empty() && !coverage.family.empty() && coverage.family != cfg.popup.font_family )
+			{
+				borrowed.emplace_back( language->name() );
+			}
+		}
+		if ( !missing.empty() )
+		{
+			check.status = Severity::Error;
+			check.detail = std::format( "No installed font has every character of {} text, so popups show boxes for it. Install a font that has, such as Noto Sans (Noto Sans CJK JP for Japanese).", joined( missing, " and " ) );
+		}
+		else
+		{
+			check.detail = std::format( "Text is drawn: {}.", joined( drawn, "; " ) );
+			if ( !borrowed.empty() )
+			{
+				check.status = Severity::Info;
+				check.detail += std::format( " The chosen font, {}, has no {} of its own.", cfg.popup.font_family, joined( borrowed, " or " ) );
+			}
+		}
+		checks.push_back( std::move( check ) );
 	}
 
 	void Daemon::checkScreen( std::vector<health::Check>& checks, const config::Config& cfg )
@@ -462,12 +594,7 @@ namespace lexiglance::daemon
 
 		{
 			Check check{ .id = "config", .title = "Settings file" };
-#ifdef _WIN32
-			const bool writable = ::_waccess( config_path_.parent_path().c_str(), 2 ) == 0;
-#else
-			const bool writable = ::access( config_path_.parent_path().c_str(), W_OK ) == 0;
-#endif
-			if ( !writable )
+			if ( !directoryWritable( config_path_.parent_path() ) )
 			{
 				check.status = Severity::Error;
 				check.detail = std::format( "{} cannot be written, so changed settings are lost when Lexiglance restarts.", config_path_.parent_path().string() );
@@ -475,6 +602,38 @@ namespace lexiglance::daemon
 			else
 			{
 				check.detail = std::format( "Saved in {}.", config_path_.string() );
+			}
+			checks.push_back( std::move( check ) );
+		}
+
+		{
+			Check                                                            check{ .id = "folders", .title = "Data folders" };
+			const std::vector<std::pair<const char*, std::filesystem::path>> folders{
+				{ "dictionaries and OCR", paths::dataDir() },
+				{ "logs", paths::stateDir() },
+				{ "downloads", paths::cacheDir() },
+			};
+			std::vector<std::string> bad;
+			std::vector<std::string> good;
+			for ( const auto& [label, directory] : folders )
+			{
+				if ( directoryWritable( directory ) )
+				{
+					good.push_back( std::format( "{} ({})", label, directory.string() ) );
+				}
+				else
+				{
+					bad.push_back( std::format( "{} ({})", label, directory.string() ) );
+				}
+			}
+			if ( !bad.empty() )
+			{
+				check.status = Severity::Error;
+				check.detail = std::format( "Cannot write {}: Lexiglance cannot save dictionaries, logs or downloads there.", joined( bad, "; " ) );
+			}
+			else
+			{
+				check.detail = std::format( "Writable: {}.", joined( good, "; " ) );
 			}
 			checks.push_back( std::move( check ) );
 		}

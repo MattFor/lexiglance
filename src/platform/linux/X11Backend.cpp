@@ -1840,7 +1840,16 @@ namespace lexiglance::platform
 						{
 							events_.adjust_length( raw->detail == 4 ? 1 : -1 );
 						}
-						// Buttons 4-7 are the wheel; only real clicks dismiss the popup.
+						else if ( pressed && ( raw->detail == 4 || raw->detail == 5 ) && popup_mapped_ && events_.click_outside )
+						{
+							// Scrolling the page under the pointer leaves the text behind: close like a click outside.
+							const Point at = pointer();
+							if ( !popup_rect_.contains( at ) )
+							{
+								events_.click_outside( at );
+							}
+						}
+						// Buttons 4-7 are the wheel; only real clicks dismiss the popup (wheel handled above).
 						if ( pressed && ( raw->detail <= 3 || raw->detail >= 8 ) && events_.click_outside )
 						{
 							const Point at = pointer();

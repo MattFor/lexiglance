@@ -1,6 +1,7 @@
 #include "OcrGroup.h"
 
 #include "DaemonClient.h"
+#include "OcrInstall.h"
 #include "Settings.h"
 #include "VcRedist.h"
 
@@ -8,19 +9,14 @@
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/language/Language.h>
 
-#include <QDir>
 #include <QFile>
 #include <QFormLayout>
 #include <QHBoxLayout>
-#include <QMessageBox>
-#include <QProcess>
 #include <QSignalBlocker>
-#include <QSysInfo>
 #include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
-#include <iterator>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -30,16 +26,6 @@ namespace lexiglance::gui
 
 	namespace
 	{
-
-		const QString onnx_runtime_version = QStringLiteral( "1.30.0" );
-		// RapidOCR's ONNX exports of the PaddleOCR models; languages name theirs relative to it (lang::OcrModels).
-		const QString paddle_release = QStringLiteral( "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/" );
-		const QString paddle_models  = paddle_release + QStringLiteral( "PP-OCRv6/" );
-
-		QString ocrPath( const char* name )
-		{
-			return qs( ( paths::ocrDir() / name ).string() );
-		}
 
 		QString modelDirectory( const std::string& model )
 		{
@@ -67,132 +53,6 @@ namespace lexiglance::gui
 		{
 			const QString directory = modelDirectory( model );
 			return std::ranges::all_of( tesseractModels( languages ), [&]( const QString& name ) { return QFile::exists( directory + "/" + name + ".traineddata" ); } );
-		}
-
-		// PaddleOCR's files for the languages, each with where it comes from: the detector, the default recogniser
-		// (Chinese, Japanese, English) when a language needs it, and the recognisers of the others.
-		std::vector<std::pair<QUrl, QString>> paddleFiles( std::span<const lang::Language* const> languages )
-		{
-			const QString                         models = ocrPath( "paddle" );
-			std::vector<std::pair<QUrl, QString>> files{ { QUrl( paddle_models + "det/PP-OCRv6_det_small.onnx" ), models + "/det.onnx" } };
-			if ( std::ranges::any_of( languages, []( const lang::Language* language ) { return language->ocrModels().paddle.empty(); } ) )
-			{
-				files.emplace_back( QUrl( paddle_models + "rec/PP-OCRv6_rec_small.onnx" ), models + "/rec.onnx" );
-			}
-			for ( const lang::Language* language : languages )
-			{
-				const auto    ocr    = language->ocrModels();
-				const QString target = models + "/" + qs( ocr.paddleFile() );
-				if ( !ocr.paddle.empty() && std::ranges::none_of( files, [&]( const auto& file ) { return file.second == target; } ) )
-				{
-					files.emplace_back( QUrl( paddle_release + qs( ocr.paddle ) ), target );
-				}
-			}
-			return files;
-		}
-
-		bool paddleInstalled( std::span<const lang::Language* const> languages )
-		{
-			return std::ranges::all_of( paddleFiles( languages ), []( const auto& file ) { return QFile::exists( file.second ); } );
-		}
-
-		// What is missing, or everything again when nothing is.
-		std::vector<std::pair<QUrl, QString>> toDownload( std::vector<std::pair<QUrl, QString>> files )
-		{
-			if ( !std::ranges::all_of( files, []( const auto& file ) { return QFile::exists( file.second ); } ) )
-			{
-				std::erase_if( files, []( const auto& file ) { return QFile::exists( file.second ); } );
-			}
-			return files;
-		}
-
-#ifdef Q_OS_WIN
-		// The runtime's library as the daemon loads it, and the release archives' format.
-		const QString runtime_library = QStringLiteral( "onnxruntime.dll" );
-		const QString archive_suffix  = QStringLiteral( ".zip" );
-#else
-		const QString runtime_library = QStringLiteral( "libonnxruntime.so" );
-		const QString archive_suffix  = QStringLiteral( ".tgz" );
-#endif
-
-		// The ONNX Runtime release archive for this machine (without extension), if one exists.
-		QString runtimeArchive()
-		{
-			const QString cpu = QSysInfo::currentCpuArchitecture();
-			if ( QSysInfo::kernelType() == QStringLiteral( "winnt" ) )
-			{
-				if ( cpu == QStringLiteral( "x86_64" ) )
-				{
-					return QStringLiteral( "onnxruntime-win-x64-" ) + onnx_runtime_version;
-				}
-				if ( cpu == QStringLiteral( "arm64" ) )
-				{
-					return QStringLiteral( "onnxruntime-win-arm64-" ) + onnx_runtime_version;
-				}
-				return {};
-			}
-			if ( QSysInfo::kernelType() != QStringLiteral( "linux" ) )
-			{
-				return {};
-			}
-			if ( cpu == QStringLiteral( "x86_64" ) )
-			{
-				return QStringLiteral( "onnxruntime-linux-x64-" ) + onnx_runtime_version;
-			}
-			if ( cpu == QStringLiteral( "arm64" ) )
-			{
-				return QStringLiteral( "onnxruntime-linux-aarch64-" ) + onnx_runtime_version;
-			}
-			return {};
-		}
-
-		// Takes the library and its license out of a downloaded release archive; an error message on failure.
-		QString unpackRuntime( const QString& directory, const QString& archive )
-		{
-			const QString packed = directory + "/" + archive + archive_suffix;
-#ifdef Q_OS_WIN
-			const QString library = QStringLiteral( "lib/onnxruntime.dll" );
-			// Windows' own bsdtar (not another tar on PATH), which reads zip archives too.
-			const QString program = qEnvironmentVariable( "SystemRoot", QStringLiteral( "C:\\Windows" ) ) + QStringLiteral( "\\System32\\tar.exe" );
-			const QString extract = QStringLiteral( "-xf" );
-#else
-			const QString library = "lib/libonnxruntime.so." + onnx_runtime_version;
-			const QString program = QStringLiteral( "tar" );
-			const QString extract = QStringLiteral( "-xzf" );
-#endif
-			QProcess tar;
-			tar.start( program, { extract, packed, QStringLiteral( "-C" ), directory, QStringLiteral( "--strip-components=1" ), archive + "/LICENSE", archive + "/" + library } );
-			const bool unpacked = tar.waitForFinished( 60000 ) && tar.exitStatus() == QProcess::NormalExit && tar.exitCode() == 0;
-			QFile::remove( packed );
-			if ( !unpacked )
-			{
-				return QStringLiteral( "cannot unpack ONNX Runtime: " ) + QString::fromLocal8Bit( tar.readAllStandardError() ).trimmed();
-			}
-			QFile::remove( directory + "/" + runtime_library );
-			const bool moved = QFile::rename( directory + "/" + library, directory + "/" + runtime_library );
-			QDir( directory + "/lib" ).removeRecursively();
-			return moved ? QString() : QStringLiteral( "cannot install ONNX Runtime" );
-		}
-
-		// Whether to fetch the Visual C++ redistributable along with PaddleOCR: where to put it, or empty when this
-		// machine already has it or the user would rather not. Downloading the runtime is the moment it starts to
-		// matter, and for a portable copy or a build from source it is the only moment there is.
-		QString askVcRedist( QWidget* parent )
-		{
-			// Empty off Windows, so nothing below happens there.
-			const QString missing = vcredist::missing();
-			if ( missing.isEmpty() )
-			{
-				return {};
-			}
-			const auto answer = QMessageBox::question(
-					parent,
-					QStringLiteral( "Microsoft Visual C++ Redistributable" ),
-					QStringLiteral( "Reading text from the screen needs the Microsoft Visual C++ Redistributable, which this computer does not have "
-			                        "(%1). Everything else in Lexiglance works without it.\n\nInstall it as well? Windows will ask for permission." )
-							.arg( missing )
-			);
-			return answer == QMessageBox::Yes ? vcredist::installerPath() : QString();
 		}
 
 		int modeIndex( config::OcrMode mode )
@@ -435,11 +295,11 @@ namespace lexiglance::gui
 		else
 		{
 			QString text = QStringLiteral( "Download PaddleOCR (about 40 MB)" );
-			if ( paddleInstalled( languages ) )
+			if ( ocr_install::paddleInstalled( languages ) )
 			{
 				text = QStringLiteral( "Re-download PaddleOCR" );
 			}
-			else if ( QFile::exists( ocrPath( "paddle" ) + "/det.onnx" ) )
+			else if ( QFile::exists( ocr_install::ocrPath( "paddle" ) + "/det.onnx" ) )
 			{
 				text = QStringLiteral( "Download PaddleOCR for more languages" );
 			}
@@ -537,28 +397,19 @@ namespace lexiglance::gui
 		{
 			files.emplace_back( QUrl( base + name + ".traineddata" ), directory + "/" + name + ".traineddata" );
 		}
-		fetchAll( QStringLiteral( "Tesseract models" ), toDownload( std::move( files ) ), {} );
+		fetchAll( QStringLiteral( "Tesseract models" ), ocr_install::toDownload( std::move( files ) ), {} );
 	}
 
 	void OcrGroup::downloadPaddle()
 	{
-		const QString runtime = ocrPath( "runtime" );
-		auto          files   = toDownload( paddleFiles( ocrLanguages() ) );
-		// ONNX Runtime comes along unless it is already there; elsewhere it has to be installed from the system.
-		const QString archive = runtimeArchive();
-		const bool    unpack  = !archive.isEmpty() && !QFile::exists( runtime + "/" + runtime_library );
-		if ( unpack )
-		{
-			files.emplace_back( QUrl( QStringLiteral( "https://github.com/microsoft/onnxruntime/releases/download/v%1/%2%3" ).arg( onnx_runtime_version, archive, archive_suffix ) ), runtime + "/" + archive + archive_suffix );
-		}
-		// That runtime is Microsoft's own build and imports their redistributable, which Lexiglance itself does not.
-		// It is installed once everything is downloaded (installRedist), not here.
-		redist_ = askVcRedist( this );
-		if ( !redist_.isEmpty() )
-		{
-			files.emplace_back( vcredist::url(), redist_ );
-		}
-		fetchAll( QStringLiteral( "PaddleOCR" ), std::move( files ), [runtime, archive, unpack] { return unpack ? unpackRuntime( runtime, archive ) : QString(); } );
+		const QString runtime = ocr_install::ocrPath( "runtime" );
+		auto          files   = ocr_install::toDownload( ocr_install::paddleFiles( ocrLanguages() ) );
+		const QString archive = ocr_install::runtimeArchive();
+		const bool    unpack  = !archive.isEmpty() && !QFile::exists( runtime + "/" + ocr_install::runtimeLibraryName() );
+		ocr_install::appendRuntime( files, &redist_, this );
+		fetchAll( QStringLiteral( "PaddleOCR" ), std::move( files ), [runtime, archive, unpack] {
+			return unpack ? ocr_install::unpackRuntime( runtime, archive ) : QString();
+		} );
 	}
 
 	void OcrGroup::downloadRedist()

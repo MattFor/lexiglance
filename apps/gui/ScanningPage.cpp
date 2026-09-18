@@ -76,6 +76,7 @@ namespace lexiglance::gui
 		highlight_( new QCheckBox( QStringLiteral( "Highlight the matched text" ) ) ),
 		accessibility_( new QCheckBox( QStringLiteral( "Ask applications to expose their text (accessibility bus)" ) ) ),
 		known_languages_( new QCheckBox( QStringLiteral( "Only look up text in a supported language (no popups for English interface text)" ) ) ),
+		preferred_( new QComboBox() ),
 		wheel_( new QCheckBox( QStringLiteral( "Mouse wheel changes the looked-up length while the trigger is held" ) ) ),
 		wheel_lock_( new QCheckBox( QStringLiteral( "Also keep the wheel from the window underneath (uses a mouse hook some anti-cheats dislike)" ) ) ),
 		selection_( new QComboBox() ),
@@ -139,6 +140,9 @@ namespace lexiglance::gui
 		form->addRow( highlight_ );
 		form->addRow( accessibility_ );
 		// Fewer languages to tell apart make lookups and OCR faster.
+		auto* languages_col = new QVBoxLayout();
+		languages_col->setContentsMargins( 0, 0, 0, 0 );
+		languages_col->setSpacing( 4 );
 		auto* languages_row = new QHBoxLayout();
 		for ( const lang::Language* language : lang::languages() )
 		{
@@ -148,7 +152,11 @@ namespace lexiglance::gui
 			languages_row->addWidget( box );
 		}
 		languages_row->addStretch( 1 );
-		form->addRow( QStringLiteral( "Languages" ), languages_row );
+		languages_col->addLayout( languages_row );
+		languages_col->addWidget( note( QStringLiteral( "At least one language must stay on." ) ) );
+		form->addRow( QStringLiteral( "Languages" ), languages_col );
+		preferred_->setToolTip( QStringLiteral( "Used when several languages share a script (for example Russian and Ukrainian), and as a fallback." ) );
+		form->addRow( QStringLiteral( "Preferred" ), preferred_ );
 		form->addRow( known_languages_ );
 		form->addRow( wheel_ );
 		form->addRow( wheel_lock_ );
@@ -244,10 +252,22 @@ namespace lexiglance::gui
 				{
 					disabled.push_back( code );
 				}
-				updateLanguageBoxes();
+				updateLanguages();
 				commit();
 			} );
 		}
+		connect( preferred_, &QComboBox::currentIndexChanged, this, [this, commit]( int ) {
+			if ( loading_ )
+			{
+				return;
+			}
+			const QString code = preferred_->currentData().toString();
+			if ( !code.isEmpty() )
+			{
+				settings().config().language = ss( code );
+				commit();
+			}
+		} );
 		connect( known_languages_, &QCheckBox::toggled, this, [this, commit]( bool v ) {
 			settings().config().scan.known_languages_only = v;
 			commit();
@@ -381,7 +401,8 @@ namespace lexiglance::gui
 			const QSignalBlocker blocker( box );
 			box->setChecked( !std::ranges::contains( settings().config().disabled_languages, code ) );
 		}
-		updateLanguageBoxes();
+		const std::string preferred_before = settings().config().language;
+		updateLanguages();
 		wheel_->setChecked( scan.wheel_length );
 		wheel_lock_->setChecked( scan.wheel_lock );
 		wheel_lock_->setEnabled( scan.wheel_length );
@@ -399,14 +420,45 @@ namespace lexiglance::gui
 		}
 		ocr_->refresh();
 		loading_ = false;
+		// Preferred must be one of the languages that are on; repair a stale value from an older config.
+		if ( settings().config().language != preferred_before )
+		{
+			settings().commit();
+		}
 	}
 
-	void ScanningPage::updateLanguageBoxes()
+	void ScanningPage::updateLanguages()
 	{
 		const auto on = std::ranges::count_if( language_boxes_, []( const auto& entry ) { return entry.first->isChecked(); } );
 		for ( const auto& [box, code] : language_boxes_ )
 		{
 			box->setEnabled( on > 1 || !box->isChecked() );
+		}
+
+		const QSignalBlocker blocker( preferred_ );
+		const QString        previous = preferred_->currentData().toString();
+		preferred_->clear();
+		for ( const auto& [box, code] : language_boxes_ )
+		{
+			if ( box->isChecked() )
+			{
+				preferred_->addItem( box->text(), qs( code ) );
+			}
+		}
+		std::string& preferred = settings().config().language;
+		int          index     = preferred_->findData( qs( preferred ) );
+		if ( index < 0 )
+		{
+			index = preferred_->findData( previous );
+		}
+		if ( index < 0 )
+		{
+			index = 0;
+		}
+		preferred_->setCurrentIndex( index );
+		if ( preferred_->count() > 0 )
+		{
+			preferred = ss( preferred_->currentData().toString() );
 		}
 	}
 

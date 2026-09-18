@@ -1,6 +1,7 @@
 #include "Capture.h"
 
 #include <lexiglance/core/Glob.h>
+#include <lexiglance/language/Language.h>
 #include <lexiglance/ocr/Onnx.h>
 
 #include <algorithm>
@@ -74,6 +75,15 @@ namespace lexiglance::platform
 		}
 		if ( auto text = attempt( first ) )
 		{
+			// Accessibility often returns English chrome beside an image (a README figure, a game HUD label). When that
+			// text is not in a language Lexiglance reads, try OCR so the pixels under the pointer still get a chance.
+			if ( first == accessibility_.get() && second != nullptr && !lang::startsInKnownScript( text->text ) )
+			{
+				if ( auto ocr = attempt( second ) )
+				{
+					return ocr;
+				}
+			}
 			return text;
 		}
 		return attempt( second );

@@ -87,7 +87,9 @@ Most languages are a single JSON file in `data/languages`. [docs/languages.md](d
 ## Style
 
 - Format with the repository's `.clang-format`; CI checks it.
-- `clang-tidy` must stay at zero findings (`run-clang-tidy -p build/debug`).
+- `clang-tidy` must stay at zero findings (`clang-tidy -p build --quiet --warnings-as-errors='*'` on the same sources CI
+  checks). Only tidy platform sources for the OS you built (`src/platform/linux` on Linux, `src/platform/windows` on
+  Windows): the wrong OS fails the first missing system header and then floods false positives.
 - Comments explain why, not what, and are rare. Prefer clear names over comments.
 - New behaviour comes with a test in `tests/` (see `tests/Test.h` for the tiny framework).
 - Never add anything that injects input, grabs input beyond what `docs/anticheat.md` describes, or touches other

@@ -5,6 +5,7 @@
 #include "DaemonClient.h"
 #include "HelpOverlay.h"
 #include "Settings.h"
+#include "SetupWizard.h"
 
 #include <QAction>
 #include <QLabel>
@@ -34,7 +35,11 @@ namespace lexiglance::gui
 		// What can be done and where, over the window; `first` on the first start.
 		void showHelp( bool first = false );
 
-		// The help, on the first start only.
+		// First-run / post-update setup wizard. `lock_seconds` 0 when simulating from Help.
+		// `required`: first-run — the wizard cannot be skipped.
+		void showSetup( int lock_seconds = 5, bool reinstall = false, bool required = false );
+
+		// Setup on the first start and after an automatic update; otherwise the short help once for older installs.
 		void welcome();
 
 	protected:
@@ -55,6 +60,7 @@ namespace lexiglance::gui
 		int                       tray_tries_   = 0;
 		QAction*                  pause_action_ = nullptr;
 		HelpOverlay*              help_         = nullptr;
+		SetupWizard*              setup_        = nullptr;
 		QLabel*                   connection_;
 		QLabel*                   summary_;
 		QPushButton*              start_button_;

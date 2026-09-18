@@ -4,6 +4,8 @@
 #include <lexiglance/core/Paths.h>
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QPushButton>
@@ -102,6 +104,18 @@ namespace lexiglance::gui
 	QSettings applicationMemory()
 	{
 		return { qs( ( paths::configDir() / "settings-application.ini" ).string() ), QSettings::IniFormat };
+	}
+
+	QString diagnosisZipPath()
+	{
+		return qs( ( paths::cacheDir() / "diagnosis" / "lexiglance-diagnosis.zip" ).string() );
+	}
+
+	void clearDiagnosisZip()
+	{
+		const QString zip = diagnosisZipPath();
+		QFile::remove( zip );
+		QDir().rmdir( QFileInfo( zip ).absolutePath() );
 	}
 
 } // namespace lexiglance::gui

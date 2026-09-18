@@ -37,11 +37,19 @@ namespace lexiglance::gui
 			}
 			if ( auto parsed = config::Config::fromJson( ( *result )["config"] ) )
 			{
-				config_ = std::move( *parsed );
+				// Local edits from setup (or a page) that committed before the first load must not be wiped.
+				if ( !pending_ )
+				{
+					config_ = std::move( *parsed );
+				}
 				loaded_ = true;
 				for ( const auto& handler : handlers_ )
 				{
 					handler();
+				}
+				if ( pending_ )
+				{
+					timer_->start();
 				}
 			}
 		} );
@@ -49,6 +57,7 @@ namespace lexiglance::gui
 
 	void Settings::commit()
 	{
+		pending_ = true;
 		if ( loaded_ )
 		{
 			timer_->start();
@@ -68,6 +77,7 @@ namespace lexiglance::gui
 	void Settings::push()
 	{
 		pushed_at_ = std::chrono::steady_clock::now();
+		pending_   = false;
 		client_->call( "config.set", "{\"config\":" + config_.toJson( false ) + "}" );
 	}
 

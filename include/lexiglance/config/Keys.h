@@ -59,7 +59,8 @@ namespace lexiglance::config
 
 	[[nodiscard]] std::string_view keyName( Key key ) noexcept;
 
-	// keyName as this platform's users know the key: "Super_L" on X11, "Win_L" on Windows.
+	// keyName as this platform's users know the key: "Left Super" on X11, "Left Win" on Windows,
+	// "Left Alt" / "Left Ctrl" / "Caps Lock" everywhere.
 	[[nodiscard]] std::string_view displayKeyName( Key key ) noexcept;
 
 	// Any name parseKey accepts, spelled as this platform's users know the key. Unknown names come back unchanged.

@@ -1,18 +1,24 @@
 #include "AboutPage.h"
 
 #include "DaemonClient.h"
+#include "Settings.h"
 
+#include <lexiglance/core/Json.h>
+#include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Version.h>
+#include <lexiglance/core/Zip.h>
 #include <lexiglance/language/Language.h>
 
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QDesktopServices>
+#include <QFile>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
-#include <QPushButton>
+#include <QMimeData>
 #include <QScrollBar>
 #include <QSysInfo>
 #include <QTimer>
@@ -20,6 +26,8 @@
 #include <QVBoxLayout>
 
 #include <array>
+#include <memory>
+#include <utility>
 
 namespace lexiglance::gui
 {
@@ -45,7 +53,6 @@ namespace lexiglance::gui
 			const char* url;
 		};
 
-		// What Lexiglance is built on or downloads, and the licence of each.
 		constexpr std::array<Component, 11> components{ {
 				{ .name = "Qt", .use = "the settings application", .licence = "LGPL 3.0", .url = "https://www.qt.io" },
 				{ .name = "Breeze icons", .use = "the icons of this window", .licence = "LGPL 3.0", .url = "https://invent.kde.org/frameworks/breeze-icons" },
@@ -81,7 +88,6 @@ namespace lexiglance::gui
 			return link( QUrl::fromLocalFile( local ).toString(), local );
 		}
 
-		// The system this runs on, without Qt's version: short enough to sit beside the version.
 		QString platformName()
 		{
 			return QStringLiteral( "%1 (%2)" ).arg( QSysInfo::prettyProductName(), QSysInfo::currentCpuArchitecture() );
@@ -92,8 +98,6 @@ namespace lexiglance::gui
 			return QStringLiteral( "%1, Qt %2" ).arg( platformName(), QString::fromLatin1( qVersion() ) );
 		}
 
-		// Which build this is: one made from the release tag, or one from anywhere else, named by the commit it came
-		// from when that is known. It belongs in a bug report, so it is said plainly wherever the version is.
 		QString buildName()
 		{
 			if ( channel == "stable" )
@@ -110,17 +114,32 @@ namespace lexiglance::gui
 			return button;
 		}
 
+		Result<> addText( ZipWriter& zip, std::string_view name, const QString& text )
+		{
+			const QByteArray bytes = text.toUtf8();
+			return zip.add( name, std::as_bytes( std::span( bytes.constData(), static_cast<std::size_t>( bytes.size() ) ) ) );
+		}
+
+		Result<> addOptionalFile( ZipWriter& zip, std::string_view name, const std::filesystem::path& path )
+		{
+			if ( !std::filesystem::is_regular_file( path ) )
+			{
+				return {};
+			}
+			return zip.addFile( name, path );
+		}
+
 	} // namespace
 
 	AboutPage::AboutPage( Context context, QWidget* parent ) :
 		Page( std::move( context ), parent ),
-		text_( new QTextBrowser() )
+		text_( new QTextBrowser() ),
+		diagnosis_( new QPushButton( QStringLiteral( "Copy diagnosis..." ) ) )
 	{
 		auto* layout = new QVBoxLayout( this );
 		layout->setContentsMargins( 28, 24, 28, 20 );
 		layout->setSpacing( 18 );
 
-		// Who and what: the icon, the name and version, the author, and where to go from here.
 		auto* header = new QHBoxLayout();
 		header->setSpacing( 20 );
 		auto* icon = new QLabel();
@@ -151,14 +170,12 @@ namespace lexiglance::gui
 		links->addWidget( opener( QStringLiteral( "Website" ), project, this ) );
 		links->addWidget( opener( QStringLiteral( "Report a problem" ), project + QStringLiteral( "/issues" ), this ) );
 		links->addWidget( opener( QStringLiteral( "Releases" ), project + QStringLiteral( "/releases" ), this ) );
-		auto* copy = new QPushButton( QStringLiteral( "Copy system information" ) );
-		copy->setToolTip( QStringLiteral( "The versions of Lexiglance, its daemon, Qt and the system, for a bug report" ) );
-		links->addWidget( copy );
+		diagnosis_->setToolTip( QStringLiteral( "Builds a zip with system information, health, settings and logs, and copies that file to the clipboard" ) );
+		links->addWidget( diagnosis_ );
 		links->addStretch( 1 );
 		identity->addSpacing( 4 );
 		identity->addLayout( links );
 		header->addLayout( identity, 1 );
-		// Top right, apart from the links: a tip for the project.
 		auto* donate = opener( QStringLiteral( "♥  Support Lexiglance" ), donateUrl(), this );
 		donate->setObjectName( QStringLiteral( "donateButton" ) );
 		donate->setCursor( Qt::PointingHandCursor );
@@ -171,16 +188,11 @@ namespace lexiglance::gui
 		layout->addWidget( text_, 1 );
 
 		connect( text_, &QTextBrowser::anchorClicked, this, []( const QUrl& url ) { QDesktopServices::openUrl( url ); } );
-		connect( copy, &QPushButton::clicked, this, [this, copy] {
-			QGuiApplication::clipboard()->setText( systemInformation() );
-			copy->setText( QStringLiteral( "Copied ✓" ) );
-			QTimer::singleShot( 1500, copy, [copy] { copy->setText( QStringLiteral( "Copy system information" ) ); } );
-		} );
+		connect( diagnosis_, &QPushButton::clicked, this, [this] { copyDiagnosis(); } );
 
 		daemon_ = QStringLiteral( "not running" );
 		render();
 
-		// Kept current while open: the daemon's state, and the attributions of the dictionaries installed.
 		client().onEvent( [this]( std::string_view event, const json::Value& ) {
 			if ( event == "status.changed" || event == "dictionaries.changed" )
 			{
@@ -199,7 +211,6 @@ namespace lexiglance::gui
 			}
 			else
 			{
-				// The reason in full as well, since this text is meant to be pasted into a bug report.
 				const QString problem = qs( ( *status )["capture_problem"].asString() );
 				daemon_               = QStringLiteral( "%1, %2 backend, text capture: %3%4" )
 				                                .arg( qs( ( *status )["version"].asString() ), qs( ( *status )["backend"].asString() ), qs( ( *status )["capture"].asString() ), problem.isEmpty() ? QString() : " (" + problem + ")" );
@@ -243,13 +254,12 @@ namespace lexiglance::gui
 		html += row( QStringLiteral( "Settings" ), folder( paths::configDir() ) );
 		html += row( QStringLiteral( "Dictionaries" ), folder( paths::dictionariesDir() ) );
 		html += row( QStringLiteral( "OCR models" ), folder( paths::ocrDir() ) );
-		// Language files of one's own go here (docs/languages.md).
 		std::error_code ec;
 		std::filesystem::create_directories( lang::languagesDirectory(), ec );
 		html += row( QStringLiteral( "Languages" ), folder( lang::languagesDirectory() ) );
-		// Two logs: what the daemon did, and what this window did.
 		html += row( QStringLiteral( "Daemon log" ), folder( paths::stateDir() / "daemon.log" ) );
 		html += row( QStringLiteral( "Application log" ), folder( paths::stateDir() / "application.log" ) );
+		html += row( QStringLiteral( "Diagnosis zip" ), folder( std::filesystem::path( ss( diagnosisZipPath() ) ) ) );
 		html += QStringLiteral( "</table>" );
 
 		html += QStringLiteral( "<h3>Licence</h3><p>Lexiglance is free software under the %1. Copyright © 2026 %2.</p>" )
@@ -272,9 +282,84 @@ namespace lexiglance::gui
 		text_->verticalScrollBar()->setValue( scroll );
 	}
 
-	QString AboutPage::systemInformation() const
+	void AboutPage::copyDiagnosis()
 	{
-		return QStringLiteral( "Lexiglance %1 (%2)\nDaemon: %3\nSystem: %4\nSettings: %5\n" ).arg( qs( version ), buildName(), daemon_, systemDescription(), qs( paths::configDir().string() ) );
+		diagnosis_->setEnabled( false );
+		diagnosis_->setText( QStringLiteral( "Preparing..." ) );
+
+		auto status_json = std::make_shared<QString>();
+		auto health_json = std::make_shared<QString>();
+		auto pending     = std::make_shared<int>( 2 );
+
+		const auto finish = [this, status_json, health_json, pending] {
+			if ( --*pending > 0 )
+			{
+				return;
+			}
+
+			const QString zip_path = diagnosisZipPath();
+			ZipWriter     zip( std::filesystem::path( ss( zip_path ) ) );
+
+			QString summary;
+			summary += QStringLiteral( "Lexiglance %1 (%2)\n" ).arg( qs( version ), buildName() );
+			summary += QStringLiteral( "Daemon: %1\n" ).arg( daemon_ );
+			summary += QStringLiteral( "System: %1\n" ).arg( systemDescription() );
+			summary += QStringLiteral( "Program: %1\n" ).arg( QCoreApplication::applicationFilePath() );
+			summary += QStringLiteral( "Settings: %1\n" ).arg( qs( paths::configDir().string() ) );
+			summary += QStringLiteral( "Data: %1\n" ).arg( qs( paths::dataDir().string() ) );
+			summary += QStringLiteral( "Cache: %1\n" ).arg( qs( paths::cacheDir().string() ) );
+			summary += QStringLiteral( "State: %1\n" ).arg( qs( paths::stateDir().string() ) );
+			summary += QStringLiteral( "Languages: %1\n" ).arg( languageNames() );
+			summary += QStringLiteral( "Trigger: %1\n" ).arg( chordText( settings().config().scan.trigger ) );
+
+			auto fail = [&]( const Result<>& step ) -> bool {
+				if ( step )
+				{
+					return false;
+				}
+				log::warn( "diagnosis: {}", step.error().message );
+				diagnosis_->setEnabled( true );
+				diagnosis_->setText( QStringLiteral( "Copy diagnosis..." ) );
+				showSummary( QStringLiteral( "Could not build the diagnosis zip." ) );
+				return true;
+			};
+
+			if ( fail( addText( zip, "summary.txt", summary ) ) || fail( addText( zip, "status.json", status_json->isEmpty() ? QStringLiteral( "{}\n" ) : *status_json ) ) || fail( addText( zip, "health.json", health_json->isEmpty() ? QStringLiteral( "{}\n" ) : *health_json ) ) || fail( addOptionalFile( zip, "config.json", paths::configFile() ) ) || fail( addOptionalFile( zip, "settings-application.ini", paths::configDir() / "settings-application.ini" ) ) || fail( addOptionalFile( zip, "daemon.log", paths::stateDir() / "daemon.log" ) ) || fail( addOptionalFile( zip, "application.log", paths::stateDir() / "application.log" ) ) || fail( zip.close() ) )
+			{
+				return;
+			}
+
+			auto* mime = new QMimeData();
+			mime->setUrls( { QUrl::fromLocalFile( zip_path ) } );
+			mime->setText( zip_path );
+			QGuiApplication::clipboard()->setMimeData( mime );
+
+			diagnosis_->setEnabled( true );
+			diagnosis_->setText( QStringLiteral( "Copied ✓" ) );
+			showSummary( QStringLiteral( "Diagnosis zip copied to the clipboard." ) );
+			QTimer::singleShot( 2000, diagnosis_, [this] { diagnosis_->setText( QStringLiteral( "Copy diagnosis..." ) ); } );
+			log::info( "diagnosis zip ready at {}", ss( zip_path ) );
+		};
+
+		client().call( "status", "{}", [status_json, finish]( const json::Value* status, const QString& ) {
+			if ( status != nullptr )
+			{
+				*status_json = qs( json::serialize( *status ) ) + '\n';
+			}
+			finish();
+		} );
+		client().call(
+				"health",
+				"{\"interactive\":false}",
+				[health_json, finish]( const json::Value* health, const QString& ) {
+					if ( health != nullptr )
+					{
+						*health_json = qs( json::serialize( *health ) ) + '\n';
+					}
+					finish();
+				},
+				30000
+		);
 	}
 
 } // namespace lexiglance::gui

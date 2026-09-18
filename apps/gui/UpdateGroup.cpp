@@ -225,6 +225,8 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 			memory.remove( QStringLiteral( "update/installing" ) );
 			QDir( updateDirectory() ).removeRecursively();
 			status_->setText( QStringLiteral( "Updated to Lexiglance %1." ).arg( qs( version ) ) );
+			// Offer language / OCR setup again after an update (dictionaries already installed are skipped).
+			memory.setValue( QStringLiteral( "setup/after_update" ), true );
 			ensureVcRedist();
 		}
 		showState();

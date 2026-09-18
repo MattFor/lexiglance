@@ -56,6 +56,10 @@ namespace lexiglance::gui
 	// The settings application's own memory, apart from the daemon's configuration: what it decided or showed once.
 	[[nodiscard]] QSettings applicationMemory();
 
+	// Bug-report zip under the Lexiglance cache; deleted when all settings are reset.
+	[[nodiscard]] QString diagnosisZipPath();
+	void                  clearDiagnosisZip();
+
 	struct Context
 	{
 		DaemonClient* client   = nullptr;

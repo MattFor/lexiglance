@@ -419,7 +419,7 @@ namespace lexiglance::platform
 
 		private:
 			// The element's text pattern, or its nearest ancestor's.
-			Com<IUIAutomationTextPattern> textPatternOf( Com<IUIAutomationElement> element ) const
+			[[nodiscard]] Com<IUIAutomationTextPattern> textPatternOf( Com<IUIAutomationElement> element ) const
 			{
 				for ( int depth = 0; depth < pattern_depth && element; ++depth )
 				{

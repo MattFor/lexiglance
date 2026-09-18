@@ -29,8 +29,8 @@ namespace lexiglance::gui
 	private:
 		void record();
 		void storeTrigger();
-		// The last language on cannot be turned off.
-		void updateLanguageBoxes();
+		// Keeps at least one language on, and Preferred limited to those that are on.
+		void updateLanguages();
 
 		std::array<QComboBox*, 3> keys_{};
 		QPushButton*              record_;
@@ -45,6 +45,7 @@ namespace lexiglance::gui
 		QCheckBox*                known_languages_;
 		// A box for each language, with its code.
 		std::vector<std::pair<QCheckBox*, std::string>> language_boxes_;
+		QComboBox*                                      preferred_;
 		QCheckBox*                                      wheel_;
 		QCheckBox*                                      wheel_lock_;
 		QComboBox*                                      selection_;

@@ -1,5 +1,7 @@
 #include "HelpOverlay.h"
 
+#include <lexiglance/core/Version.h>
+
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -45,12 +47,14 @@ namespace lexiglance::gui
 
 	} // namespace
 
-	HelpOverlay::HelpOverlay( std::function<void( const QString& )> show_page, QWidget* parent ) :
+	HelpOverlay::HelpOverlay( std::function<void( const QString& )> show_page, std::function<void()> simulate_setup, QWidget* parent ) :
 		QWidget( parent ),
 		show_page_( std::move( show_page ) ),
+		simulate_setup_( std::move( simulate_setup ) ),
 		card_( new QFrame( this ) ),
 		text_( new QLabel() ),
-		close_( new QPushButton( QStringLiteral( "Got it" ) ) )
+		close_( new QPushButton( QStringLiteral( "Got it" ) ) ),
+		simulate_( new QPushButton( QStringLiteral( "Simulate first-run setup" ) ) )
 	{
 		hide();
 		setFocusPolicy( Qt::StrongFocus );
@@ -70,12 +74,22 @@ namespace lexiglance::gui
 		layout->addWidget( text_ );
 
 		auto* footer = new QHBoxLayout();
+		simulate_->setToolTip( QStringLiteral( "Opens the Welcome setup wizard as on a first start (dev builds only)." ) );
+		simulate_->setVisible( lexiglance::channel != "stable" && static_cast<bool>( simulate_setup_ ) );
+		footer->addWidget( simulate_ );
 		footer->addStretch( 1 );
 		close_->setProperty( "primary", true );
 		footer->addWidget( close_ );
 		layout->addLayout( footer );
 
 		connect( close_, &QPushButton::clicked, this, [this] { hide(); } );
+		connect( simulate_, &QPushButton::clicked, this, [this] {
+			hide();
+			if ( simulate_setup_ )
+			{
+				simulate_setup_();
+			}
+		} );
 		connect( text_, &QLabel::linkActivated, this, [this]( const QString& page ) {
 			hide();
 			show_page_( page );

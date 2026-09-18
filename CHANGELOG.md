@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.2.0] - 02:50 CEST 2026-09-18
+
+Updates and bugfixes reported from: https://github.com/MattFor/lexiglance/issues/7
+
+- Health also reports languages, recommended dictionaries still missing
+  for the preferred language, and whether the data, log and download folders can be written.
+- No more copy system information within about, now it generates a full zip file raedy to share with all relevant
+  information.
+- First-run setup: Welcome → choose languages → dictionaries and OCR install themselves.
+- Modifier and mouse keys are shown with everyday names program-wide (Left Alt, Left Ctrl, Left Win / Left Super,
+  Caps Lock, Left click, and so on). Config files still accept the older spellings.
+- Scanning: Preferred language can be chosen among those turned on (needed when scripts overlap, e.g. Russian and
+  Ukrainian). Turning a language off moves Preferred to another that is still on. A note says at least one language
+  must stay on.
+- Health warns when OCR models are installed for some enabled languages but not others.
+- Health: "Show the N passed checks too" stays above the list instead of jumping under new rows.
+- Scrolling the page under the pointer (without expanding the looked-up length) closes the popup.
+- When accessibility returns only English chrome beside an image, OCR still runs so README figures and similar work.
+- Windows: after dismissing the popup with a click, holding the trigger (especially Win+Alt) could leave lookups
+  working in the log while the popup never appeared again until restart. Focus changes while the trigger is held are
+  ignored, and layered popups are shown again with `ShowWindow` after hide.
+- The settings window is brought to the front when first-run or post-update setup opens.
+
 ## [1.1.0] - 22:20 CEST 2026-09-16
 
 - Statistics page: lookups, languages, sources and recent days, kept locally (optional).
@@ -17,8 +40,8 @@
 - Overview tagline sits beside the Lexiglance title; Text capture tile wraps the bracketed detail onto its own line.
 - Windows: each pronunciation clip uses its own temp file, so replay no longer fails after the first play.
 - Windows: the Windows key is shown as Win rather than Super in settings, health, help and the log.
-- Windows: optional Scanning setting to keep the wheel from the window underneath while it changes looked-up length
-  (off by default; see docs/anticheat.md).
+- Windows: optional Scanning setting to keep the wheel from the window underneath while it changes looked-up length (off
+  by default; see docs/anticheat.md).
 - Health and About turn download addresses into links; capture failures are logged as warnings under Recent problems.
 
 ## [1.0.1] - 23:15 CEST 2026-09-14

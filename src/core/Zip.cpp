@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <climits>
+#include <fstream>
+#include <iterator>
+#include <span>
 
 #include <zlib.h>
 
@@ -290,6 +293,128 @@ namespace lexiglance
 			return fail( "{}: checksum mismatch", entry.name );
 		}
 		return output;
+	}
+
+	namespace
+	{
+
+		void appendLe( std::string& out, std::uint16_t value )
+		{
+			out.push_back( static_cast<char>( value ) );
+			out.push_back( static_cast<char>( value >> 8 ) );
+		}
+
+		void appendLe( std::string& out, std::uint32_t value )
+		{
+			out.push_back( static_cast<char>( value ) );
+			out.push_back( static_cast<char>( value >> 8 ) );
+			out.push_back( static_cast<char>( value >> 16 ) );
+			out.push_back( static_cast<char>( value >> 24 ) );
+		}
+
+	} // namespace
+
+	ZipWriter::ZipWriter( std::filesystem::path path ) :
+		path_( std::move( path ) )
+	{
+		std::error_code ec;
+		std::filesystem::create_directories( path_.parent_path(), ec );
+	}
+
+	ZipWriter::~ZipWriter() = default;
+
+	Result<> ZipWriter::add( std::string_view name, std::span<const std::byte> data )
+	{
+		if ( closed_ )
+		{
+			return fail( "zip writer is closed" );
+		}
+		if ( name.empty() || name.size() > 0xFFFF || data.size() > 0xFFFFFFFFu )
+		{
+			return fail( "zip entry name or size is out of range" );
+		}
+		Item item;
+		item.name                = std::string( name );
+		item.size                = static_cast<std::uint32_t>( data.size() );
+		item.crc32               = static_cast<std::uint32_t>( crc32_z( 0, reinterpret_cast<const Bytef*>( data.data() ), data.size() ) );
+		item.local_header_offset = static_cast<std::uint32_t>( buffer_.size() );
+
+		appendLe( buffer_, local_header_signature );
+		appendLe( buffer_, std::uint16_t{ 20 } );
+		appendLe( buffer_, std::uint16_t{ 0 } );
+		appendLe( buffer_, std::uint16_t{ 0 } );
+		appendLe( buffer_, std::uint16_t{ 0 } );
+		appendLe( buffer_, std::uint16_t{ 0 } );
+		appendLe( buffer_, item.crc32 );
+		appendLe( buffer_, item.size );
+		appendLe( buffer_, item.size );
+		appendLe( buffer_, static_cast<std::uint16_t>( item.name.size() ) );
+		appendLe( buffer_, std::uint16_t{ 0 } );
+		buffer_.append( item.name );
+		buffer_.append( reinterpret_cast<const char*>( data.data() ), data.size() );
+		items_.push_back( std::move( item ) );
+		return {};
+	}
+
+	Result<> ZipWriter::addFile( std::string_view name, const std::filesystem::path& file )
+	{
+		std::ifstream in( file, std::ios::binary );
+		if ( !in )
+		{
+			return fail( "cannot read {}", file.string() );
+		}
+		std::string data( ( std::istreambuf_iterator<char>( in ) ), std::istreambuf_iterator<char>() );
+		return add( name, std::as_bytes( std::span( data.data(), data.size() ) ) );
+	}
+
+	Result<> ZipWriter::close()
+	{
+		if ( closed_ )
+		{
+			return {};
+		}
+		closed_                   = true;
+		const auto central_offset = static_cast<std::uint32_t>( buffer_.size() );
+		for ( const Item& item : items_ )
+		{
+			appendLe( buffer_, central_header_signature );
+			appendLe( buffer_, std::uint16_t{ 20 } );
+			appendLe( buffer_, std::uint16_t{ 20 } );
+			appendLe( buffer_, std::uint16_t{ 0 } );
+			appendLe( buffer_, std::uint16_t{ 0 } );
+			appendLe( buffer_, std::uint16_t{ 0 } );
+			appendLe( buffer_, std::uint16_t{ 0 } );
+			appendLe( buffer_, item.crc32 );
+			appendLe( buffer_, item.size );
+			appendLe( buffer_, item.size );
+			appendLe( buffer_, static_cast<std::uint16_t>( item.name.size() ) );
+			appendLe( buffer_, std::uint16_t{ 0 } );
+			appendLe( buffer_, std::uint16_t{ 0 } );
+			appendLe( buffer_, std::uint16_t{ 0 } );
+			appendLe( buffer_, std::uint16_t{ 0 } );
+			appendLe( buffer_, std::uint32_t{ 0 } );
+			appendLe( buffer_, item.local_header_offset );
+			buffer_.append( item.name );
+		}
+		const auto central_size = static_cast<std::uint32_t>( buffer_.size() ) - central_offset;
+		appendLe( buffer_, end_of_directory_signature );
+		appendLe( buffer_, std::uint16_t{ 0 } );
+		appendLe( buffer_, std::uint16_t{ 0 } );
+		appendLe( buffer_, static_cast<std::uint16_t>( items_.size() ) );
+		appendLe( buffer_, static_cast<std::uint16_t>( items_.size() ) );
+		appendLe( buffer_, central_size );
+		appendLe( buffer_, central_offset );
+		appendLe( buffer_, std::uint16_t{ 0 } );
+
+		std::ofstream out( path_, std::ios::binary | std::ios::trunc );
+		out.write( buffer_.data(), static_cast<std::streamsize>( buffer_.size() ) );
+		out.close();
+		buffer_.clear();
+		if ( !out )
+		{
+			return fail( "cannot write {}", path_.string() );
+		}
+		return {};
 	}
 
 } // namespace lexiglance

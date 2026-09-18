@@ -172,16 +172,17 @@ namespace
 		const auto right = lg::config::parseKey( "RWin" );
 		test::expect( right && *right == lg::config::KeyGroup{ lg::config::Key::SuperR } );
 #ifdef _WIN32
-		test::expectEqual( lg::config::displayKeyName( lg::config::Key::SuperL ), std::string_view( "Win_L" ) );
+		test::expectEqual( lg::config::displayKeyName( lg::config::Key::SuperL ), std::string_view( "Left Win" ) );
 		test::expectEqual( lg::config::displayName( "Super" ), std::string( "Win" ) );
 		test::expectEqual( lg::config::displayName( "Meta" ), std::string( "Win" ) );
-		test::expectEqual( lg::config::displayName( "Super_R" ), std::string( "Win_R" ) );
+		test::expectEqual( lg::config::displayName( "Super_R" ), std::string( "Right Win" ) );
 #else
-		test::expectEqual( lg::config::displayKeyName( lg::config::Key::SuperL ), std::string_view( "Super_L" ) );
+		test::expectEqual( lg::config::displayKeyName( lg::config::Key::SuperL ), std::string_view( "Left Super" ) );
 		test::expectEqual( lg::config::displayName( "Super" ), std::string( "Super" ) );
 #endif
-		// Other keys and names it cannot place are left alone on every platform.
-		test::expectEqual( lg::config::displayName( "Alt_L" ), std::string( "Alt_L" ) );
+		test::expectEqual( lg::config::displayName( "Alt_L" ), std::string( "Left Alt" ) );
+		test::expectEqual( lg::config::displayName( "Control_R" ), std::string( "Right Ctrl" ) );
+		test::expectEqual( lg::config::displayName( "Caps_Lock" ), std::string( "Caps Lock" ) );
 		test::expectEqual( lg::config::displayName( "Hyper" ), std::string( "Hyper" ) );
 	} );
 

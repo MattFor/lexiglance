@@ -252,8 +252,8 @@ namespace lexiglance::config
 
 	struct Config
 	{
-		// Text is looked up in the language of its script; this one takes text in a script several languages share (or in
-		// none of theirs).
+		// Text is looked up in the language of its script; this one wins when several languages share a script (or when
+		// the text matches none of theirs). Must be one of the enabled languages; the Scanning page keeps it so.
 		std::string language = "ja";
 		// Languages not looked up (codes), so text is only told apart among the others and OCR only reads those.
 		std::vector<std::string> disabled_languages;

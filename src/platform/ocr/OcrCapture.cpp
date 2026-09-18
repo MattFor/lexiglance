@@ -1233,7 +1233,7 @@ namespace lexiglance::platform
 		class OcrCapture final : public TextCapture
 		{
 		public:
-			OcrCapture( std::unique_ptr<ScreenReader> screen, std::unique_ptr<TesseractEngine> engine, std::unique_ptr<ocr::PaddleOcr> paddle, const OcrOptions& options, const std::string& models, std::vector<const lang::Language*> languages ) :
+			OcrCapture( std::unique_ptr<ScreenReader> screen, std::unique_ptr<TesseractEngine> engine, std::unique_ptr<ocr::PaddleOcr> paddle, const OcrOptions& options, const std::string& models, std::vector<const lang::Language*> languages, std::vector<const lang::Language*> wanted ) :
 				screen_( std::move( screen ) ),
 				engine_( std::move( engine ) ),
 				paddle_( std::move( paddle ) ),
@@ -1241,6 +1241,7 @@ namespace lexiglance::platform
 				vertical_( options.vertical ),
 				unit_( std::max( 16, static_cast<int>( std::lround( 24.0 * options.scale ) ) ) ),
 				languages_( std::move( languages ) ),
+				wanted_( std::move( wanted ) ),
 				description_( paddle_ ? std::format( "OCR (PaddleOCR: {})", languageNames( languages_ ) ) : std::format( "OCR ({}, {}, tesseract {})", models, options.model, engine_ ? engine_->version() : "?" ) )
 			{
 			}
@@ -1305,7 +1306,15 @@ namespace lexiglance::platform
 				health::Check            check{ .id = "ocr", .title = "Text in images, games and videos (OCR)" };
 				std::vector<std::string> good;
 				std::vector<std::string> bad;
-				const auto               started = std::chrono::steady_clock::now();
+				std::vector<std::string> missing;
+				for ( const lang::Language* language : wanted_ )
+				{
+					if ( !std::ranges::contains( languages_, language ) )
+					{
+						missing.emplace_back( language->name() );
+					}
+				}
+				const auto started = std::chrono::steady_clock::now();
 				for ( const lang::Language* language : languages_ )
 				{
 					std::string sample;
@@ -1323,7 +1332,27 @@ namespace lexiglance::platform
 				}
 				const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started ).count();
 
-				if ( good.empty() && bad.empty() )
+				if ( !missing.empty() )
+				{
+					check.status = health::Severity::Warning;
+					check.detail = std::format(
+							"{} has no model for {}: download OCR for {} on the Scanning page.",
+							description_,
+							joinText( missing, ", " ),
+							missing.size() == 1 ? "that language" : "those languages"
+					);
+					check.fix = "open-scanning";
+					if ( !bad.empty() )
+					{
+						check.status = health::Severity::Error;
+						check.detail += std::format( " It also misread its test text ({}).", joinText( bad, "; " ) );
+					}
+					else if ( !good.empty() )
+					{
+						check.detail += std::format( " It read its test text for the languages it has in {} ms.", elapsed );
+					}
+				}
+				else if ( good.empty() && bad.empty() )
 				{
 					check.status = health::Severity::Warning;
 					check.detail = std::format( "{} is loaded, but no test text could be drawn to check it.", description_ );
@@ -2037,9 +2066,11 @@ namespace lexiglance::platform
 			bool                                  vertical_;
 			int                                   unit_;
 			std::vector<const lang::Language*>    languages_;
-			std::string                           description_;
-			std::array<Recognition, 4>            cache_{};
-			std::size_t                           next_slot_ = 0;
+			// Languages the daemon wants to read (enabled, with dictionaries); may be more than languages_ when a model is missing.
+			std::vector<const lang::Language*> wanted_;
+			std::string                        description_;
+			std::array<Recognition, 4>         cache_{};
+			std::size_t                        next_slot_ = 0;
 		};
 
 	} // namespace
@@ -2131,7 +2162,7 @@ namespace lexiglance::platform
 		{
 			return std::unexpected( screen.error() );
 		}
-		return std::make_unique<OcrCapture>( std::move( *screen ), std::move( tesseract ), std::move( paddle ), options, models, std::move( languages ) );
+		return std::make_unique<OcrCapture>( std::move( *screen ), std::move( tesseract ), std::move( paddle ), options, models, std::move( languages ), wanted );
 	}
 
 } // namespace lexiglance::platform

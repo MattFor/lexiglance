@@ -199,7 +199,8 @@ namespace lexiglance
 		// Renames a file nothing may delete while it is mapped, and deletes it if it can already.
 		bool moveAside( const std::filesystem::path& path )
 		{
-			static LONG counter = 0;
+			// InterlockedIncrement takes LONG*; tidy cannot see the write through the API.
+			static LONG counter = 0; // NOLINT(misc-const-correctness)
 			auto        aside   = path;
 			aside += std::format( ".{}-{}.removed", GetCurrentProcessId(), InterlockedIncrement( &counter ) );
 			if ( MoveFileExW( path.c_str(), aside.c_str(), 0 ) == FALSE )

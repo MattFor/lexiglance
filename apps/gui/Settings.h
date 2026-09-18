@@ -49,7 +49,8 @@ namespace lexiglance::gui
 		DaemonClient*                         client_;
 		config::Config                        config_;
 		std::unique_ptr<QTimer>               timer_;
-		bool                                  loaded_ = false;
+		bool                                  loaded_  = false;
+		bool                                  pending_ = false;
 		std::chrono::steady_clock::time_point pushed_at_;
 		std::vector<std::function<void()>>    handlers_;
 	};

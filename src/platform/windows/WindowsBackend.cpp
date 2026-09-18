@@ -1088,6 +1088,16 @@ namespace lexiglance::platform
 					else
 					{
 						wheel_ = 0;
+						// Scrolling the page under the pointer (not the popup, not expanding the match) leaves the text
+						// behind: close the popup like a click outside.
+						if ( popup_shown_ && events_.click_outside )
+						{
+							const Point at = pointer();
+							if ( !( popup_rect_.contains( at ) ) )
+							{
+								events_.click_outside( at );
+							}
+						}
 					}
 				}
 
@@ -1167,6 +1177,11 @@ namespace lexiglance::platform
 					trigger_active_ = false;
 					scan_pending_   = false;
 					updateWheelLock();
+					// Focus may have moved while the trigger was held (ignored above); close now if it did.
+					if ( watching() )
+					{
+						checkSource();
+					}
 					if ( events_.trigger_released )
 					{
 						events_.trigger_released();
@@ -1300,7 +1315,14 @@ namespace lexiglance::platform
 			void checkSource()
 			{
 				source_checked_ = Clock::now();
-				bool gone       = foreground_ != nullptr && GetForegroundWindow() != foreground_;
+				// While the trigger is held (often Win+…), the shell can steal and return the foreground around a click
+				// without the user having left. Closing the popup then leaves lookups succeeding in the log but nothing
+				// on screen until Lexiglance is restarted. Alt+Tab after the trigger is released still closes it below.
+				bool gone = false;
+				if ( foreground_ != nullptr && GetForegroundWindow() != foreground_ && !trigger_active_ )
+				{
+					gone = true;
+				}
 				if ( !gone && source_ != nullptr )
 				{
 					BOOL cloaked = FALSE;
@@ -1530,9 +1552,12 @@ namespace lexiglance::platform
 				}
 			}
 
+			// After ShowWindow(SW_HIDE), SetWindowPos(...|SWP_SHOWWINDOW) alone is not always enough for a WS_EX_LAYERED
+			// window that draws with UpdateLayeredWindow: the HWND can stay "shown" to us while nothing is visible.
 			static void raise( HWND window )
 			{
-				SetWindowPos( window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW );
+				ShowWindow( window, SW_SHOWNA );
+				SetWindowPos( window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE );
 			}
 
 			// Clicking an entry copies its headword.
@@ -1618,7 +1643,7 @@ namespace lexiglance::platform
 				selecting_ = false;
 				if ( popup_.image && select_anchor_ && select_focus_ )
 				{
-					if ( std::string text = popup_.image->selectedText( *select_anchor_, *select_focus_ ); !text.empty() && writeClipboard( text ) )
+					if ( const std::string text = popup_.image->selectedText( *select_anchor_, *select_focus_ ); !text.empty() && writeClipboard( text ) )
 					{
 						showBadge( "Copied ✓", std::chrono::milliseconds( 900 ) );
 						return;

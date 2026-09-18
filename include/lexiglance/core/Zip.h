@@ -4,6 +4,7 @@
 #include <lexiglance/core/Error.h>
 #include <lexiglance/core/MappedFile.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <span>
@@ -43,6 +44,36 @@ namespace lexiglance
 	private:
 		MappedFile         file_;
 		std::vector<Entry> entries_;
+	};
+
+	// Writes a ZIP with stored (uncompressed) entries. Enough for bug-report bundles; not a general archiver.
+	// Call close() to finish the file; the destructor does not flush.
+	class ZipWriter
+	{
+	public:
+		explicit ZipWriter( std::filesystem::path path );
+		~ZipWriter();
+
+		ZipWriter( const ZipWriter& )            = delete;
+		ZipWriter& operator=( const ZipWriter& ) = delete;
+
+		[[nodiscard]] Result<> add( std::string_view name, std::span<const std::byte> data );
+		[[nodiscard]] Result<> addFile( std::string_view name, const std::filesystem::path& file );
+		[[nodiscard]] Result<> close();
+
+	private:
+		struct Item
+		{
+			std::string   name;
+			std::uint32_t crc32               = 0;
+			std::uint32_t size                = 0;
+			std::uint32_t local_header_offset = 0;
+		};
+
+		std::filesystem::path path_;
+		std::string           buffer_;
+		std::vector<Item>     items_;
+		bool                  closed_ = false;
 	};
 
 } // namespace lexiglance

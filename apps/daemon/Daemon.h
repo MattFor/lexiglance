@@ -189,6 +189,9 @@ namespace lexiglance::daemon
 		// use; reading the screen.
 		void checkDaemon( std::vector<health::Check>& checks, const config::Config& cfg, bool interactive ) const;
 		void checkLanguages( std::vector<health::Check>& checks, const config::Config& cfg );
+		void checkDictionaries( std::vector<health::Check>& checks, const config::Config& cfg );
+		void checkRecommendedDictionaries( std::vector<health::Check>& checks, const config::Config& cfg );
+		void checkFonts( std::vector<health::Check>& checks, const config::Config& cfg );
 		void checkScreen( std::vector<health::Check>& checks, const config::Config& cfg );
 
 		std::unique_ptr<platform::Backend>                                                       backend_;

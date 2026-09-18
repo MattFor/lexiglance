@@ -14,10 +14,12 @@ add_executable(
     HelpOverlay.cpp
     MainWindow.cpp
     OcrGroup.cpp
+    OcrInstall.cpp
     OverviewPage.cpp
     ScanningPage.cpp
     SearchPage.cpp
     Settings.cpp
+    SetupWizard.cpp
     StatisticsPage.cpp
     Themes.cpp
     UpdateGroup.cpp

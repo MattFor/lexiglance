@@ -97,8 +97,15 @@ jobs:
       - name: Generate sources
         run: cmake --build build --target lexiglance_autogen || true
       - name: Run clang-tidy
+        # Same-OS platform sources only: tidying X11 on a machine without X headers (or Windows sources on Linux)
+        # fails the first missing include and then reports a cascade of false positives.
         run: >-
-          git ls-files 'src/*.cpp' 'apps/*.cpp' 'tests/*.cpp' ':!:src/platform/windows/*'
+          git ls-files 'src/*.cpp' 'apps/*.cpp' 'tests/*.cpp'
+          ':!:src/platform/windows/*' ':!:src/platform/linux/*'
+          | xargs -P "$(nproc)" -n 4 clang-tidy -p build --quiet --warnings-as-errors='*'
+      - name: Run clang-tidy (Linux platform)
+        run: >-
+          git ls-files 'src/platform/linux/*.cpp'
           | xargs -P "$(nproc)" -n 4 clang-tidy -p build --quiet --warnings-as-errors='*'
 
   windows:

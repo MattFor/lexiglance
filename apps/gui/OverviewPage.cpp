@@ -109,7 +109,7 @@ namespace lexiglance::gui
 #ifndef Q_OS_MACOS
 		// The settings application at login as well, in the tray: a second entry beside the daemon's.
 	#ifdef Q_OS_WIN
-		const QString tray_value = QStringLiteral( "Lexiglance tray" );
+		constexpr auto tray_value = "Lexiglance tray";
 	#else
 		QString trayAutostartFile()
 		{
@@ -120,7 +120,7 @@ namespace lexiglance::gui
 		bool trayAutostartEnabled()
 		{
 	#ifdef Q_OS_WIN
-			return runKey().contains( tray_value );
+			return runKey().contains( QLatin1String( tray_value ) );
 	#else
 			return QFile::exists( trayAutostartFile() );
 	#endif
@@ -386,10 +386,11 @@ namespace lexiglance::gui
 		last_capture_->setTextInteractionFlags( Qt::TextSelectableByMouse );
 		last_capture_->setText( QStringLiteral( "Last lookup: none yet." ) );
 		health_layout->addWidget( last_capture_ );
-		health_rows_->setSpacing( 6 );
-		health_layout->addLayout( health_rows_ );
+		// Above the rows: toggling it grows the list below and the checkbox stays where it was.
 		show_passed_->hide();
 		health_layout->addWidget( show_passed_ );
+		health_rows_->setSpacing( 6 );
+		health_layout->addLayout( health_rows_ );
 		layout->addWidget( health_box_ );
 
 		auto* test_box    = new QGroupBox( QStringLiteral( "Try it" ) );
@@ -461,6 +462,7 @@ namespace lexiglance::gui
 			{
 				return;
 			}
+			clearDiagnosisZip();
 			config::Config defaults;
 			defaults.dictionaries = settings().config().dictionaries;
 			settings().replace( std::move( defaults ) );
@@ -706,7 +708,26 @@ namespace lexiglance::gui
 						showChecks( checks );
 						return;
 					}
-					showChecks( health::read( *result ) );
+					auto checks = health::read( *result );
+					if ( lexiglance::channel != "stable" && !applicationMemory().value( QStringLiteral( "setup/completed" ) ).toBool() )
+					{
+						checks.push_back(
+								{ .id     = "setup",
+				                  .title  = "First-run setup",
+				                  .status = health::Severity::Info,
+				                  .detail = "The welcome setup has not been finished yet. Open Help to run it again, or skip it if you already installed dictionaries and OCR yourself." }
+						);
+					}
+					if ( !QFileInfo( qs( paths::stateDir().string() ) ).isWritable() )
+					{
+						checks.push_back(
+								{ .id     = "application-log",
+				                  .title  = "Application log",
+				                  .status = health::Severity::Warning,
+				                  .detail = ss( QStringLiteral( "The settings application cannot write logs under %1." ).arg( qs( paths::stateDir().string() ) ) ) }
+						);
+					}
+					showChecks( checks );
 				},
 				30000
 		);
@@ -749,6 +770,24 @@ namespace lexiglance::gui
 		if ( !problems.isEmpty() )
 		{
 			checks.push_back( { .id = "log", .title = "The daemon's log", .status = health::Severity::Info, .detail = ss( problems.join( QLatin1Char( '\n' ) ) ) } );
+		}
+		if ( lexiglance::channel != "stable" && !applicationMemory().value( QStringLiteral( "setup/completed" ) ).toBool() )
+		{
+			checks.push_back(
+					{ .id     = "setup",
+			          .title  = "First-run setup",
+			          .status = health::Severity::Info,
+			          .detail = "The welcome setup has not been finished yet. Open Help to run it again." }
+			);
+		}
+		if ( !QDir( qs( paths::cacheDir().string() ) ).mkpath( QStringLiteral( "." ) ) || !QFileInfo( qs( paths::cacheDir().string() ) ).isWritable() )
+		{
+			checks.push_back(
+					{ .id     = "cache",
+			          .title  = "Download cache",
+			          .status = health::Severity::Warning,
+			          .detail = ss( QStringLiteral( "Cannot write downloads under %1." ).arg( qs( paths::cacheDir().string() ) ) ) }
+			);
 		}
 		return checks;
 	}

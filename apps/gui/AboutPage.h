@@ -3,6 +3,7 @@
 
 #include "Common.h"
 
+#include <QPushButton>
 #include <QTextBrowser>
 
 namespace lexiglance::gui
@@ -17,11 +18,10 @@ namespace lexiglance::gui
 
 	private:
 		void render();
-
-		// The version, the daemon and the system as plain text, for bug reports.
-		[[nodiscard]] QString systemInformation() const;
+		void copyDiagnosis();
 
 		QTextBrowser* text_;
+		QPushButton*  diagnosis_;
 		// The daemon's version, backend and text capture, or why it is not known.
 		QString daemon_;
 		// Attributions the installed dictionaries ask for (HTML).

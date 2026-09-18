@@ -7,6 +7,7 @@
 #include "OverviewPage.h"
 #include "ScanningPage.h"
 #include "SearchPage.h"
+#include "SetupWizard.h"
 #include "StatisticsPage.h"
 
 #include <lexiglance/core/Version.h>
@@ -315,20 +316,47 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 	{
 		if ( help_ == nullptr )
 		{
-			help_ = new HelpOverlay( [this]( const QString& page ) { showPage( page ); }, this );
+			help_ = new HelpOverlay(
+					[this]( const QString& page ) { showPage( page ); },
+					[this] { showSetup( 0, true ); },
+					this
+			);
 		}
 		help_->open( chordText( settings_->config().scan.trigger ), first );
 	}
 
+	void MainWindow::showSetup( int lock_seconds, bool reinstall, bool required )
+	{
+		present();
+		if ( setup_ == nullptr )
+		{
+			const Context context{ .client = client_, .settings = settings_.get(), .show_page = [this]( const QString& page ) { showPage( page ); }, .show_summary = [this]( const QString& text ) { summary_->setText( text ); } };
+			setup_ = new SetupWizard( context, {}, this );
+		}
+		setup_->open( lock_seconds, reinstall, required );
+	}
+
 	void MainWindow::welcome()
 	{
-		auto memory = applicationMemory();
-		if ( memory.value( QStringLiteral( "help/shown" ) ).toBool() )
+		auto       memory       = applicationMemory();
+		const bool setup_done   = memory.value( QStringLiteral( "setup/completed" ) ).toBool();
+		const bool after_update = memory.value( QStringLiteral( "setup/after_update" ) ).toBool();
+		if ( after_update )
 		{
+			memory.setValue( QStringLiteral( "setup/after_update" ), false );
+		}
+		// Installs that already saw the old help card: do not force the new wizard once.
+		if ( !setup_done && memory.value( QStringLiteral( "help/shown" ) ).toBool() && !after_update )
+		{
+			memory.setValue( QStringLiteral( "setup/completed" ), true );
 			return;
 		}
-		memory.setValue( QStringLiteral( "help/shown" ), true );
-		showHelp( true );
+		// First start, or back from an automatic update: the frictionless language / OCR / dictionary setup.
+		if ( !setup_done || after_update )
+		{
+			showSetup( 5, false, !setup_done );
+			return;
+		}
 	}
 
 	void MainWindow::setupTray()

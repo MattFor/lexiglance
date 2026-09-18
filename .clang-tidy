@@ -1,42 +1,66 @@
 ---
 # Excluded checks are either pure style preferences already enforced by .clang-format, or they flag unavoidable
-# patterns of this code base (memory mapped structs, C APIs such as Xlib/AT-SPI, Qt parent ownership).
+# patterns of this code base (memory mapped structs, C APIs such as Xlib/AT-SPI/Win32, Qt parent ownership).
+#
+# Only analyse project headers (not Qt/system). Running clang-tidy on the wrong OS's platform sources (e.g. X11 on
+# Windows) fails the first missing system header and then floods false positives — CI and local scripts exclude them.
 Checks: >
     -*,
     bugprone-*,
     -bugprone-easily-swappable-parameters,
+    -bugprone-exception-escape,
+    -bugprone-implicit-widening-of-multiplication-result,
+    -bugprone-multi-level-implicit-pointer-conversion,
+    -bugprone-throwing-static-initialization,
     cert-*,
     -cert-err58-cpp,
     clang-analyzer-*,
     concurrency-*,
     -concurrency-mt-unsafe,
     cppcoreguidelines-*,
+    -cppcoreguidelines-avoid-c-arrays,
     -cppcoreguidelines-avoid-magic-numbers,
     -cppcoreguidelines-avoid-do-while,
+    -cppcoreguidelines-avoid-non-const-global-variables,
+    -cppcoreguidelines-interfaces-global-init,
     -cppcoreguidelines-non-private-member-variables-in-classes,
     -cppcoreguidelines-owning-memory,
+    -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
     -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
     -cppcoreguidelines-pro-bounds-constant-array-index,
     -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+    -cppcoreguidelines-pro-type-const-cast,
     -cppcoreguidelines-pro-type-reinterpret-cast,
     -cppcoreguidelines-pro-type-union-access,
     misc-*,
     -misc-include-cleaner,
+    -misc-misplaced-const,
     -misc-no-recursion,
     -misc-non-private-member-variables-in-classes,
     modernize-*,
+    -modernize-avoid-c-arrays,
+    -modernize-raw-string-literal,
+    -modernize-use-designated-initializers,
+    -modernize-use-integer-sign-comparison,
     -modernize-use-trailing-return-type,
     performance-*,
+    -performance-inefficient-vector-operation,
+    -performance-no-automatic-move,
+    -performance-no-int-to-ptr,
     portability-*,
     -portability-avoid-pragma-once,
     readability-*,
+    -readability-avoid-nested-conditional-operator,
+    -readability-container-contains,
     -readability-identifier-length,
     -readability-magic-numbers,
-    -readability-uppercase-literal-suffix,
-    -readability-math-missing-parentheses
+    -readability-math-missing-parentheses,
+    -readability-named-parameter,
+    -readability-uppercase-literal-suffix
 WarningsAsErrors: ""
-HeaderFilterRegex: ".*/lexiglance/(include|src|apps|tests)/.*"
+HeaderFilterRegex: ".(/|\\\\)(include|src|apps|tests)(/|\\\\).*"
 FormatStyle: file
+SystemHeaders: false
 CheckOptions:
     bugprone-unused-return-value.AllowCastToVoid: true
     cert-err33-c.AllowCastToVoid: true
@@ -66,4 +90,3 @@ CheckOptions:
     readability-identifier-naming.ProtectedMemberSuffix: "_"
     readability-identifier-naming.ConstexprVariableCase: lower_case
     readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
-...
