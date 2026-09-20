@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.30)
 
 project(
     lexiglance
-    VERSION 1.2.0
+    VERSION 1.3.0
     DESCRIPTION
         "System-wide pop-up dictionary compatible with Yomitan dictionaries"
     HOMEPAGE_URL "https://github.com/MattFor/lexiglance"
@@ -190,7 +190,7 @@ endif()
 install(FILES LICENSE README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Packages (cpack): .tar.gz and .deb on Linux, .zip on Windows and macOS
+# Packages (cpack): .tar.gz and .deb on Linux (.rpm with cpack -G RPM on Fedora), .zip on Windows and macOS
 # ---------------------------------------------------------------------------------------------------------------------
 set(CPACK_PACKAGE_NAME lexiglance)
 set(CPACK_PACKAGE_VENDOR MattFor)
@@ -214,6 +214,28 @@ else()
     set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
     set(CPACK_DEBIAN_PACKAGE_SUGGESTS
         "tesseract-ocr-jpn, ffmpeg | mpv | mpg123")
+    # The requirements come from the libraries the programs link (rpm's
+    # automatic dependencies); the folders the system already has stay its own.
+    set(CPACK_RPM_PACKAGE_LICENSE MIT)
+    set(CPACK_RPM_PACKAGE_GROUP "Applications/Text")
+    set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
+    set(CPACK_RPM_PACKAGE_SUGGESTS "tesseract-langpack-jpn")
+    # The service scripts of the other init systems begin with their own
+    # interpreter (#!/sbin/openrc-run, #!/usr/bin/execlineb), which rpm would
+    # turn into requirements no Fedora package provides, so the folder they sit
+    # in is left out of the automatic dependencies. They are plain text there,
+    # to be copied where that init system keeps its services.
+    set(CPACK_RPM_SPEC_MORE_DEFINE
+        "%define __requires_exclude_from ^${CMAKE_INSTALL_FULL_DATADIR}/lexiglance/services/.*$"
+    )
+    set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+        /usr/lib/systemd
+        /usr/lib/systemd/user
+        /usr/share/applications
+        /usr/share/icons
+        /usr/share/icons/hicolor
+        /usr/share/icons/hicolor/scalable
+        /usr/share/icons/hicolor/scalable/apps)
 endif()
 include(CPack)
 

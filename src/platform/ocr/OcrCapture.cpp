@@ -20,6 +20,9 @@
 #include <chrono>
 #include <iterator>
 #include <limits>
+#include <numeric>
+#include <ranges>
+#include <span>
 #include <utility>
 
 namespace lexiglance::platform
@@ -142,6 +145,9 @@ namespace lexiglance::platform
 			// The line's own rows (columns for vertical text) within the crop, without padding or neighbours' strays.
 			int core_from = 0;
 			int core_to   = 0;
+			// Where the crop would start at a gap as wide as a space rather than between two glyphs (along the strip): in
+			// scripts written with spaces, the start of the word the crop cuts into.
+			int word_begin = 0;
 		};
 
 		struct Recognition
@@ -149,13 +155,184 @@ namespace lexiglance::platform
 			Rect                   region;
 			std::uint64_t          hash = 0;
 			std::vector<OcrSymbol> symbols;
+			// Placed as words of a script written with spaces, the spaces included.
+			bool words = false;
 		};
 
-		// The characters following the one under the pointer; kept alive as the capture handle for bounds().
+		// The line read, a box for each of its code points; kept alive as the capture handle for bounds().
 		struct OcrLine
 		{
 			std::vector<Rect> boxes;
+			// The character under the pointer, where the captured text starts.
+			std::size_t first = 0;
+			// Where the lines a sentence runs on to begin, as indices into `boxes` (the first line begins at 0).
+			std::vector<std::size_t> line_starts;
 		};
+
+		// Whether the text of a line ends a sentence: with 。！？…. or ! ? (closing brackets and quotes after them count).
+		bool endsSentence( std::string_view text )
+		{
+			std::u32string characters = utf8::toUtf32( text );
+			while ( !characters.empty() && ( characters.back() == U' ' || std::u32string_view( U"」』）)\"'»”’】〕" ).contains( characters.back() ) ) )
+			{
+				characters.pop_back();
+			}
+			return characters.empty() || std::u32string_view( U"。．！？!?…‥." ).contains( characters.back() );
+		}
+
+		// Characters set on a square grid: Chinese characters, kana, their punctuation and full-width forms.
+		bool gridCharacter( char32_t c )
+		{
+			return ( c >= 0x3000 && c <= 0x30FF ) || ( c >= 0x31F0 && c <= 0x31FF ) || ( c >= 0x3400 && c <= 0x4DBF ) || ( c >= 0x4E00 && c <= 0x9FFF ) || ( c >= 0xF900 && c <= 0xFAFF ) ||
+			       ( c >= 0xFF00 && c <= 0xFFEF ) || ( c >= 0x20000 && c <= 0x3FFFF );
+		}
+
+		// Whether a line is mostly letters of scripts written with spaces between words (Cyrillic, Greek, Hangul, Latin)
+		// rather than Japanese, which any kana gives away (Windowsで is Japanese). Digits, punctuation and spaces count for
+		// neither.
+		template <typename Texts>
+		bool wordScript( const Texts& texts )
+		{
+			int grid    = 0;
+			int letters = 0;
+			for ( const std::string_view text : texts )
+			{
+				const char32_t c = utf8::first( text );
+				if ( ( c >= 0x3040 && c <= 0x30FF ) || ( c >= 0x31F0 && c <= 0x31FF ) || ( c >= 0xFF66 && c <= 0xFF9D ) )
+				{
+					return false;
+				}
+				if ( gridCharacter( c ) )
+				{
+					++grid;
+				}
+				else if ( ( c >= U'A' && c <= U'Z' ) || ( c >= U'a' && c <= U'z' ) || ( c >= 0xC0 && c != 0xD7 && c != 0xF7 && ( c < 0x2000 || c > 0x2BFF ) ) )
+				{
+					++letters;
+				}
+			}
+			return letters > grid;
+		}
+
+		// The script most of a line's letters are in, roughly: Japanese (kana and kanji), Latin, Cyrillic, Greek, Hangul;
+		// 0 when it has no letters. A line in another script than the one before it does not go on with its sentence.
+		int mainScript( const ocr::TextLine& line )
+		{
+			std::array<int, 6> counts{};
+			for ( const ocr::Character& character : line.characters )
+			{
+				const char32_t c     = utf8::first( character.text );
+				const auto     count = [&]( std::size_t script ) { ++counts[script]; };
+				if ( ( c >= 0x3040 && c <= 0x30FF ) || ( c >= 0x3400 && c <= 0x4DBF ) || ( c >= 0x4E00 && c <= 0x9FFF ) || ( c >= 0xFF66 && c <= 0xFF9D ) )
+				{
+					count( 1 );
+				}
+				else if ( ( c >= U'A' && c <= U'Z' ) || ( c >= U'a' && c <= U'z' ) || ( c >= 0xC0 && c <= 0x24F && c != 0xD7 && c != 0xF7 ) )
+				{
+					count( 2 );
+				}
+				else if ( c >= 0x400 && c <= 0x52F )
+				{
+					count( 3 );
+				}
+				else if ( c >= 0x370 && c <= 0x3FF )
+				{
+					count( 4 );
+				}
+				else if ( ( c >= 0xAC00 && c <= 0xD7A3 ) || ( c >= 0x1100 && c <= 0x11FF ) || ( c >= 0x3130 && c <= 0x318F ) )
+				{
+					count( 5 );
+				}
+			}
+			const auto* const most = std::ranges::max_element( counts );
+			return *most > 0 ? static_cast<int>( most - counts.begin() ) : 0;
+		}
+
+		// Marks around words in scripts written with spaces: . , ! ? : ; quotation marks, brackets, dashes.
+		bool isPunctuation( char32_t c )
+		{
+			if ( c < 0x80 )
+			{
+				return c > U' ' && ( c < U'0' || c > U'9' ) && ( c < U'A' || c > U'Z' ) && ( c < U'a' || c > U'z' );
+			}
+			return c == 0xA1 || c == 0xAB || c == 0xBB || c == 0xBF || ( c >= 0x2010 && c <= 0x205E );
+		}
+
+		// Punctuation at either end of a word (the comma after it, the quotation mark before it) stands on ink of its own,
+		// which recognition places only roughly: pointing at the last letter would find the comma. Each such mark gets
+		// its own blob of ink, and the letter beside it everything up to the gap. `edges` are the boundaries of the
+		// word's characters along the line (edges[0] its start, edges.back() its end), `inked` tells a column with ink.
+		template <typename Inked>
+		void separatePunctuation( std::vector<int>& edges, const std::vector<std::string_view>& texts, int height, const Inked& inked )
+		{
+			const std::size_t n = texts.size();
+			if ( n < 2 || edges.size() != n + 1 )
+			{
+				return;
+			}
+			const auto  mark  = [&]( std::size_t i ) { return isPunctuation( utf8::first( texts[i] ) ); };
+			const int   begin = edges.front();
+			const int   end   = edges.back();
+			std::size_t last  = n;
+			while ( last > 1 && mark( last - 1 ) )
+			{
+				const std::size_t k  = last - 1;
+				int               r1 = edges[k + 1];
+				while ( r1 > begin && !inked( r1 - 1 ) )
+				{
+					--r1;
+				}
+				int r0 = r1;
+				while ( r0 > begin && inked( r0 - 1 ) )
+				{
+					--r0;
+				}
+				int gap = r0;
+				while ( gap > begin && !inked( gap - 1 ) )
+				{
+					--gap;
+				}
+				// A narrow blob after a gap, near where the mark was read, with room left for the letters before it.
+				if ( r0 >= r1 || gap >= r0 || r1 - r0 > ( height * 3 ) / 5 || r0 < edges[k] - height || gap <= edges[k - 1] )
+				{
+					break;
+				}
+				edges[k] = gap;
+				last     = k;
+			}
+			std::size_t first = 0;
+			while ( first + 1 < last && mark( first ) )
+			{
+				const std::size_t k  = first;
+				int               r0 = edges[k];
+				while ( r0 < end && !inked( r0 ) )
+				{
+					++r0;
+				}
+				int r1 = r0;
+				while ( r1 < end && inked( r1 ) )
+				{
+					++r1;
+				}
+				int gap = r1;
+				while ( gap < end && !inked( gap ) )
+				{
+					++gap;
+				}
+				if ( r0 >= r1 || gap <= r1 || r1 - r0 > ( height * 3 ) / 5 || r1 > edges[k + 1] + height || gap >= edges[k + 2] )
+				{
+					break;
+				}
+				edges[k + 1] = gap;
+				first        = k + 1;
+			}
+		}
+
+		// Appends a box for each code point of `text` (a symbol can be several: a letter and its accent).
+		void addBoxes( std::vector<Rect>& boxes, std::string_view text, const Rect& box )
+		{
+			boxes.insert( boxes.end(), std::max<std::size_t>( 1, utf8::length( text ) ), box );
+		}
 
 		int floorTo( int value, int step )
 		{
@@ -170,6 +347,160 @@ namespace lexiglance::platform
 		bool isSmallPunctuation( std::string_view text )
 		{
 			return text == "、" || text == "。" || text == "，" || text == "．" || text == "," || text == ".";
+		}
+
+		// The narrowest blank gap that is a space between words, from the gaps of a line: its gaps fall into those between
+		// letters and those between words, split where the width jumps most (by half at least). None when they are all
+		// alike.
+		std::optional<int> spaceSplit( std::vector<int> gaps, int height )
+		{
+			std::ranges::sort( gaps );
+			const int least = std::max( 3, ( height + 4 ) / 5 );
+			int       split = 0;
+			double    jump  = 1.5;
+			for ( std::size_t i = 1; i < gaps.size(); ++i )
+			{
+				const int a = gaps[i - 1];
+				const int b = gaps[i];
+				if ( b < least || b <= a )
+				{
+					continue;
+				}
+				// Of equal jumps, the one between wider gaps: spaces are the widest.
+				if ( const double ratio = static_cast<double>( b ) / std::max( a, 1 ); ratio >= jump )
+				{
+					jump  = ratio;
+					split = ( a + b + 1 ) / 2;
+				}
+			}
+			return split > 0 ? std::optional<int>( split ) : std::nullopt;
+		}
+
+		bool isHangul( char32_t c )
+		{
+			return ( c >= 0xAC00 && c <= 0xD7A3 ) || ( c >= 0x1100 && c <= 0x11FF ) || ( c >= 0x3130 && c <= 0x318F );
+		}
+
+		bool isLatinLetter( char32_t c )
+		{
+			return ( c >= U'A' && c <= U'Z' ) || ( c >= U'a' && c <= U'z' ) || c == 0xB5 || ( c >= 0xC0 && c <= 0x24F && c != 0xD7 && c != 0xF7 );
+		}
+
+		// Latin letters, and the micro sign, that look exactly like a Cyrillic or a Greek letter.
+		struct Homoglyph
+		{
+			char32_t latin;
+			char32_t cyrillic;
+			char32_t greek;
+		};
+
+		constexpr std::array homoglyphs = std::to_array<Homoglyph>( {
+				{ U'A', U'А', U'Α' },
+				{ U'B', U'В', U'Β' },
+				{ U'C', U'С', 0 },
+				{ U'E', U'Е', U'Ε' },
+				{ U'H', U'Н', U'Η' },
+				{ U'I', U'І', U'Ι' },
+				{ U'K', U'К', U'Κ' },
+				{ U'M', U'М', U'Μ' },
+				{ U'N', 0, U'Ν' },
+				{ U'O', U'О', U'Ο' },
+				{ U'P', U'Р', U'Ρ' },
+				{ U'T', U'Т', U'Τ' },
+				{ U'X', U'Х', U'Χ' },
+				{ U'Y', U'У', U'Υ' },
+				{ U'Z', 0, U'Ζ' },
+				{ U'a', U'а', 0 },
+				{ U'c', U'с', 0 },
+				{ U'e', U'е', 0 },
+				{ U'i', U'і', 0 },
+				{ U'o', U'о', U'ο' },
+				{ U'p', U'р', 0 },
+				{ U'u', 0, U'υ' },
+				{ U'v', 0, U'ν' },
+				{ U'x', U'х', 0 },
+				{ U'y', U'у', 0 },
+				{ U'Ë', U'Ё', 0 },
+				{ U'ë', U'ё', 0 },
+				{ U'µ', 0, U'μ' },
+		} );
+
+		// Recognisers that read several scripts mix up letters that look the same in them: Latin o for Cyrillic о, the
+		// micro sign for μ, a lone в as B. A word written in Cyrillic or Greek, or made only of such look-alikes in a line
+		// that is, gets its Latin look-alikes back in that script; a word with Latin letters that look like nothing there
+		// is Latin (iPhone).
+		template <typename Item>
+		void mendHomoglyphs( std::vector<Item>& items )
+		{
+			struct Count
+			{
+				int cyrillic = 0;
+				int greek    = 0;
+				int latin    = 0;
+			};
+			const auto count = [&]( std::size_t begin, std::size_t end ) {
+				Count counted;
+				for ( std::size_t i = begin; i < end; ++i )
+				{
+					const char32_t c = utf8::first( items[i].text );
+					counted.cyrillic += c >= 0x0400 && c <= 0x052F ? 1 : 0;
+					counted.greek += ( c >= 0x0370 && c <= 0x03FF ) || ( c >= 0x1F00 && c <= 0x1FFF ) ? 1 : 0;
+					counted.latin += isLatinLetter( c ) ? 1 : 0;
+				}
+				return counted;
+			};
+			const Count line = count( 0, items.size() );
+
+			const auto word = [&]( std::size_t begin, std::size_t end ) {
+				const Count here = count( begin, end );
+				if ( here.latin == 0 )
+				{
+					return;
+				}
+				// The word's own script, or the line's when it is written in one of them and has hardly any Latin.
+				bool into_greek = here.greek > here.cyrillic;
+				if ( here.cyrillic + here.greek == 0 )
+				{
+					into_greek = line.greek > line.cyrillic;
+					if ( std::max( line.cyrillic, line.greek ) < 3 * line.latin )
+					{
+						return;
+					}
+				}
+				const auto target = [&]( char32_t c ) -> char32_t {
+					const auto* it = std::ranges::find( homoglyphs, c, &Homoglyph::latin );
+					if ( it == homoglyphs.end() )
+					{
+						return 0;
+					}
+					return into_greek ? it->greek : it->cyrillic;
+				};
+				for ( std::size_t i = begin; i < end; ++i )
+				{
+					const char32_t c = utf8::first( items[i].text );
+					if ( isLatinLetter( c ) && ( utf8::length( items[i].text ) != 1 || target( c ) == 0 ) )
+					{
+						return;
+					}
+				}
+				for ( std::size_t i = begin; i < end; ++i )
+				{
+					if ( const char32_t to = target( utf8::first( items[i].text ) ); to != 0 && utf8::length( items[i].text ) == 1 )
+					{
+						items[i].text.clear();
+						utf8::append( items[i].text, to );
+					}
+				}
+			};
+			std::size_t begin = 0;
+			for ( std::size_t i = 0; i <= items.size(); ++i )
+			{
+				if ( i == items.size() || isSpace( items[i].text ) )
+				{
+					word( begin, i );
+					begin = i + 1;
+				}
+			}
 		}
 
 		std::string dumpSymbols( const std::vector<OcrSymbol>& symbols )
@@ -198,6 +529,44 @@ namespace lexiglance::platform
 			const int right  = std::min( a.x + a.width, b.x + b.width );
 			const int bottom = std::min( a.y + a.height, b.y + b.height );
 			return { .x = left, .y = top, .width = std::max( 0, right - left ), .height = std::max( 0, bottom - top ) };
+		}
+
+		// The screen area of `length` characters from the start of a capture: the handle's boxes from the one under the
+		// pointer, less the characters put in front of it (the start of its word).
+		// The same span a rectangle for each line it is on.
+		std::vector<Rect> spansOf( const OcrLine& line, const CapturedText& text, std::size_t length )
+		{
+			const std::size_t from = line.first - std::min( line.first, text.rewound );
+			const std::size_t to   = std::min( line.boxes.size(), from + std::min( length, utf8::length( text.text ) ) );
+			std::vector<Rect> spans;
+			for ( std::size_t i = from; i < to; ++i )
+			{
+				// A new line starts at this box, or the first box of the span.
+				if ( i == from || std::ranges::contains( line.line_starts, i ) )
+				{
+					spans.push_back( line.boxes[i] );
+					continue;
+				}
+				spans.back() = unite( spans.back(), line.boxes[i] );
+			}
+			std::erase_if( spans, []( const Rect& span ) { return span.empty(); } );
+			return spans;
+		}
+
+		std::optional<Rect> spanOf( const OcrLine& line, const CapturedText& text, std::size_t length )
+		{
+			const std::size_t from = line.first - std::min( line.first, text.rewound );
+			const std::size_t to   = std::min( line.boxes.size(), from + std::min( length, utf8::length( text.text ) ) );
+			if ( from >= to )
+			{
+				return std::nullopt;
+			}
+			Rect area = line.boxes[from];
+			for ( std::size_t i = from + 1; i < to; ++i )
+			{
+				area = unite( area, line.boxes[i] );
+			}
+			return area;
 		}
 
 		// Our own popup and highlight are on screen too. What a tinted highlight hides is known and put back; everything else
@@ -553,9 +922,16 @@ namespace lexiglance::platform
 			return rows;
 		}
 
+		struct Along
+		{
+			int begin      = 0;
+			int end        = 0;
+			int word_begin = 0;
+		};
+
 		// Along the line: a little before the pointer and plenty after, on a grid for the cache. Glyphs cut by the strip's
 		// edges would be read as garbage, so they are left out; elsewhere the crop never cuts through a glyph.
-		std::pair<int, int> alongRange( const InkMask& mask, int origin, int pa, std::pair<int, int> clear, const Rows& rows )
+		Along alongRange( const InkMask& mask, int origin, int pa, std::pair<int, int> clear, const Rows& rows )
 		{
 			const auto [a0, a1] = clear;
 			const int  height   = rows.hi - rows.lo + 1;
@@ -592,7 +968,19 @@ namespace lexiglance::platform
 					++end;
 				}
 			}
-			return { begin, end };
+			// Back from the start to the nearest gap as wide as a space, within the strip.
+			int word_begin = begin;
+			int run        = 0;
+			for ( int a = begin - 1; a >= std::max( a0, begin - ( 12 * height ) ); --a )
+			{
+				run = blank( a ) ? run + 1 : 0;
+				if ( run >= std::max( 2, ( height + 2 ) / 4 ) )
+				{
+					word_begin = a + run;
+					break;
+				}
+			}
+			return { .begin = begin, .end = end, .word_begin = word_begin };
 		}
 
 		// Finds the pointer's line: its rows (columns for vertical text) and its extent along the strip up to solid areas
@@ -625,15 +1013,16 @@ namespace lexiglance::platform
 			{
 				return std::nullopt;
 			}
-			const auto [begin, end] = alongRange( mask, vertical ? grab.region.y : grab.region.x, pa, { a0, a1 }, *rows );
-			const int height        = rows->hi - rows->lo + 1;
+			const auto [begin, end, word_begin] = alongRange( mask, vertical ? grab.region.y : grab.region.x, pa, { a0, a1 }, *rows );
+			const int height                    = rows->hi - rows->lo + 1;
 
 			Line line;
-			line.upscale   = std::clamp( static_cast<int>( std::lround( target_height / height ) ), 1, 4 );
-			line.crop      = vertical ? Rect{ .x = rows->from, .y = begin, .width = rows->to - rows->from + 1, .height = end - begin }
-			                          : Rect{ .x = begin, .y = rows->from, .width = end - begin, .height = rows->to - rows->from + 1 };
-			line.core_from = rows->lo - rows->from;
-			line.core_to   = rows->hi - rows->from + 1;
+			line.upscale    = std::clamp( static_cast<int>( std::lround( target_height / height ) ), 1, 4 );
+			line.crop       = vertical ? Rect{ .x = rows->from, .y = begin, .width = rows->to - rows->from + 1, .height = end - begin }
+			                           : Rect{ .x = begin, .y = rows->from, .width = end - begin, .height = rows->to - rows->from + 1 };
+			line.core_from  = rows->lo - rows->from;
+			line.core_to    = rows->hi - rows->from + 1;
+			line.word_begin = word_begin;
 			return line;
 		}
 
@@ -1203,6 +1592,664 @@ namespace lexiglance::platform
 			return placed;
 		}
 
+		// Scripts written with spaces are set in letters of their own widths, not on a grid: each letter stays where Tesseract
+		// saw it, each word's edges go onto its ink (Tesseract's boxes stop a little short or run into the space), and a
+		// space goes between words, as the lookup ends a word there.
+		std::vector<OcrSymbol> placeWords( const std::vector<OcrSymbol>& symbols, const Grab& grab, const Tone& tone, std::pair<int, int> core )
+		{
+			const InkLine line( grab, tone, false, core.first, core.second );
+			if ( line.empty() )
+			{
+				return {};
+			}
+			// Tesseract may also report strays of the lines above and below as lines of their own: the one on the core rows
+			// is the pointer's.
+			std::vector<int> hits;
+			for ( const OcrSymbol& symbol : symbols )
+			{
+				const int middle = symbol.box.y + ( symbol.box.height / 2 ) - grab.region.y;
+				if ( !isSpace( symbol.text ) && symbol.line >= 0 && middle >= core.first && middle < core.second )
+				{
+					hits.resize( std::max( hits.size(), static_cast<std::size_t>( symbol.line ) + 1 ) );
+					++hits[static_cast<std::size_t>( symbol.line )];
+				}
+			}
+			if ( hits.empty() )
+			{
+				return {};
+			}
+			const auto                    main = static_cast<int>( std::ranges::max_element( hits ) - hits.begin() );
+			std::vector<const OcrSymbol*> letters;
+			for ( const OcrSymbol& symbol : symbols )
+			{
+				if ( symbol.line == main && !isSpace( symbol.text ) )
+				{
+					letters.push_back( &symbol );
+				}
+			}
+
+			// Words as ranges of letters, each with its extent along the line.
+			struct Word
+			{
+				std::size_t begin = 0;
+				std::size_t end   = 0;
+				int         from  = 0;
+				int         to    = 0;
+			};
+			std::vector<Word> words;
+			for ( std::size_t i = 0; i < letters.size(); ++i )
+			{
+				const auto [from, to] = line.span( letters[i]->box );
+				if ( words.empty() || letters[i]->word || from >= words.back().to + ( line.height() / 2 ) )
+				{
+					words.push_back( { .begin = i, .end = i + 1, .from = from, .to = to } );
+					continue;
+				}
+				words.back().end  = i + 1;
+				words.back().from = std::min( words.back().from, from );
+				words.back().to   = std::max( words.back().to, to );
+			}
+			for ( std::size_t w = 0; w < words.size(); ++w )
+			{
+				Word&     word  = words[w];
+				const int floor = w > 0 ? words[w - 1].to : 0;
+				const int ceil  = w + 1 < words.size() ? words[w + 1].from : line.length();
+				int       from  = std::clamp( word.from, floor, line.length() );
+				int       to    = std::clamp( word.to, from, std::max( from, ceil ) );
+				while ( from < to && line.blank( from ) )
+				{
+					++from;
+				}
+				while ( to > from && line.blank( to - 1 ) )
+				{
+					--to;
+				}
+				if ( from == to )
+				{
+					// No ink where Tesseract put the word: its own boxes are all there is.
+					word.from = std::clamp( word.from, floor, line.length() );
+					word.to   = std::clamp( word.to, word.from, line.length() );
+					continue;
+				}
+				// Ink running on past the box is the rest of a glyph Tesseract cut short.
+				while ( from > floor && !line.blank( from - 1 ) )
+				{
+					--from;
+				}
+				while ( to < ceil && !line.blank( to ) )
+				{
+					++to;
+				}
+				word.from = from;
+				word.to   = to;
+			}
+
+			// Tesseract takes every Hangul syllable for a word: between two, only a gap as wide as a space is one.
+			std::vector<int> gaps;
+			for ( std::size_t w = 1; w < words.size(); ++w )
+			{
+				gaps.push_back( words[w].from - words[w - 1].to );
+			}
+			if ( log::enabled( log::Level::Debug ) )
+			{
+				std::string list;
+				for ( const int g : gaps )
+				{
+					list += std::format( "{} ", g );
+				}
+				log::debug( "ocr: word gaps {}(height {})", list, line.height() );
+			}
+			// When the gaps are all alike, a quarter of the line's height tells.
+			const int              space = spaceSplit( std::move( gaps ), line.height() ).value_or( std::max( 2, ( line.height() + 2 ) / 4 ) );
+			std::vector<OcrSymbol> placed;
+			for ( std::size_t w = 0; w < words.size(); ++w )
+			{
+				const Word& word = words[w];
+				if ( w > 0 )
+				{
+					const int  gap      = words[w - 1].to;
+					const bool syllable = isHangul( utf8::first( letters[word.begin - 1]->text ) ) && isHangul( utf8::first( letters[word.begin]->text ) );
+					// In small text Tesseract also splits other words now and then, where their letters all but touch.
+					const bool touching = line.height() <= 12 && word.from - gap <= 1;
+					if ( syllable ? word.from - gap >= space : !touching )
+					{
+						placed.push_back( { .text = " ", .box = line.box( gap, std::max( word.from, gap + 1 ) ), .line = 0, .confidence = 0.0F, .word = false } );
+					}
+				}
+				// Letters keep Tesseract's boundaries between them, stretched onto the word's ink and kept in order.
+				const auto first = line.span( letters[word.begin]->box ).first;
+				const auto last  = line.span( letters[word.end - 1]->box ).second;
+
+				const auto onto = [&]( int at ) {
+					if ( last <= first )
+					{
+						return word.from;
+					}
+					return word.from + static_cast<int>( std::lround( static_cast<double>( at - first ) * ( word.to - word.from ) / ( last - first ) ) );
+				};
+				std::vector<int>              edges{ word.from };
+				std::vector<std::string_view> texts;
+				for ( std::size_t i = word.begin; i < word.end; ++i )
+				{
+					const std::size_t remaining = word.end - i - 1;
+					int               end       = word.to;
+					if ( remaining > 0 )
+					{
+						const int boundary = ( line.span( letters[i]->box ).second + line.span( letters[i + 1]->box ).first ) / 2;
+						end                = std::clamp( onto( boundary ), edges.back() + 1, std::max( edges.back() + 1, word.to - static_cast<int>( remaining ) ) );
+					}
+					edges.push_back( std::max( end, edges.back() + 1 ) );
+					texts.emplace_back( letters[i]->text );
+				}
+				separatePunctuation( edges, texts, line.height(), [&]( int a ) { return !line.blank( a ); } );
+				for ( std::size_t i = word.begin; i < word.end; ++i )
+				{
+					OcrSymbol symbol = *letters[i];
+					symbol.box       = line.box( edges[i - word.begin], edges[i - word.begin + 1] );
+					symbol.line      = 0;
+					placed.push_back( std::move( symbol ) );
+				}
+			}
+			mendHomoglyphs( placed );
+			return placed;
+		}
+
+		// Which columns of a text box hold ink along its line: those with a pixel well off the background (the median of the
+		// margin's outermost rows, as in inked()) on the line's own rows.
+		struct InkColumns
+		{
+			int                       from = 0;
+			std::vector<std::uint8_t> ink;
+			// The topmost and bottommost inked row of each column, told from a plain background; empty when the ink had to
+			// be found by its own colour, where the rows cannot be trusted.
+			std::vector<int> top;
+			std::vector<int> bottom;
+
+			// How tall the ink is between two columns, or 0 when that cannot be told.
+			[[nodiscard]] int height( int from_x, int to_x ) const noexcept
+			{
+				int highest = std::numeric_limits<int>::max();
+				int lowest  = std::numeric_limits<int>::min();
+				for ( int x = std::max( from_x, from ); x <= std::min( to_x, to() - 1 ); ++x )
+				{
+					const auto at = static_cast<std::size_t>( x - from );
+					if ( at < top.size() && top[at] >= 0 )
+					{
+						highest = std::min( highest, top[at] );
+						lowest  = std::max( lowest, bottom[at] );
+					}
+				}
+				return lowest >= highest ? lowest - highest + 1 : 0;
+			}
+
+			[[nodiscard]] int to() const noexcept
+			{
+				return from + static_cast<int>( ink.size() );
+			}
+
+			[[nodiscard]] bool operator()( int x ) const noexcept
+			{
+				return x >= from && x < to() && ink[static_cast<std::size_t>( x - from )] != 0;
+			}
+		};
+
+		InkColumns inkColumns( const ocr::Image& image, const ocr::Box& box, std::size_t letters )
+		{
+			InkColumns columns;
+			const int  along0  = std::clamp( box.x, 0, image.width );
+			const int  along1  = std::clamp( box.x + box.width, along0, image.width );
+			const int  across0 = std::clamp( box.inner_y, 0, image.height );
+			const int  across1 = std::clamp( box.inner_y + box.inner_height, across0, image.height );
+			if ( along1 - along0 < 2 || across1 <= across0 || image.height < 1 )
+			{
+				return columns;
+			}
+			const int top    = std::clamp( box.y, 0, image.height - 1 );
+			const int bottom = std::clamp( box.y + box.height - 1, 0, image.height - 1 );
+
+			const auto gray = [&]( int x, int y ) {
+				const std::size_t at = ( ( static_cast<std::size_t>( y ) * static_cast<std::size_t>( image.width ) ) + static_cast<std::size_t>( x ) ) * 3;
+				return ( ( image.rgb[at] * 299 ) + ( image.rgb[at + 1] * 587 ) + ( image.rgb[at + 2] * 114 ) ) / 1000;
+			};
+			std::vector<int> edge;
+			for ( int x = along0; x < along1; ++x )
+			{
+				edge.push_back( gray( x, top ) );
+				edge.push_back( gray( x, bottom ) );
+			}
+			const auto inked_columns = [&]( const auto& inked ) {
+				std::vector<std::uint8_t> ink( static_cast<std::size_t>( along1 - along0 ), 0 );
+				for ( int x = along0; x < along1; ++x )
+				{
+					for ( int y = across0; y < across1; ++y )
+					{
+						if ( inked( gray( x, y ) ) )
+						{
+							ink[static_cast<std::size_t>( x - along0 )] = 1;
+							break;
+						}
+					}
+				}
+				return ink;
+			};
+			const auto gaps = []( const std::vector<std::uint8_t>& ink ) {
+				std::size_t count = 0;
+				for ( std::size_t i = 1; i < ink.size(); ++i )
+				{
+					count += ink[i - 1] != 0 && ink[i] == 0 ? 1 : 0;
+				}
+				return count;
+			};
+			// Ink is whatever stands out of the background.
+			std::ranges::sort( edge );
+			const int background = edge[edge.size() / 2];
+			columns.from         = along0;
+			columns.ink          = inked_columns( [&]( int g ) { return std::abs( g - background ) > 48; } );
+			// How tall that ink stands in each column, for telling one size of text from another.
+			columns.top.assign( columns.ink.size(), -1 );
+			columns.bottom.assign( columns.ink.size(), -1 );
+			for ( int x = along0; x < along1; ++x )
+			{
+				const auto at = static_cast<std::size_t>( x - along0 );
+				if ( columns.ink[at] == 0 )
+				{
+					continue;
+				}
+				for ( int y = across0; y < across1; ++y )
+				{
+					if ( std::abs( gray( x, y ) - background ) > 48 )
+					{
+						columns.top[at]    = columns.top[at] < 0 ? y : columns.top[at];
+						columns.bottom[at] = y;
+					}
+				}
+			}
+			if ( gaps( columns.ink ) * 3 >= letters )
+			{
+				return columns;
+			}
+			// Unless that runs the letters together, over a busy background (a game's scene, stripes) or around outlined
+			// letters: ink is then one of the letters' own colours (a gray that fills the box's middle much more than its
+			// edges), their fill or their outline, whichever keeps them apart best.
+			std::array<int, 16> border{};
+			for ( const int g : edge )
+			{
+				++border[static_cast<std::size_t>( g / 16 )];
+			}
+			std::array<int, 256> inside{};
+			int                  total = 0;
+			for ( int x = along0; x < along1; ++x )
+			{
+				for ( int y = across0; y < across1; ++y )
+				{
+					++inside[static_cast<std::size_t>( gray( x, y ) )];
+					++total;
+				}
+			}
+			// Each colour as the commonest gray of its sixteen, with how much more of the middle it fills than of the edges.
+			std::vector<std::pair<int, double>> colours;
+			for ( std::size_t bin = 0; bin < border.size(); ++bin )
+			{
+				const auto   grays = std::span( inside ).subspan( bin * 16, 16 );
+				const double lead  = ( static_cast<double>( std::accumulate( grays.begin(), grays.end(), 0 ) ) / total ) - ( static_cast<double>( border[bin] ) / static_cast<double>( edge.size() ) );
+				if ( lead > 0.05 )
+				{
+					colours.emplace_back( static_cast<int>( ( bin * 16 ) + static_cast<std::size_t>( std::ranges::max_element( grays ) - grays.begin() ) ), lead );
+				}
+			}
+			// Small plain letters on a plain background just stand close; their edges' grays are no colours of their own.
+			const bool busy     = edge[( edge.size() * 3 ) / 4] - edge[edge.size() / 4] > 32;
+			const bool outlined = std::ranges::any_of( colours, [&]( const auto& a ) {
+				return a.second > 0.1 && std::ranges::any_of( colours, [&]( const auto& b ) { return b.second > 0.1 && std::abs( a.first - b.first ) >= 96; } );
+			} );
+			if ( !busy && !outlined )
+			{
+				return columns;
+			}
+			std::size_t most = gaps( columns.ink );
+			for ( const int colour : colours | std::views::keys )
+			{
+				auto ink = inked_columns( [&]( int g ) { return std::abs( g - colour ) <= 16; } );
+				if ( const auto apart = gaps( ink ); apart > most )
+				{
+					most        = apart;
+					columns.ink = std::move( ink );
+					// Found by colour: the rows above tell nothing about this ink.
+					columns.top.clear();
+					columns.bottom.clear();
+				}
+			}
+			return columns;
+		}
+
+		// The blank runs between inked columns within [from, to), as [first, last) pairs; with `inner` only those with
+		// ink on both sides.
+		std::vector<std::pair<int, int>> blankRuns( const InkColumns& ink, int from, int to, bool inner )
+		{
+			std::vector<std::pair<int, int>> runs;
+			for ( int x = from; x < to; )
+			{
+				if ( ink( x ) )
+				{
+					++x;
+					continue;
+				}
+				int end = x;
+				while ( end < to && !ink( end ) )
+				{
+					++end;
+				}
+				if ( !inner || ( x > from && end < to ) )
+				{
+					runs.emplace_back( x, end );
+				}
+				x = end;
+			}
+			return runs;
+		}
+
+		// Marks that close what comes before them, and marks that open what comes after: no space goes on their inner side.
+		bool closes( char32_t c )
+		{
+			return std::u32string_view( U".,!?:;)]}»”’…" ).contains( c );
+		}
+
+		bool opens( char32_t c )
+		{
+			return std::u32string_view( U"([{«„“‘¿¡" ).contains( c );
+		}
+
+		// Small text sometimes comes without some of its spaces (Korean especially), which would run its words together: a
+		// gap as wide as a space where none was read gets one. Only where the line's gaps clearly fall into two widths (in
+		// small text letters can stand nearly as far apart as words), and nearly as wide as the spaces that were read. The
+		// wide ones cannot be most of them: in a font whose letters stand apart (a game's, often) most gaps are wide, and
+		// are between letters. With no space read at all, one wide gap is only a wide letter (as in a word the detection
+		// boxed on its own) unless it is between Korean syllables.
+		void recoverSpaces( std::vector<ocr::Character>& chars, const InkColumns& ink, int height )
+		{
+			const auto blanks = blankRuns( ink, ink.from, ink.to(), true );
+			// The character after a gap, and whether a space was read beside it.
+			const auto after = [&]( const std::pair<int, int>& blank ) {
+				const float at = static_cast<float>( blank.first + blank.second ) / 2.0F;
+				return std::ranges::find_if( chars, [&]( const ocr::Character& c ) { return ( c.from + c.to ) / 2.0F > at; } );
+			};
+			const auto beside_space = [&]( auto next ) { return next == chars.begin() || next == chars.end() || isSpace( next->text ) || isSpace( std::prev( next )->text ); };
+
+			std::vector<int> gaps;
+			std::vector<int> read;
+			for ( const auto& blank : blanks )
+			{
+				gaps.push_back( blank.second - blank.first );
+				if ( const auto next = after( blank ); next != chars.begin() && next != chars.end() && beside_space( next ) )
+				{
+					read.push_back( blank.second - blank.first );
+				}
+			}
+			const auto split = spaceSplit( std::move( gaps ), height );
+			if ( !split )
+			{
+				return;
+			}
+			int space = *split;
+			if ( !read.empty() )
+			{
+				const auto usual = read.begin() + static_cast<std::ptrdiff_t>( read.size() / 2 );
+				std::ranges::nth_element( read, usual );
+				space = std::max( space, ( *usual * 3 ) / 4 );
+			}
+			const auto wide    = [&]( const std::pair<int, int>& blank ) { return blank.second - blank.first >= space; };
+			const auto missing = [&]( const std::pair<int, int>& blank ) {
+				const auto next = after( blank );
+				return wide( blank ) && !beside_space( next ) && !closes( utf8::first( next->text ) ) && !opens( utf8::first( std::prev( next )->text ) );
+			};
+			// Korean is where one is left out most, even the only one of a line.
+			const auto between_hangul = [&]( const std::pair<int, int>& blank ) {
+				const auto next = after( blank );
+				return isHangul( utf8::first( next->text ) ) && isHangul( utf8::first( std::prev( next )->text ) );
+			};
+			const auto wide_count    = std::ranges::count_if( blanks, wide );
+			const auto missing_count = std::ranges::count_if( blanks, missing );
+			if ( wide_count * 3 > std::ssize( blanks ) * 2 )
+			{
+				return;
+			}
+			// With no space read anywhere, what the line would read as decides: words of a letter or two throughout mean
+			// the gaps were between letters, not words (a single word in large text stands wide apart). Where spaces were
+			// read the line already shows where its words end, and short ones are ordinary («т. е. и т. д.»).
+			const auto letters_in = std::ranges::count_if( chars, []( const ocr::Character& c ) { return !isSpace( c.text ); } );
+			if ( read.empty() && letters_in * 2 < ( missing_count + 1 ) * 5 )
+			{
+				return;
+			}
+			const bool lone = read.empty() && missing_count < 2;
+			for ( const auto& blank : blanks )
+			{
+				if ( !missing( blank ) || ( lone && !between_hangul( blank ) ) )
+				{
+					continue;
+				}
+				const auto  next       = after( blank );
+				const float confidence = std::min( next->confidence, std::prev( next )->confidence );
+				chars.insert( next, { .text = " ", .confidence = confidence, .from = static_cast<float>( blank.first ), .to = static_cast<float>( blank.second ) } );
+			}
+		}
+
+		using Ranges = std::vector<std::pair<std::size_t, std::size_t>>;
+
+		// Words as ranges of characters between spaces.
+		Ranges wordRanges( const std::vector<ocr::Character>& chars )
+		{
+			Ranges words;
+			for ( std::size_t i = 0; i < chars.size(); ++i )
+			{
+				if ( isSpace( chars[i].text ) )
+				{
+					continue;
+				}
+				if ( !words.empty() && words.back().second == i )
+				{
+					words.back().second = i + 1;
+				}
+				else
+				{
+					words.emplace_back( i, i + 1 );
+				}
+			}
+			return words;
+		}
+
+		int centreOf( const ocr::Character& c )
+		{
+			return static_cast<int>( std::lround( ( c.from + c.to ) / 2.0F ) );
+		}
+
+		int widthOf( const ocr::Character& c )
+		{
+			return std::max( 1, static_cast<int>( std::lround( c.to - c.from ) ) );
+		}
+
+		// Japanese and Chinese are written without spaces, so a wide gap between two of their characters is not a word
+		// break but a break between two separate things: the columns of a menu, a word beside its reading. It gets a
+		// space, which ends the sentence there, so translating one of them leaves the other alone. Only an unmistakable
+		// gap counts: kana are small in their squares, and in some fonts (Mincho, rounded ones) two of them stand more
+		// than half a square apart with no space at all. Punctuation is skipped, filling a square of its own with a mark
+		// in one corner.
+		void spaceGaps( ocr::TextLine& line, const ocr::Image& image )
+		{
+			auto& chars = line.characters;
+			if ( chars.size() < 2 )
+			{
+				return;
+			}
+			const InkColumns ink = inkColumns( image, line.box, chars.size() );
+			if ( ink.ink.size() < 2 )
+			{
+				return;
+			}
+			const int  size  = std::max( 1, line.box.inner_height );
+			const auto plain = [&]( const ocr::Character& c ) {
+				const char32_t first = utf8::first( c.text );
+				return !isSpace( c.text ) && first != 0x3000 && !isPunctuation( first ) && !isSmallPunctuation( c.text );
+			};
+			// The blank between two characters, at its widest.
+			const auto blank = [&]( int from, int to ) {
+				int widest = 0;
+				int run    = 0;
+				for ( int x = from; x <= to; ++x )
+				{
+					run    = ink( x ) ? 0 : run + 1;
+					widest = std::max( widest, run );
+				}
+				return widest;
+			};
+			// A space of the reading's own: Japanese is read with 　, which a sentence may hold. One much wider than that
+			// is not part of a sentence but a break between two things, and becomes a plain space, which ends it.
+			for ( std::size_t i = 1; i + 1 < chars.size(); ++i )
+			{
+				if ( utf8::first( chars[i].text ) != 0x3000 )
+				{
+					continue;
+				}
+				if ( blank( centreOf( chars[i - 1] ), centreOf( chars[i + 1] ) ) * 5 >= size * 7 )
+				{
+					chars[i].text = " ";
+				}
+			}
+			// How tall the letters stand around a place in the line, as the middle of the three nearest.
+			const auto letters = [&]( std::size_t from, std::size_t to ) {
+				std::vector<int> heights;
+				for ( std::size_t i = from; i < to && i < chars.size(); ++i )
+				{
+					if ( const int tall = ink.height( static_cast<int>( chars[i].from ), static_cast<int>( chars[i].to ) ); plain( chars[i] ) && tall > 0 )
+					{
+						heights.push_back( tall );
+					}
+				}
+				if ( heights.empty() )
+				{
+					return 0;
+				}
+				std::ranges::nth_element( heights, heights.begin() + static_cast<std::ptrdiff_t>( heights.size() / 2 ) );
+				return heights[heights.size() / 2];
+			};
+			for ( std::size_t i = chars.size(); i-- > 1; )
+			{
+				if ( !plain( chars[i] ) || !plain( chars[i - 1] ) )
+				{
+					continue;
+				}
+				const int gap = blank( centreOf( chars[i - 1] ), centreOf( chars[i] ) );
+				// Letters of a plainly different size beside these ones are something else: a word next to its reading, a
+				// name beside what is said. They are parted where they meet, as long as they do not touch.
+				const int before = letters( i > 3 ? i - 3 : 0, i );
+				const int after  = letters( i, i + 3 );
+				if ( gap * 8 >= size && before > 0 && after > 0 && std::min( before, after ) * 5 <= std::max( before, after ) * 3 )
+				{
+					chars.insert( chars.begin() + static_cast<std::ptrdiff_t>( i ), { .text = " ", .confidence = std::min( chars[i].confidence, chars[i - 1].confidence ), .from = chars[i - 1].to, .to = chars[i].from } );
+					continue;
+				}
+				if ( gap * 5 >= size * 4 )
+				{
+					chars.insert( chars.begin() + static_cast<std::ptrdiff_t>( i ), { .text = " ", .confidence = std::min( chars[i].confidence, chars[i - 1].confidence ), .from = chars[i - 1].to, .to = chars[i].from } );
+				}
+			}
+		}
+
+		// The line's ends: its first and last inked columns near where its first and last letters were read.
+		void lineEnds( const std::vector<ocr::Character>& chars, const Ranges& words, std::vector<std::pair<float, float>>& extents, const InkColumns& ink )
+		{
+			const ocr::Character& first = chars[words.front().first];
+			for ( int x = centreOf( first ) - widthOf( first ); x <= centreOf( first ) + ( widthOf( first ) / 2 ); ++x )
+			{
+				if ( ink( x ) )
+				{
+					int from = x;
+					while ( ink( from - 1 ) )
+					{
+						--from;
+					}
+					extents.front().first = static_cast<float>( from );
+					break;
+				}
+			}
+			const ocr::Character& last = chars[words.back().second - 1];
+			for ( int x = static_cast<int>( std::lround( last.to ) ) + widthOf( last ); x >= centreOf( last ) - ( widthOf( last ) / 2 ); --x )
+			{
+				if ( ink( x ) )
+				{
+					int to = x + 1;
+					while ( ink( to ) )
+					{
+						++to;
+					}
+					extents.back().second = static_cast<float>( to );
+					break;
+				}
+			}
+		}
+
+		// The gap between two words: the widest from the middle of the one's last letter to the middle of the other's
+		// first, run on to the ink on either side where the window cut it.
+		std::optional<std::pair<int, int>> gapBetween( const std::vector<ocr::Character>& chars, std::pair<std::size_t, std::size_t> one, std::pair<std::size_t, std::size_t> other, const InkColumns& ink )
+		{
+			const int  lo     = std::max( ink.from, centreOf( chars[one.second - 1] ) );
+			const int  hi     = std::min( ink.to(), centreOf( chars[other.first] ) );
+			const auto runs   = blankRuns( ink, lo, hi, false );
+			const auto widest = std::ranges::max_element( runs, {}, []( const std::pair<int, int>& run ) { return run.second - run.first; } );
+			if ( widest == runs.end() )
+			{
+				return std::nullopt;
+			}
+			auto [from, to] = *widest;
+			while ( from > ink.from && !ink( from - 1 ) && from > centreOf( chars[one.first] ) )
+			{
+				--from;
+			}
+			while ( to < ink.to() && !ink( to ) && to < centreOf( chars[other.second - 1] ) )
+			{
+				++to;
+			}
+			return std::pair{ from, to };
+		}
+
+		// Each word's characters spread over its new extent in the proportions they were read in, punctuation on its own
+		// ink; spaces fill the gaps.
+		void spreadWords( std::vector<ocr::Character>& chars, const Ranges& words, const std::vector<std::pair<float, float>>& extents, const InkColumns& ink, int height )
+		{
+			for ( std::size_t w = 0; w < words.size(); ++w )
+			{
+				const auto [first, last] = words[w];
+				const float a            = chars[first].from;
+				const float b            = chars[last - 1].to;
+				const float s            = extents[w].first;
+				const float e            = std::max( extents[w].second, s + 1.0F );
+				const auto  onto         = [&]( float x ) { return b > a ? s + ( ( x - a ) * ( e - s ) / ( b - a ) ) : s; };
+
+				std::vector<int>              edges{ static_cast<int>( std::lround( s ) ) };
+				std::vector<std::string_view> texts;
+				for ( std::size_t i = first; i < last; ++i )
+				{
+					const int to = i + 1 == last ? static_cast<int>( std::lround( e ) ) : static_cast<int>( std::lround( onto( chars[i].to ) ) );
+					edges.push_back( std::max( to, edges.back() + 1 ) );
+					texts.emplace_back( chars[i].text );
+				}
+				separatePunctuation( edges, texts, height, ink );
+				for ( std::size_t i = first; i < last; ++i )
+				{
+					chars[i].from = static_cast<float>( edges[i - first] );
+					chars[i].to   = static_cast<float>( edges[i - first + 1] );
+				}
+				if ( w + 1 < words.size() )
+				{
+					for ( std::size_t i = last; i < words[w + 1].first; ++i )
+					{
+						chars[i].from = chars[last - 1].to;
+						chars[i].to   = std::max( extents[w + 1].first, chars[i].from + 1.0F );
+					}
+				}
+			}
+		}
+
 		// Our own windows in a grab (in its coordinates): all of them, and those that show nothing of what is below.
 		struct Covered
 		{
@@ -1263,11 +2310,12 @@ namespace lexiglance::platform
 				return description_;
 			}
 
-			std::optional<CapturedText> capture( Point point, const WindowInfo& window, std::size_t max_chars ) override
+			std::optional<CapturedText> capture( Point point, const WindowInfo& window, CaptureScope scope ) override
 			{
+				const std::size_t max_chars = scope.characters;
 				if ( paddle_ )
 				{
-					return capturePaddle( point, window, max_chars );
+					return capturePaddle( point, window, scope );
 				}
 				const auto grab = grabAround( point, window );
 				if ( grab.gray.empty() )
@@ -1282,22 +2330,38 @@ namespace lexiglance::platform
 					log::debug( "ocr: no text line at {},{} (background {}, ink {})", point.x, point.y, tone.background, tone.ink );
 					return std::nullopt;
 				}
-				return select( recognition( crop( grab, line->crop ), tone, line->upscale, { line->core_from, line->core_to } ), point, max_chars );
+				const Recognition* read = &recognition( crop( grab, line->crop ), tone, line->upscale, { line->core_from, line->core_to } );
+				// The crop starts a good way before the pointer, but a long word pointed at near its end may still begin
+				// before it: read again from the gap before that word.
+				if ( read->words && !vertical_ && line->word_begin < line->crop.x && inFirstWord( *read, point ) )
+				{
+					Rect wider = line->crop;
+					wider.width += wider.x - line->word_begin;
+					wider.x = line->word_begin;
+					log::debug( "ocr: the word at {},{} starts before the crop: reading from {} on", point.x, point.y, grab.region.x + wider.x );
+					read = &recognition( crop( grab, wider ), tone, line->upscale, { line->core_from, line->core_to } );
+				}
+				return select( *read, point, max_chars );
 			}
 
 			std::optional<Rect> bounds( const CapturedText& text, std::size_t length ) override
 			{
 				const auto* line = static_cast<const OcrLine*>( text.handle.get() );
-				if ( line == nullptr || line->boxes.empty() || length == 0 )
+				if ( line == nullptr || length == 0 )
 				{
 					return std::nullopt;
 				}
-				Rect area = line->boxes.front();
-				for ( std::size_t i = 1; i < std::min( length, line->boxes.size() ); ++i )
+				return spanOf( *line, text, length );
+			}
+
+			std::vector<Rect> lineBounds( const CapturedText& text, std::size_t length ) override
+			{
+				const auto* line = static_cast<const OcrLine*>( text.handle.get() );
+				if ( line == nullptr || length == 0 )
 				{
-					area = unite( area, line->boxes[i] );
+					return {};
 				}
-				return area;
+				return spansOf( *line, text, length );
 			}
 
 			// Reads words of each language drawn for the purpose, with the same recognisers the captures use.
@@ -1411,7 +2475,7 @@ namespace lexiglance::platform
 
 			// PaddleOCR: text boxes in a region around the pointer, then the box under it read as a line. Regions sit on a
 			// grid, so moving along a line keeps hitting the cache.
-			std::optional<CapturedText> capturePaddle( Point point, const WindowInfo& window, std::size_t max_chars )
+			std::optional<CapturedText> capturePaddle( Point point, const WindowInfo& window, CaptureScope scope )
 			{
 				const int u      = unit_;
 				Rect      region = { .x = floorTo( point.x - ( 10 * u ), 8 * u ), .y = floorTo( point.y - ( 10 * u ), 4 * u ), .width = 44 * u, .height = 20 * u };
@@ -1510,22 +2574,38 @@ namespace lexiglance::platform
 				{
 					return std::nullopt;
 				}
-				auto& line = cached->lines[*chosen];
-				if ( !line )
-				{
-					line      = paddle_->recognize( image, cached->boxes[*chosen], vertical_ );
-					line->box = inked( image, line->box, line->vertical );
-					if ( log::enabled( log::Level::Debug ) )
+				// Each box is read once, when it is first needed.
+				const auto read = [&]( std::size_t index ) -> const ocr::TextLine& {
+					auto& line = cached->lines[index];
+					if ( !line )
 					{
-						std::string text;
-						for ( const auto& c : line->characters )
-						{
-							text.append( c.text );
-						}
-						log::debug( "ocr: {}box {}x{} ({}) «{}»", loose ? "loose " : "", line->box.width, line->box.height, line->vertical ? "vertical" : "horizontal", text );
+						line      = paddle_->recognize( image, cached->boxes[index], vertical_ );
+						line->box = inked( image, line->box, line->vertical );
+						snapWords( *line, image );
+						log::debug( "ocr: {}box {}x{} ({}) «{}»", loose && index == *chosen ? "loose " : "", line->box.width, line->box.height, line->vertical ? "vertical" : "horizontal", lineText( *line ) );
 					}
+					return *line;
+				};
+				const ocr::TextLine& line  = read( *chosen );
+				const auto           start = pointed( line, local );
+				if ( !start )
+				{
+					return std::nullopt;
 				}
-				return selectLine( *line, region, local, max_chars, loose ? 0.8F : 0.6F );
+				// A sentence the line does not finish goes on on the next lines of its paragraph (wrapped text in a chat,
+				// say). They are read when the text from the pointer reaches the end of the line or the sentence is wanted,
+				// and the lines it began on only for the sentence: each costs a recognition.
+				std::vector<const ocr::TextLine*> preceding;
+				std::vector<const ocr::TextLine*> following;
+				if ( !loose && ( scope.sentence || line.characters.size() - *start < scope.characters ) )
+				{
+					following = followingLines( *cached, *chosen, read );
+				}
+				if ( !loose && scope.sentence )
+				{
+					preceding = precedingLines( *cached, *chosen, read );
+				}
+				return selectLine( line, *start, preceding, following, region, scope.characters, loose ? 0.8F : 0.6F );
 			}
 
 			[[nodiscard]] std::vector<Overlay> liveOverlays() const
@@ -1680,8 +2760,215 @@ namespace lexiglance::platform
 				return box;
 			}
 
+			// Recognition places characters only roughly, where the network noticed them (a little early): in text written
+			// with spaces, a word's box would stop short of its last letter. Each word goes onto its ink, from gap to gap
+			// (the gaps where the spaces were read), and its letters are spread over it as they were read; spaces left out
+			// are put back, and letters read in the wrong script mended. Japanese keeps the network's reading and places.
+			static void snapWords( ocr::TextLine& line, const ocr::Image& image )
+			{
+				auto& chars = line.characters;
+				if ( line.vertical || chars.empty() )
+				{
+					return;
+				}
+				if ( !wordScript( chars | std::views::transform( &ocr::Character::text ) ) )
+				{
+					spaceGaps( line, image );
+					return;
+				}
+				const InkColumns ink = inkColumns( image, line.box, chars.size() );
+				if ( ink.ink.size() < 2 )
+				{
+					return;
+				}
+				const int height = std::max( 1, line.box.inner_height );
+				// A space read twice is one.
+				const auto doubled = std::ranges::unique( chars, [&]( const ocr::Character& a, const ocr::Character& b ) { return isSpace( a.text ) && isSpace( b.text ); } );
+				chars.erase( doubled.begin(), doubled.end() );
+				recoverSpaces( chars, ink, height );
+				mendHomoglyphs( chars );
+
+				const auto words = wordRanges( chars );
+				if ( words.empty() )
+				{
+					return;
+				}
+				std::vector<std::pair<float, float>> extents;
+				for ( const auto& [first, last] : words )
+				{
+					extents.emplace_back( chars[first].from, chars[last - 1].to );
+				}
+				lineEnds( chars, words, extents, ink );
+				for ( std::size_t w = 0; w + 1 < words.size(); ++w )
+				{
+					if ( const auto gap = gapBetween( chars, words[w], words[w + 1], ink ) )
+					{
+						extents[w].second    = static_cast<float>( gap->first );
+						extents[w + 1].first = static_cast<float>( gap->second );
+					}
+				}
+				spreadWords( chars, words, extents, ink, height );
+			}
+
 			// The recognised text from the character under the pointer on, if the recognition is sure enough.
-			[[nodiscard]] static std::optional<CapturedText> selectLine( const ocr::TextLine& line, const Rect& region, Point local, std::size_t max_chars, float gate )
+			[[nodiscard]] static std::string lineText( const ocr::TextLine& line )
+			{
+				std::string text;
+				for ( const auto& c : line.characters )
+				{
+					text.append( c.text );
+				}
+				return text;
+			}
+
+			// Whether two lines are in the same script, or one of them has no letters to tell (a line of digits).
+			[[nodiscard]] static bool sameScript( const ocr::TextLine& a, const ocr::TextLine& b )
+			{
+				const int one   = mainScript( a );
+				const int other = mainScript( b );
+				return one == 0 || other == 0 || one == other;
+			}
+
+			// The lines the text of line `chosen` goes on in, in order, until one ends a sentence: at most four, and 400
+			// characters. `read` recognises a line.
+			template <typename Read>
+			[[nodiscard]] static std::vector<const ocr::TextLine*> followingLines( const PaddleRegion& cached, std::size_t chosen, const Read& read )
+			{
+				std::vector<const ocr::TextLine*> following;
+				const ocr::TextLine&              line    = read( chosen );
+				std::size_t                       current = chosen;
+				std::size_t                       read_in = line.characters.size();
+				for ( int more = 0; more < 4 && read_in < 400 && !endsSentence( lineText( following.empty() ? line : *following.back() ) ); ++more )
+				{
+					const auto next = continuation( cached, current, line.vertical );
+					if ( !next || *next == chosen || std::ranges::contains( following, &read( *next ) ) || !sameScript( line, read( *next ) ) )
+					{
+						break;
+					}
+					following.push_back( &read( *next ) );
+					read_in += following.back()->characters.size();
+					current = *next;
+				}
+				return following;
+			}
+
+			// The lines before line `chosen` that its sentence began in, in order: back to one that ends a sentence, at most
+			// four.
+			template <typename Read>
+			[[nodiscard]] static std::vector<const ocr::TextLine*> precedingLines( const PaddleRegion& cached, std::size_t chosen, const Read& read )
+			{
+				std::vector<const ocr::TextLine*> preceding;
+				const ocr::TextLine&              line    = read( chosen );
+				std::size_t                       current = chosen;
+				for ( int more = 0; more < 4; ++more )
+				{
+					const auto previous = precedingLine( cached, current, line.vertical );
+					if ( !previous || *previous == chosen || std::ranges::contains( preceding, &read( *previous ) ) || !sameScript( line, read( *previous ) ) || endsSentence( lineText( read( *previous ) ) ) )
+					{
+						break;
+					}
+					preceding.insert( preceding.begin(), &read( *previous ) );
+					current = *previous;
+				}
+				return preceding;
+			}
+
+			// The text box a line goes on in: its other part on the same line when the detector cut it in two; else the next
+			// line below (the next column to the left, written vertically) of about its size, starting no later than it and
+			// no longer than it by more than a word. None when the line stops short of the others of its column, as the
+			// last line of a paragraph or a message does.
+			[[nodiscard]] static std::optional<std::size_t> continuation( const PaddleRegion& cached, std::size_t current, bool vertical )
+			{
+				// Along the reading direction and across it (for columns, right to left becomes increasing).
+				struct Span
+				{
+					int from, to, top, bottom;
+				};
+				const auto span = [vertical]( const ocr::Box& b ) {
+					return vertical ? Span{ .from = b.inner_y, .to = b.inner_y + b.inner_height, .top = -( b.inner_x + b.inner_width ), .bottom = -b.inner_x }
+					                : Span{ .from = b.inner_x, .to = b.inner_x + b.inner_width, .top = b.inner_y, .bottom = b.inner_y + b.inner_height };
+				};
+				const Span a    = span( cached.boxes[current] );
+				const int  size = std::max( 1, a.bottom - a.top );
+				// Of about the same size: a short line (す。) hugs smaller letters, so the next line may be well under.
+				const auto alike = [&]( const Span& b, int low = 7 ) {
+					const int other = b.bottom - b.top;
+					return other * 10 >= size * low && other * 10 <= size * 16;
+				};
+
+				std::optional<std::size_t> best;
+				int                        best_gap = std::numeric_limits<int>::max();
+				// The rest of the same line, a little further along. The words of a wide font (a pixel font's) stand further
+				// apart, each boxed on its own, but on the line's baseline.
+				for ( std::size_t i = 0; i < cached.strict; ++i )
+				{
+					const Span b       = span( cached.boxes[i] );
+					const int  overlap = std::min( a.bottom, b.bottom ) - std::max( a.top, b.top );
+					const int  gap     = b.from - a.to;
+					const int  reach   = !vertical && std::abs( a.bottom - b.bottom ) * 4 <= size ? 4 * size : 2 * size;
+					if ( i != current && alike( b ) && overlap * 2 >= size && gap >= -size / 2 && gap <= reach && gap < best_gap )
+					{
+						best     = i;
+						best_gap = gap;
+					}
+				}
+				if ( best )
+				{
+					return best;
+				}
+
+				// A line that wraps reaches the end of its column; one that stops well before it ends its paragraph.
+				int column_end = a.to;
+				for ( std::size_t i = 0; i < cached.strict; ++i )
+				{
+					const Span b = span( cached.boxes[i] );
+					if ( alike( b ) && b.top > a.top - ( 6 * size ) && b.top < a.bottom + ( 6 * size ) && b.from <= a.from + size && b.to > a.from )
+					{
+						column_end = std::max( column_end, b.to );
+					}
+				}
+				if ( a.to < column_end - ( 3 * size ) )
+				{
+					return std::nullopt;
+				}
+				// The detector's boxes hug the middle of the letters, so lines lie two to four box heights apart (centre to
+				// centre: a short line's box is placed by the few letters it has).
+				for ( std::size_t i = 0; i < cached.strict; ++i )
+				{
+					const Span b     = span( cached.boxes[i] );
+					const int  pitch = ( b.top + b.bottom - a.top - a.bottom ) / 2;
+					// A line of much smaller letters only as a short end of the paragraph (「す。」), not a caption under it.
+					const bool sized = alike( b ) || ( alike( b, 4 ) && b.to - b.from <= 4 * size );
+					if ( i != current && sized && pitch * 5 >= size * 6 && pitch <= size * 4 && b.from <= a.from + size && b.to > a.from && b.to <= a.to + ( 3 * size ) && pitch < best_gap )
+					{
+						best     = i;
+						best_gap = pitch;
+					}
+				}
+				return best;
+			}
+
+			// The line that goes on in this one: the nearest above (to the right, written vertically) whose continuation it is.
+			[[nodiscard]] static std::optional<std::size_t> precedingLine( const PaddleRegion& cached, std::size_t current, bool vertical )
+			{
+				std::optional<std::size_t> best;
+				for ( std::size_t i = 0; i < cached.strict; ++i )
+				{
+					if ( i == current || continuation( cached, i, vertical ) != current )
+					{
+						continue;
+					}
+					const auto& b = cached.boxes[i];
+					if ( !best || ( vertical ? b.inner_x < cached.boxes[*best].inner_x : b.inner_y > cached.boxes[*best].inner_y ) )
+					{
+						best = i;
+					}
+				}
+				return best;
+			}
+
+			// The character of a line under the pointer; none when the pointer is beside the line.
+			[[nodiscard]] static std::optional<std::size_t> pointed( const ocr::TextLine& line, Point local )
 			{
 				const auto& chars = line.characters;
 				if ( chars.empty() )
@@ -1704,6 +2991,20 @@ namespace lexiglance::platform
 				{
 					return std::nullopt;
 				}
+				// Between two words, the nearer one: the gap is only a few pixels wide.
+				if ( isSpace( chars[start].text ) && chars.size() > 1 )
+				{
+					const bool before = along < ( chars[start].from + chars[start].to ) / 2.0F ? start > 0 : start + 1 >= chars.size();
+					start             = before ? start - 1 : start + 1;
+				}
+				return start;
+			}
+
+			// The text from the pointer's character (`start` of `line`) on, and its sentence: the line, with the lines it runs
+			// on from and on to.
+			[[nodiscard]] static std::optional<CapturedText> selectLine( const ocr::TextLine& line, std::size_t start, std::span<const ocr::TextLine* const> preceding, std::span<const ocr::TextLine* const> following, const Rect& region, std::size_t max_chars, float gate )
+			{
+				const auto& chars = line.characters;
 
 				// Pictures and noise read as text come with low confidence.
 				float       sum   = 0.0F;
@@ -1719,28 +3020,81 @@ namespace lexiglance::platform
 					return std::nullopt;
 				}
 
-				const auto& b      = line.box;
+				// The text from there, and the box of each character of the lines for bounds(), which may reach back to the
+				// start of the word. Words written with spaces had one where a line broke.
+				const auto box_of = [&region]( const ocr::TextLine& of, std::size_t i ) {
+					const auto& b    = of.box;
+					const int   from = static_cast<int>( std::lround( of.characters[i].from ) );
+					const int   to   = std::max( from + 1, static_cast<int>( std::lround( of.characters[i].to ) ) );
+					return of.vertical ? Rect{ .x = region.x + b.inner_x, .y = region.y + from, .width = b.inner_width, .height = to - from }
+					                   : Rect{ .x = region.x + from, .y = region.y + b.inner_y, .width = to - from, .height = b.inner_height };
+				};
 				auto        handle = std::make_shared<OcrLine>();
 				std::string text;
+				std::size_t length = 0;
 				std::string sentence;
 				std::size_t sentence_offset = 0;
-				for ( std::size_t i = 0; i < chars.size(); ++i )
+				Rect        character;
+				bool        reading = false;
+				const auto  take    = [&]( std::string_view piece ) {
+					if ( reading && length < max_chars )
+					{
+						text.append( piece );
+						length += std::max<std::size_t>( 1, utf8::length( piece ) );
+					}
+				};
+				const auto add = [&]( const ocr::TextLine& of, std::optional<std::size_t> pointer ) {
+					if ( of.characters.empty() )
+					{
+						return;
+					}
+					if ( !handle->boxes.empty() )
+					{
+						const char32_t before = utf8::last( sentence );
+						const char32_t after  = utf8::first( of.characters.front().text );
+						// A piece the detector cut off on the same row stands a gap away from what came before (the columns
+						// of a menu, a word beside its reading): it gets a space even in Japanese, which ends the sentence
+						// there. A piece on the next row is the same sentence going on, and gets none.
+						const Rect first   = box_of( of, 0 );
+						const Rect end_box = handle->boxes.back();
+						const int  along   = of.vertical ? std::min( end_box.x + end_box.width, first.x + first.width ) - std::max( end_box.x, first.x )
+						                                 : std::min( end_box.y + end_box.height, first.y + first.height ) - std::max( end_box.y, first.y );
+						const int  across  = of.vertical ? std::min( end_box.width, first.width ) : std::min( end_box.height, first.height );
+						const bool beside  = along * 2 > across;
+						if ( ( beside || !( gridCharacter( before ) && gridCharacter( after ) ) ) && before != U'-' && before != U' ' )
+						{
+							const Rect& end = handle->boxes.back();
+							sentence.append( " " );
+							handle->boxes.push_back( of.vertical ? Rect{ .x = end.x, .y = end.y + end.height, .width = end.width, .height = 0 } : Rect{ .x = end.x + end.width, .y = end.y, .width = 0, .height = end.height } );
+							take( " " );
+						}
+						handle->line_starts.push_back( handle->boxes.size() );
+					}
+					for ( std::size_t i = 0; i < of.characters.size(); ++i )
+					{
+						const Rect box = box_of( of, i );
+						if ( pointer && i == *pointer )
+						{
+							sentence_offset = sentence.size();
+							handle->first   = handle->boxes.size();
+							character       = box;
+							reading         = true;
+						}
+						sentence.append( of.characters[i].text );
+						addBoxes( handle->boxes, of.characters[i].text, box );
+						take( of.characters[i].text );
+					}
+				};
+				for ( const ocr::TextLine* before : preceding )
 				{
-					if ( i == start )
-					{
-						sentence_offset = sentence.size();
-					}
-					sentence.append( chars[i].text );
-					if ( i < start || handle->boxes.size() >= max_chars )
-					{
-						continue;
-					}
-					text.append( chars[i].text );
-					const int from = static_cast<int>( std::lround( chars[i].from ) );
-					const int to   = std::max( from + 1, static_cast<int>( std::lround( chars[i].to ) ) );
-					handle->boxes.push_back( line.vertical ? Rect{ .x = region.x + b.inner_x, .y = region.y + from, .width = b.inner_width, .height = to - from } : Rect{ .x = region.x + from, .y = region.y + b.inner_y, .width = to - from, .height = b.inner_height } );
+					add( *before, std::nullopt );
 				}
-				CapturedText captured{ .text = std::move( text ), .offset = 0, .character = handle->boxes.front() };
+				add( line, start );
+				for ( const ocr::TextLine* after : following )
+				{
+					add( *after, std::nullopt );
+				}
+				CapturedText captured{ .text = std::move( text ), .offset = 0, .character = character };
 				captured.handle          = std::move( handle );
 				captured.sentence        = std::move( sentence );
 				captured.sentence_offset = sentence_offset;
@@ -1838,10 +3192,21 @@ namespace lexiglance::platform
 						.height = std::max( 1, symbol.box.height / upscale ),
 					};
 				}
-				const bool boxless = std::ranges::any_of( found, [&]( const OcrSymbol& symbol ) {
-					return !isSpace( symbol.text ) && ( symbol.box.width < 2 || symbol.box.height < 2 || intersect( symbol.box, grab.region ).empty() );
-				} );
-				if ( !boxless )
+				// Boxes too small to place a character by, or outside the line. A dash is only a pixel high and a full stop in
+				// small text a pixel across, though, which in a script written with spaces are their real boxes, not missing
+				// ones.
+				const auto unplaceable = [&]( bool thin ) {
+					return std::ranges::any_of( found, [&]( const OcrSymbol& symbol ) {
+						const bool flat = thin ? symbol.box.width < 2 || symbol.box.height < 2 : symbol.box.width < 2 && symbol.box.height < 2 && !isPunctuation( utf8::first( symbol.text ) );
+						return !isSpace( symbol.text ) && ( flat || intersect( symbol.box, grab.region ).empty() );
+					} );
+				};
+				// Japanese is placed on its grid; scripts written with spaces keep Tesseract's letters and get their spaces back.
+				const bool words   = !vertical_ && !unplaceable( false ) && wordScript( found | std::views::transform( &OcrSymbol::text ) );
+				const bool boxless = !words && unplaceable( true );
+				// Words keep each letter where Tesseract saw it, so a phantom shifts nothing; a thin hyphen whose rough box
+				// misses its ink is real, though.
+				if ( !boxless && !words )
 				{
 					// The LSTM occasionally reports a character over blank background; such phantoms would shift every
 					// following character.
@@ -1867,13 +3232,21 @@ namespace lexiglance::platform
 						return ink * 50 < box.width * box.height;
 					} );
 				}
-				found = place( found, grab, tone, vertical_, !boxless, core );
-				log::debug( "ocr: {} symbols in {}x{} at {},{} (x{}, {} background)", found.size(), grab.region.width, grab.region.height, grab.region.x, grab.region.y, upscale, tone.dark ? "dark" : "light" );
+				found = words ? placeWords( found, grab, tone, core ) : place( found, grab, tone, vertical_, !boxless, core );
+				log::debug( "ocr: {} symbols in {}x{} at {},{} (x{}, {} background{})", found.size(), grab.region.width, grab.region.height, grab.region.x, grab.region.y, upscale, tone.dark ? "dark" : "light", words ? ", words" : "" );
 
 				Recognition& slot = cache_[next_slot_];
 				next_slot_        = ( next_slot_ + 1 ) % cache_.size();
-				slot              = { .region = grab.region, .hash = key, .symbols = std::move( found ) };
+				slot              = { .region = grab.region, .hash = key, .symbols = std::move( found ), .words = words };
 				return slot;
+			}
+
+			// Whether no space comes between the start of a line read as words and the pointer.
+			[[nodiscard]] static bool inFirstWord( const Recognition& recognition, Point point )
+			{
+				const auto& symbols = recognition.symbols;
+				const auto  space   = std::ranges::find_if( symbols, []( const OcrSymbol& symbol ) { return isSpace( symbol.text ); } );
+				return !symbols.empty() && ( space == symbols.end() || space->box.x > point.x );
 			}
 
 			[[nodiscard]] std::pair<int, int> along( const Rect& box ) const
@@ -1886,14 +3259,9 @@ namespace lexiglance::platform
 				return vertical_ ? std::pair{ box.x, box.x + box.width } : std::pair{ box.y, box.y + box.height };
 			}
 
-			// Text of the pointer's line, starting at the character under the pointer.
-			[[nodiscard]] std::optional<CapturedText> select( const Recognition& recognition, Point point, std::size_t max_chars ) const
+			// The line nearest to `cross` across the reading direction; -1 when none is near.
+			[[nodiscard]] int nearestLine( const std::vector<OcrSymbol>& symbols, int cross ) const
 			{
-				const auto& symbols  = recognition.symbols;
-				const int   cross    = vertical_ ? point.x : point.y;
-				const int   position = vertical_ ? point.y : point.x;
-
-				// The line nearest to the pointer across the reading direction.
 				int line    = -1;
 				int nearest = ( unit_ / 2 ) + 1;
 				for ( const OcrSymbol& symbol : symbols )
@@ -1910,36 +3278,16 @@ namespace lexiglance::platform
 						line    = symbol.line;
 					}
 				}
-				if ( line < 0 )
-				{
-					log::debug( "ocr: no line near {},{}: {}", point.x, point.y, dumpSymbols( symbols ) );
-					return std::nullopt;
-				}
+				return line;
+			}
 
-				std::vector<const OcrSymbol*> row;
-				for ( const OcrSymbol& symbol : symbols )
-				{
-					if ( symbol.line == line && !isSpace( symbol.text ) )
-					{
-						row.push_back( &symbol );
-					}
-				}
-				std::ranges::sort( row, {}, [&]( const OcrSymbol* s ) { return along( s->box ).first; } );
-
-				std::vector<int> sizes;
-				sizes.reserve( row.size() );
-				for ( const OcrSymbol* s : row )
-				{
-					const auto [from, to] = along( s->box );
-					sizes.push_back( to - from );
-				}
-				std::ranges::nth_element( sizes, sizes.begin() + static_cast<std::ptrdiff_t>( sizes.size() / 2 ) );
-				const int median = std::max( 1, sizes[sizes.size() / 2] );
-
-				// LSTM symbol boxes are often offset or merged across characters; unless all of them look sound, an even split of the
-				// line locates the pointer more reliably.
+			// The box of each symbol of a line: its own, or an even split of the line when they do not all look sound
+			// (LSTM symbol boxes are often offset or merged across characters). Letters of words were already put onto
+			// their ink, and differ in width. The second is whether they are their own.
+			[[nodiscard]] std::pair<std::vector<Rect>, bool> lineBoxes( const std::vector<const OcrSymbol*>& row, int median, bool words ) const
+			{
 				std::size_t odd = 0;
-				for ( std::size_t i = 0; i < row.size(); ++i )
+				for ( std::size_t i = 0; i < row.size() && !words; ++i )
 				{
 					const auto [from, to] = along( row[i]->box );
 					bool bad              = to - from > ( median * 17 ) / 10;
@@ -1950,83 +3298,121 @@ namespace lexiglance::platform
 					}
 					odd += bad ? 1 : 0;
 				}
-				const bool plausible = odd == 0;
-
-				const auto [line_from, line_to] = std::pair{ along( row.front()->box ).first, along( row.back()->box ).second };
-				if ( position < line_from - ( median / 2 ) || position > line_to + ( median / 2 ) )
-				{
-					log::debug( "ocr: {},{} is beside the line: {}", point.x, point.y, dumpSymbols( symbols ) );
-					return std::nullopt;
-				}
 
 				std::vector<Rect> boxes;
 				boxes.reserve( row.size() );
-				if ( plausible )
+				if ( odd == 0 )
 				{
 					for ( const OcrSymbol* s : row )
 					{
 						boxes.push_back( s->box );
 					}
+					return { std::move( boxes ), true };
 				}
-				else
+				const int line_from = along( row.front()->box ).first;
+				const int line_to   = along( row.back()->box ).second;
+				int       low       = std::numeric_limits<int>::max();
+				int       high      = std::numeric_limits<int>::min();
+				for ( const OcrSymbol* s : row )
 				{
-					int low  = std::numeric_limits<int>::max();
-					int high = std::numeric_limits<int>::min();
-					for ( const OcrSymbol* s : row )
-					{
-						const auto [from, to] = across( s->box );
-						low                   = std::min( low, from );
-						high                  = std::max( high, to );
-					}
-					const double cell = static_cast<double>( line_to - line_from ) / static_cast<double>( row.size() );
-					for ( std::size_t i = 0; i < row.size(); ++i )
-					{
-						const int from = line_from + static_cast<int>( std::lround( cell * static_cast<double>( i ) ) );
-						const int to   = line_from + static_cast<int>( std::lround( cell * static_cast<double>( i + 1 ) ) );
-						boxes.push_back( vertical_ ? Rect{ .x = low, .y = from, .width = high - low, .height = to - from } : Rect{ .x = from, .y = low, .width = to - from, .height = high - low } );
-					}
+					const auto [from, to] = across( s->box );
+					low                   = std::min( low, from );
+					high                  = std::max( high, to );
 				}
+				const double cell = static_cast<double>( line_to - line_from ) / static_cast<double>( row.size() );
+				for ( std::size_t i = 0; i < row.size(); ++i )
+				{
+					const int from = line_from + static_cast<int>( std::lround( cell * static_cast<double>( i ) ) );
+					const int to   = line_from + static_cast<int>( std::lround( cell * static_cast<double>( i + 1 ) ) );
+					boxes.push_back( vertical_ ? Rect{ .x = low, .y = from, .width = high - low, .height = to - from } : Rect{ .x = from, .y = low, .width = to - from, .height = high - low } );
+				}
+				return { std::move( boxes ), false };
+			}
 
-				// The character whose centre is nearest to the pointer.
+			// The character under the pointer (letters of words are set edge to edge), otherwise the one whose centre is
+			// nearest; between two words, the nearer one, as the gap is only a few pixels wide.
+			[[nodiscard]] std::size_t pointedAt( const std::vector<const OcrSymbol*>& row, const std::vector<Rect>& boxes, int position, bool words ) const
+			{
 				std::size_t start = 0;
 				int         best  = std::numeric_limits<int>::max();
 				for ( std::size_t i = 0; i < boxes.size(); ++i )
 				{
 					const auto [from, to] = along( boxes[i] );
-					const int distance    = std::abs( ( ( from + to ) / 2 ) - position );
+					const int distance    = words && position >= from && position < to ? -1 : std::abs( ( ( from + to ) / 2 ) - position );
 					if ( distance < best )
 					{
 						best  = distance;
 						start = i;
 					}
 				}
+				if ( isSpace( row[start]->text ) )
+				{
+					const auto [from, to] = along( boxes[start] );
+					const bool before     = position < ( from + to ) / 2 ? start > 0 : start + 1 >= row.size();
+					start                 = before ? start - 1 : start + 1;
+				}
+				return start;
+			}
 
+			// Text of the pointer's line, starting at the character under the pointer.
+			[[nodiscard]] std::optional<CapturedText> select( const Recognition& recognition, Point point, std::size_t max_chars ) const
+			{
+				const auto& symbols  = recognition.symbols;
+				const int   position = vertical_ ? point.y : point.x;
+				const int   line     = nearestLine( symbols, vertical_ ? point.x : point.y );
+				if ( line < 0 )
+				{
+					log::debug( "ocr: no line near {},{}: {}", point.x, point.y, dumpSymbols( symbols ) );
+					return std::nullopt;
+				}
+
+				// Lines placed as words keep their spaces, which end what is looked up.
+				std::vector<const OcrSymbol*> row;
+				for ( const OcrSymbol& symbol : symbols )
+				{
+					if ( symbol.line == line && ( recognition.words || !isSpace( symbol.text ) ) )
+					{
+						row.push_back( &symbol );
+					}
+				}
+				std::ranges::stable_sort( row, {}, [&]( const OcrSymbol* s ) { return along( s->box ).first; } );
+
+				std::vector<int> sizes;
+				sizes.reserve( row.size() );
+				for ( const OcrSymbol* s : row )
+				{
+					if ( !isSpace( s->text ) )
+					{
+						const auto [from, to] = along( s->box );
+						sizes.push_back( to - from );
+					}
+				}
+				if ( sizes.empty() )
+				{
+					return std::nullopt;
+				}
+				std::ranges::nth_element( sizes, sizes.begin() + static_cast<std::ptrdiff_t>( sizes.size() / 2 ) );
+				const int median = std::max( 1, sizes[sizes.size() / 2] );
+
+				const int line_from = along( row.front()->box ).first;
+				const int line_to   = along( row.back()->box ).second;
+				if ( position < line_from - ( median / 2 ) || position > line_to + ( median / 2 ) )
+				{
+					log::debug( "ocr: {},{} is beside the line: {}", point.x, point.y, dumpSymbols( symbols ) );
+					return std::nullopt;
+				}
+
+				const auto [boxes, plausible] = lineBoxes( row, median, recognition.words );
+				const std::size_t start       = pointedAt( row, boxes, position, recognition.words );
+
+				// The text from there, and the box of each character of the line for bounds(), which may reach back to the
+				// start of the word.
 				auto        handle = std::make_shared<OcrLine>();
 				std::string text;
+				std::size_t taken        = 0;
+				std::size_t length       = 0;
+				bool        ended        = false;
 				int         previous_end = along( boxes[start] ).first;
-				for ( std::size_t i = start; i < row.size() && handle->boxes.size() < max_chars; ++i )
-				{
-					const auto [from, to] = along( boxes[i] );
-					// A wide gap ends the phrase (the next column of a table, a separate label).
-					if ( !handle->boxes.empty() && from - previous_end > 2 * median )
-					{
-						break;
-					}
-					text.append( row[i]->text );
-					handle->boxes.push_back( boxes[i] );
-					previous_end = to;
-				}
-
-				if ( log::enabled( log::Level::Debug ) )
-				{
-					std::string recognised;
-					for ( const OcrSymbol* s : row )
-					{
-						recognised.append( s->text );
-					}
-					log::debug( "ocr: line «{}» ({} boxes), reading from #{}: «{}»", recognised, plausible ? "character" : "evenly split", start, text );
-				}
-
 				std::string sentence;
 				std::size_t sentence_offset = 0;
 				for ( std::size_t i = 0; i < row.size(); ++i )
@@ -2034,27 +3420,53 @@ namespace lexiglance::platform
 					if ( i == start )
 					{
 						sentence_offset = sentence.size();
+						handle->first   = handle->boxes.size();
 					}
 					sentence.append( row[i]->text );
+					addBoxes( handle->boxes, row[i]->text, boxes[i] );
+					if ( i < start || ended || length >= max_chars )
+					{
+						continue;
+					}
+					const auto [from, to] = along( boxes[i] );
+					// A wide gap ends the phrase (the next column of a table, a separate label).
+					const bool gap = recognition.words ? isSpace( row[i]->text ) && to - from > 2 * median : i > start && from - previous_end > 2 * median;
+					if ( gap )
+					{
+						ended = true;
+						continue;
+					}
+					text.append( row[i]->text );
+					length += std::max<std::size_t>( 1, utf8::length( row[i]->text ) );
+					++taken;
+					previous_end = to;
 				}
 
-				// How sure Tesseract was of what is looked up; marks recovered from the ink carry no confidence of their own.
+				if ( log::enabled( log::Level::Debug ) )
+				{
+					const std::string_view placed = recognition.words ? "word" : ( plausible ? "character" : "evenly split" );
+					log::debug( "ocr: line «{}» ({} boxes), reading from #{}: «{}»", sentence, placed, start, text );
+				}
+
+				// How sure Tesseract was of what is looked up; marks recovered from the ink and spaces carry no confidence of
+				// their own.
 				float confidence = 0.0F;
 				int   counted    = 0;
-				for ( std::size_t i = start; i < std::min( row.size(), start + handle->boxes.size() ); ++i )
+				for ( std::size_t i = start; i < std::min( row.size(), start + taken ); ++i )
 				{
-					if ( row[i]->confidence > 0.0F || !isSmallPunctuation( row[i]->text ) )
+					if ( !isSpace( row[i]->text ) && ( row[i]->confidence > 0.0F || !isSmallPunctuation( row[i]->text ) ) )
 					{
 						confidence += row[i]->confidence;
 						++counted;
 					}
 				}
 
-				CapturedText captured{ .text = std::move( text ), .offset = 0, .character = handle->boxes.front() };
+				CapturedText captured{ .text = std::move( text ), .offset = 0, .character = boxes[start] };
 				captured.handle          = std::move( handle );
 				captured.confidence      = counted > 0 ? confidence / static_cast<float>( counted ) : 0.0F;
 				captured.sentence        = std::move( sentence );
 				captured.sentence_offset = sentence_offset;
+				captured.spaces          = recognition.words;
 				return captured;
 			}
 

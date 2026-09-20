@@ -61,9 +61,27 @@ Check 'the settings application starts and draws a page' ($settings.ExitCode -eq
 
 if ($installer) {
     # _? runs the uninstaller in place and waits for it, instead of starting a copy of it and returning at once.
-    $removal = Start-Process (Join-Path $target 'Uninstall.exe') -ArgumentList "/S _?=$target" -Wait -PassThru
-    Check 'the uninstaller removes the programs and the Start menu entry' ($removal.ExitCode -eq 0 -and -not (Test-Path (Join-Path $target 'bin')) -and -not (Test-Path $shortcut))
+    function Uninstall([string]$Options) {
+        (Start-Process (Join-Path $target 'Uninstall.exe') -ArgumentList "$Options _?=$target" -Wait -PassThru).ExitCode -eq 0
+    }
+    # The settings, dictionaries and models the programs keep outside the program's folder. Only on CI: elsewhere they
+    # would be someone's own, which the second uninstall below deletes.
+    $data = @((Join-Path $env:APPDATA 'Lexiglance\config\smoke-test'), (Join-Path $env:LOCALAPPDATA 'Lexiglance\data\smoke-test'))
+    $ci = [bool]$env:GITHUB_ACTIONS
+    if ($ci) {
+        foreach ($file in $data) { New-Item -ItemType File -Force -Path $file | Out-Null }
+    }
+    $removed = Uninstall '/S /KEEPDATA'
+    Check 'the uninstaller removes the programs and the Start menu entry' ($removed -and -not (Test-Path (Join-Path $target 'bin')) -and -not (Test-Path $shortcut))
     Check 'the uninstaller stops starting Lexiglance with Windows' (-not (Autostart))
+    if ($ci) {
+        Check 'the uninstaller keeps settings and dictionaries when asked to (/KEEPDATA)' (@($data | Where-Object { Test-Path $_ }).Count -eq 2)
+        # Installed again, and uninstalled as by default: everything goes.
+        $again = Start-Process $Package -ArgumentList "/S /D=$target" -Wait -PassThru
+        $removed = $again.ExitCode -eq 0 -and (Uninstall '/S')
+        Check 'the uninstaller deletes settings and dictionaries by default' ($removed -and @($data | Where-Object { Test-Path $_ }).Count -eq 0 -and -not (Test-Path (Join-Path $env:LOCALAPPDATA 'Lexiglance')))
+        Check 'the uninstaller removes the Apps list entry' (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Lexiglance'))
+    }
 }
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

@@ -13,6 +13,8 @@
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace lexiglance::gui
 {
 
@@ -451,10 +453,7 @@ namespace lexiglance::gui
 		{
 			index = preferred_->findData( previous );
 		}
-		if ( index < 0 )
-		{
-			index = 0;
-		}
+		index = std::max( index, 0 );
 		preferred_->setCurrentIndex( index );
 		if ( preferred_->count() > 0 )
 		{

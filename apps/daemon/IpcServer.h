@@ -41,6 +41,10 @@ namespace lexiglance::daemon
 		// Thread-safe: sends an event to every connected client.
 		void broadcast( std::string_view name, std::string_view params_json );
 
+		// Sends what broadcast() has queued right away, for a handler that takes its time and says how far it has come
+		// (the health check). Only from inside a handler, which the server's own thread calls.
+		void flush();
+
 	private:
 #ifdef _WIN32
 		// An overlapped operation on a pipe instance (a client's read, or waiting for a client) and its event.

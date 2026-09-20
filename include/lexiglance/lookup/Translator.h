@@ -90,10 +90,13 @@ namespace lexiglance::lookup
 		std::string           text;
 		std::uint32_t         matched_length = 0;
 		// Characters selected with the wheel (0: no selection); shown when no entry spans them all.
-		std::uint32_t            selected = 0;
-		std::vector<TermEntry>   terms;
-		std::vector<KanjiEntry>  kanji;
-		std::chrono::nanoseconds elapsed{};
+		std::uint32_t selected = 0;
+		// Those characters word by word with the readings the dictionaries give them, for furigana over the kanji of a
+		// selection (see Translator::readings); empty shows the selection plain.
+		std::vector<lang::RubySegment> selected_ruby;
+		std::vector<TermEntry>         terms;
+		std::vector<KanjiEntry>        kanji;
+		std::chrono::nanoseconds       elapsed{};
 
 		[[nodiscard]] bool empty() const noexcept
 		{
@@ -120,6 +123,11 @@ namespace lexiglance::lookup
 	{
 	public:
 		[[nodiscard]] LookupResult lookup( std::shared_ptr<const DictionarySet> dictionaries, std::string_view text, const LookupOptions& options = {} );
+
+		// `text` word after word, each the longest the dictionaries have from there, with the reading of its kanji as its
+		// best entry gives it (the kanji of an inflected form keep theirs: 読みました gets よ over 読). Text no entry
+		// matches, and words of languages that show no readings, stay plain.
+		[[nodiscard]] std::vector<lang::RubySegment> readings( const std::shared_ptr<const DictionarySet>& dictionaries, std::string_view text, LookupOptions options );
 
 	private:
 		struct Match

@@ -1,5 +1,6 @@
 #include "Anki.h"
 
+#include <lexiglance/core/Utf8.h>
 #include <lexiglance/core/Json.h>
 #include <lexiglance/dictionary/StructuredContent.h>
 #include <lexiglance/net/Http.h>
@@ -219,23 +220,88 @@ namespace lexiglance::daemon
 		return document->root()["result"].asInt();
 	}
 
+	namespace
+	{
+
+		// Letters of scripts written without spaces between words (kana, kanji).
+		bool spaceless( char32_t c )
+		{
+			return ( c >= 0x3040 && c <= 0x30FF ) || ( c >= 0x3400 && c <= 0x4DBF ) || ( c >= 0x4E00 && c <= 0x9FFF ) || ( c >= 0xF900 && c <= 0xFAFF ) || ( c >= 0xFF66 && c <= 0xFF9D ) ||
+			       ( c >= 0x20000 && c <= 0x3FFFF );
+		}
+
+	} // namespace
+
 	std::pair<std::string, std::size_t> sentenceAround( std::string_view text, std::size_t offset )
 	{
-		static constexpr std::array<std::string_view, 7> terminators{ "。", "！", "？", "!", "?", "\n", "．" };
-		offset = std::min( offset, text.size() );
+		constexpr std::u32string_view closing = U"」』）)\"'»”’】〕";
+		const auto                    closes  = [&]( std::size_t at ) { return at < text.size() && closing.contains( utf8::first( text.substr( at ) ) ); };
+		offset                                = std::min( offset, text.size() );
+		// The character ending at `at`.
+		const auto preceding = [&]( std::size_t at ) -> char32_t {
+			if ( at == 0 )
+			{
+				return 0;
+			}
+			std::size_t start = at - 1;
+			while ( start > 0 && ( static_cast<unsigned char>( text[start] ) & 0xC0U ) == 0x80U )
+			{
+				--start;
+			}
+			return utf8::first( text.substr( start ) );
+		};
 
 		std::size_t begin = 0;
 		std::size_t end   = text.size();
-		for ( const auto terminator : terminators )
+		for ( std::size_t at = 0; at < text.size(); )
 		{
-			if ( const auto before = text.substr( 0, offset ).rfind( terminator ); before != std::string_view::npos )
+			const std::size_t here = at;
+			const char32_t    c    = utf8::decode( text, at );
+			// Where the next sentence may begin, and where this one ends (a line break is part of neither).
+			std::size_t next = at;
+			std::size_t stop = here;
+			if ( c != U'\n' )
 			{
-				begin = std::max( begin, before + terminator.size() );
+				const bool full = std::u32string_view( U"。！？…‥．" ).contains( c );
+				const bool half = ( c == U'.' || c == U'!' || c == U'?' ) && ( at >= text.size() || text[at] == ' ' || closes( at ) );
+				// A plain space between kana or kanji separates two things rather than two words of a sentence: a word
+				// beside its reading, the columns of a menu. The ideographic space (U+3000), which Japanese sentences do
+				// use, is not one of these.
+				if ( !full && !half )
+				{
+					if ( c != U' ' && c != U'\t' )
+					{
+						continue;
+					}
+					std::size_t after = at;
+					while ( after < text.size() && ( text[after] == ' ' || text[after] == '\t' ) )
+					{
+						++after;
+					}
+					if ( !spaceless( preceding( here ) ) || after >= text.size() || !spaceless( utf8::first( text.substr( after ) ) ) )
+					{
+						continue;
+					}
+					next = after;
+					stop = here;
+				}
+				else
+				{
+					while ( closes( at ) )
+					{
+						( void )utf8::decode( text, at );
+					}
+					next = at;
+					stop = at;
+				}
 			}
-			if ( const auto after = text.find( terminator, offset ); after != std::string_view::npos )
+			if ( next <= offset )
 			{
-				end = std::min( end, terminator == "\n" ? after : after + terminator.size() );
+				begin = next;
+				continue;
 			}
+			end = std::max( stop, begin );
+			break;
 		}
 		while ( begin < offset && ( text[begin] == ' ' || text[begin] == '\t' ) )
 		{

@@ -1,6 +1,22 @@
 # Changelog
 
-## [1.2.0] - 02:50 CEST 2026-09-18
+## [1.3.0] - 01:00 CEST 2026-09-21
+
+- You are now able to translate sentences using scroll-wheel selection.
+- Russian, Ukrainian, Korean and Greek: pointing anywhere in a word looks up the whole word (книгу, not игу).
+- OCR keeps the spaces between words, ends the highlight on the word's own ink, mends letters read in the wrong script
+  and reads game fonts far better (Russian errors down from about 210 to 79 in 1800 letters); a caption, a smaller line
+  or a second column no longer reads as the sentence going on.
+- Statistics page now looks way better.
+- Updates install in the background even with the settings window closed; Fedora gets an `.rpm` package.
+- Uninstalling from **Overview**, **Settings -> Apps** on Windows or `lexiglancectl uninstall`.
+- The first-run setup, redone, ending on a sentence to try the popup on; every language now has such an everyday
+  `example_sentence`, which Health translates as its test.
+- Fixes: the Linux programs go by their own names again (a stray daemon was not ended, Health and the install scripts
+  missed them); a dismissed popup could come back; clicking an entry under a wheel selection acted on the one below it;
+  the AppImage's autostart ran the daemon from its temporary mount.
+
+## [1.2.0] - 18:00 CEST 2026-09-18
 
 Updates and bugfixes reported from: https://github.com/MattFor/lexiglance/issues/7
 

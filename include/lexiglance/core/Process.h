@@ -3,6 +3,8 @@
 
 #include <chrono>
 #include <filesystem>
+#include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -63,6 +65,21 @@ namespace lexiglance::process
 
 	// Whether the executable file was replaced (rebuilt or updated) after this process started.
 	[[nodiscard]] bool executableReplaced();
+
+	// Starts `program` with `arguments` on its own: it is not waited for and outlives this process (no zombie is left
+	// behind either). False when it cannot be started.
+	bool startDetached( const std::filesystem::path& program, std::span<const std::string> arguments );
+
+	// The program `name` on PATH (on Windows with ".exe" added); empty when there is none.
+	[[nodiscard]] std::filesystem::path findProgram( std::string_view name );
+
+	// Runs `program` with `arguments` and waits for it to end: on this process's terminal, or with its input and output
+	// discarded when `quiet`. Its exit code; -1 when it cannot be started or did not exit by itself.
+	int run( const std::filesystem::path& program, std::span<const std::string> arguments, bool quiet );
+
+	// Another program of Lexiglance's beside this one (`name` without ".exe"): in the same directory, or in a build tree
+	// in apps/<name without "lexiglance">/; empty when there is none.
+	[[nodiscard]] std::filesystem::path sibling( std::string_view name );
 
 } // namespace lexiglance::process
 

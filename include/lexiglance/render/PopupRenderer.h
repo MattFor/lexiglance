@@ -85,12 +85,14 @@ namespace lexiglance::render
 	class PopupImage
 	{
 	public:
-		// Vertical extent of one entry (content coordinates) and the text a click on it copies.
+		// Vertical extent of one entry (content coordinates) and the text a click on it copies. Blocks that are not entries
+		// (a translation, a selection no entry covers) have regions too, for copying.
 		struct Region
 		{
 			int         top    = 0;
 			int         bottom = 0;
 			std::string text;
+			bool        entry = true;
 		};
 
 		// A clickable icon in the header of an entry (content coordinates).
@@ -163,12 +165,18 @@ namespace lexiglance::render
 		// plays the pronunciation wherever it is pressed). One region is one entry, in the order they are shown.
 		[[nodiscard]] std::optional<std::size_t> entryAt( int y ) const noexcept
 		{
-			for ( std::size_t index = 0; index < regions_.size(); ++index )
+			std::size_t index = 0;
+			for ( const Region& region : regions_ )
 			{
-				if ( y >= regions_[index].top && y < regions_[index].bottom )
+				if ( !region.entry )
+				{
+					continue;
+				}
+				if ( y >= region.top && y < region.bottom )
 				{
 					return index;
 				}
+				++index;
 			}
 			return std::nullopt;
 		}
@@ -206,6 +214,15 @@ namespace lexiglance::render
 		std::vector<Glyph>  glyphs_;
 	};
 
+	// A translation shown above the entries: the text translated, and its translation once it is there (empty: still on
+	// its way) or why there is none.
+	struct Translation
+	{
+		std::string source;
+		std::string text;
+		std::string problem;
+	};
+
 	// Not thread-safe: each thread that renders owns its renderer (and with it its own Pango font map).
 	class PopupRenderer
 	{
@@ -224,7 +241,8 @@ namespace lexiglance::render
 
 		// Returns nullptr for an empty result.
 		// `limit` stops laying entries out once the content is that tall (0: all of it), for a quick first image.
-		[[nodiscard]] std::shared_ptr<const PopupImage> render( const lookup::LookupResult& result, std::span<const NoteState> notes = {}, int limit = 0 );
+		// With a translation, a popup is made even when nothing was found in the dictionaries.
+		[[nodiscard]] std::shared_ptr<const PopupImage> render( const lookup::LookupResult& result, std::span<const NoteState> notes = {}, int limit = 0, const Translation* translation = nullptr );
 
 		// Loads fonts ahead of the first popup.
 		void warmUp();

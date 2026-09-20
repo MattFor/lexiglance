@@ -32,6 +32,7 @@ add_library(
     core/Paths.cpp
     core/Process.cpp
     core/Thread.cpp
+    core/Uninstall.cpp
     core/Utf8.cpp
     core/Zip.cpp
     dictionary/Classify.cpp
@@ -80,6 +81,14 @@ target_link_libraries(
     lexiglance_ocr
     PUBLIC lexiglance::core
     PRIVATE lexiglance::options ${CMAKE_DL_LIBS})
+
+# Offline translation (OPUS-MT through the same ONNX Runtime).
+add_library(lexiglance_translate STATIC translate/Model.cpp translate/Tokenizer.cpp)
+add_library(lexiglance::translate ALIAS lexiglance_translate)
+target_link_libraries(
+    lexiglance_translate
+    PUBLIC lexiglance::core
+    PRIVATE lexiglance::ocr lexiglance::options)
 
 # Popup rendering (Cairo + Pango) and desktop integration are only needed by the
 # daemon.

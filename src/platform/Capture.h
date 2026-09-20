@@ -26,9 +26,10 @@ namespace lexiglance::platform
 
 		[[nodiscard]] std::string describe() const override;
 
-		[[nodiscard]] std::optional<CapturedText> capture( Point point, const WindowInfo& window, std::size_t max_chars ) override;
+		[[nodiscard]] std::optional<CapturedText> capture( Point point, const WindowInfo& window, CaptureScope scope ) override;
 
 		[[nodiscard]] std::optional<Rect> bounds( const CapturedText& text, std::size_t length ) override;
+		[[nodiscard]] std::vector<Rect>   lineBounds( const CapturedText& text, std::size_t length ) override;
 
 		std::optional<std::chrono::milliseconds> idle() override;
 

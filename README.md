@@ -27,6 +27,10 @@ same dictionary format as [Yomitan](https://yomitan.wiki/).
   games, images and videos.
 - Dictionaries are compiled into memory-mapped indexes.
 - Deinflection: 食べさせられなかった finds 食べる, книгами finds книга.
+- Whole sentences translated into English, on your computer: hold the sentence key with the trigger, or select the
+  text. The translation models ([OPUS-MT](https://github.com/Helsinki-NLP/Opus-MT), about 115 MB a language, or
+  440 MB in full precision, which translates about twice as fast - each language uses whichever you pick) run offline,
+  so nothing you read is sent anywhere.
 - Recommended dictionaries for each language can be installed from the settings application.
 - Pronunciation audio, and Anki cards through AnkiConnect.
 - Configurable popup designs, colour schemes and highlight styles ([docs/themes.md](docs/themes.md)).
@@ -46,14 +50,21 @@ same dictionary format as [Yomitan](https://yomitan.wiki/).
   make it executable (`chmod +x lexiglance-x86_64.AppImage`) and run it.
 
 The [releases page](https://github.com/MattFor/lexiglance/releases) also has a portable `.zip` for Windows, a `.deb`
-for Debian and Ubuntu, and a `.tar.gz`. From then on Lexiglance keeps itself up to date (**Overview -> Updates**).
+for Debian and Ubuntu, a `.rpm` for Fedora, and a `.tar.gz`. From then on Lexiglance keeps itself up to date
+(**Overview -> Updates**), in the background too while you are away from the computer.
+
+To remove it, click **Overview -> Uninstall Lexiglance** (on Windows also **Settings -> Apps**, on Linux also
+`lexiglancectl uninstall`). Your settings, dictionaries and downloaded models are deleted with it unless you untick
+that.
 
 ## Getting started
 
 1. Open **Dictionaries -> Get recommended dictionaries**, pick a language and install.
 2. Hold **Super + Left Alt** (on Windows **Win + Left Alt**) and point at a word.
-3. Turn the mouse wheel to look up more or less of the text. Left-click an entry to copy it. Right-click and select text
-   within a pop up box to copy it instead.
+3. Keep holding the keys and use the scroll wheel to select more characters (or fewer). Left-click an entry to copy it.
+   Right-click and select text within a pop up box to copy it instead.
+4. Hold **Left Shift** as well to see the sentence in English, or only the characters you selected. The **Translation**
+   page downloads the models (compact or full precision, per language) and sets the key.
 
 For games, videos and other programs that expose no text, click **Scanning -> Download PaddleOCR** once. On Linux,
 Chromium and Electron apps need `--force-renderer-accessibility`.
@@ -65,7 +76,7 @@ Each language is a small JSON file, and you can add your own without rebuilding.
 
 ## Building
 
-You need CMake 3.28+, GCC 14 or Clang 18+, zlib, Cairo, Pango, libcurl and Qt 6.4+. On Linux also Xlib (with XInput2,
+You need CMake 3.30+, GCC 14 or Clang 18+, zlib, Cairo, Pango, libcurl and Qt 6.4+. On Linux also Xlib (with XInput2,
 XFixes, XRandR, Xext) and AT-SPI 2.
 
 ```sh
@@ -78,11 +89,12 @@ Then run `build/release/apps/gui/lexiglance`. For Windows builds see [docs/porti
 
 ## Files
 
-Settings are in `~/.config/lexiglance`, dictionaries, OCR models and language files in `~/.local/share/lexiglance`.  
-On
-Windows they are in `%APPDATA%\Lexiglance\config` and `%LOCALAPPDATA%\Lexiglance\data`.
+Settings are in `~/.config/lexiglance`, dictionaries, OCR and translation models and language files in
+`~/.local/share/lexiglance`. On Windows they are in `%APPDATA%\Lexiglance\config` and
+`%LOCALAPPDATA%\Lexiglance\data`.
 
-`lexiglancectl` controls Lexiglance from scripts, for example `lexiglancectl pause` or `lexiglancectl lookup 食べた`.
+`lexiglancectl` controls Lexiglance from scripts, for example `lexiglancectl pause`, `lexiglancectl lookup 食べた` or
+`lexiglancectl translate 図書館で本を読みました`.
 
 ## Contributing
 
@@ -103,7 +115,7 @@ I hope Lexiglance can be a useful tool to others and help everyone on their own 
 MIT [LICENSE](LICENSE).  
 By MattFor
 
-Dictionaries, OCR models and recordings are downloaded separately and keep their own
+Dictionaries, OCR and translation models and recordings are downloaded separately and keep their own
 licenses. Lexiglance includes the ONNX Runtime headers (MIT), a kanji table
 from [OpenCC](https://github.com/BYVoid/OpenCC) (Apache 2.0) and
 [Breeze](https://invent.kde.org/frameworks/breeze-icons) icons (LGPL 3.0).

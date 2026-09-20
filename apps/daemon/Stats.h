@@ -29,9 +29,13 @@ namespace lexiglance::daemon
 		void recordPopup();
 		void recordAudio();
 		void recordAnki();
+		// A translation shown with a lookup, of `characters` characters in `language`. `took` is how long the model worked
+		// on it; zero when it was remembered from before.
+		void recordTranslation( std::string_view language, std::size_t characters, std::chrono::microseconds took );
 
-		// Whether counting happens at all (Settings -> statistics).
-		void setEnabled( bool enabled );
+		// Whether lookups (and what is done with them) are counted, and whether translations are: the two ticks on the
+		// Statistics page.
+		void setEnabled( bool lookups, bool translations );
 
 		// {lookups, found, words, days, ...}: the whole tally, as the Statistics page shows it.
 		[[nodiscard]] std::string json() const;
@@ -41,6 +45,19 @@ namespace lexiglance::daemon
 
 	private:
 		using Counts = std::map<std::string, std::uint64_t, std::less<>>;
+
+		// What one day saw, for the Statistics page's chart and what it shows of a day.
+		struct Day
+		{
+			std::uint64_t lookups               = 0;
+			std::uint64_t found                 = 0;
+			std::uint64_t characters            = 0;
+			std::uint64_t popups                = 0;
+			std::uint64_t audio                 = 0;
+			std::uint64_t anki                  = 0;
+			std::uint64_t translations          = 0;
+			std::uint64_t translated_characters = 0;
+		};
 
 		// The tally as one value, so resetting and loading are a single assignment.
 		struct Tally
@@ -53,21 +70,31 @@ namespace lexiglance::daemon
 			std::uint64_t anki         = 0;
 			std::uint64_t microseconds = 0;
 			std::uint64_t sessions     = 0;
+			// Translations shown, their characters, and the time the model took for those it made (not remembered ones).
+			std::uint64_t translations             = 0;
+			std::uint64_t translated_characters    = 0;
+			std::uint64_t translations_made        = 0;
+			std::uint64_t translation_microseconds = 0;
 			std::string   first_day;
 			Counts        languages;
+			Counts        translated_languages;
 			Counts        sources;
 			Counts        words;
-			Counts        days;
+			// By day ("2026-09-19"), oldest first.
+			std::map<std::string, Day, std::less<>> days;
 		};
 
-		// Counts a day and keeps the maps from growing without end; called with the lock held.
-		void mark( std::uint64_t& counter, std::uint64_t by = 1 );
+		// Today's entry, the oldest days dropped when there are too many; called with the lock held.
+		Day& today();
+		// Counts one of the totals and the same of today's; called with the lock held.
+		void mark( std::uint64_t& counter, std::uint64_t Day::* daily, std::uint64_t by = 1 );
 
 		mutable std::mutex    mutex_;
 		std::filesystem::path file_;
 		Tally                 tally_;
-		bool                  enabled_ = true;
-		bool                  dirty_   = false;
+		bool                  enabled_              = true;
+		bool                  translations_enabled_ = true;
+		bool                  dirty_                = false;
 	};
 
 } // namespace lexiglance::daemon

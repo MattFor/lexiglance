@@ -33,6 +33,25 @@ namespace
 		const auto [line, line_at] = daemon::sentenceAround( "一行目\n二行目の文", 10 );
 		test::expectEqual( line, std::string( "二行目の文" ) );
 		test::expectEqual( line_at, std::size_t{ 0 } );
+
+		// Sentences of words written with spaces end at . ! ? before a space; closing quotes stay with their sentence.
+		const std::string russian      = "Мы пришли в 3.5 часа. «Где книга?» Она здесь.";
+		const auto [second, second_at] = daemon::sentenceAround( russian, russian.find( "Где" ) );
+		test::expectEqual( second, std::string( "«Где книга?»" ) );
+		const auto [first, first_at] = daemon::sentenceAround( russian, russian.find( "часа" ) );
+		test::expectEqual( first, std::string( "Мы пришли в 3.5 часа." ) );
+		test::expectEqual( daemon::sentenceAround( "「行くよ。」と言った。次", 3 ).first, std::string( "「行くよ。」" ) );
+
+		// A plain space between kana or kanji separates two things (a word beside its reading, the columns of a menu),
+		// so each is its own sentence; the ideographic space Japanese sentences use is not a break.
+		const std::string beside = "食べる たべる";
+		test::expectEqual( daemon::sentenceAround( beside, 0 ).first, std::string( "食べる" ) );
+		const auto [reading, reading_at] = daemon::sentenceAround( beside, beside.find( "たべる" ) );
+		test::expectEqual( reading, std::string( "たべる" ) );
+		test::expectEqual( reading_at, std::size_t{ 0 } );
+		test::expectEqual( daemon::sentenceAround( "それは　どういう意味ですか？", 12 ).first, std::string( "それは　どういう意味ですか？" ) );
+		// A space beside anything else (a number, a Latin word) is no break at all.
+		test::expectEqual( daemon::sentenceAround( "図書館 3 時に行く。", 0 ).first, std::string( "図書館 3 時に行く。" ) );
 	} );
 
 	const test::Registrar audio_sources( "pronunciation sources by language", [] {

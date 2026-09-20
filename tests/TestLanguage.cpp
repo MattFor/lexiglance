@@ -84,6 +84,31 @@ namespace
 		test::expect( lg::lang::ja::isKanji( U'々' ) && !lg::lang::ja::isKanji( U'あ' ) );
 	} );
 
+	const test::Registrar word_starts( "the start of the word under the pointer", [] {
+		const auto& russian = *lg::lang::findLanguage( "ru" );
+		// Where the word holding `pointed` (a byte offset into `text`) starts, as the text from there.
+		const auto from = []( std::string_view text, std::string_view pointed, const lg::lang::Language& language ) {
+			return std::string( text.substr( lg::lang::wordStart( text, text.find( pointed ), language ) ) );
+		};
+		test::expectEqual( from( "я читаю книгу", "игу", russian ), std::string( "книгу" ) );
+		test::expectEqual( from( "я читаю книгу", "книгу", russian ), std::string( "книгу" ) );
+		test::expectEqual( from( "я читаю книгу", "у", russian ), std::string( "книгу" ) );
+		test::expectEqual( from( "кто-нибудь пришёл", "нибудь", russian ), std::string( "кто-нибудь пришёл" ) );
+		// Not before the letters: a hyphen or apostrophe in front of a word is not part of it.
+		test::expectEqual( from( "он -нибудь", "будь", russian ), std::string( "нибудь" ) );
+		test::expectEqual( from( "«книгу»", "игу", russian ), std::string( "книгу»" ) );
+		// Nothing to do on a space, on punctuation, or in a language written without spaces.
+		test::expectEqual( from( "я читаю книгу", " книгу", russian ), std::string( " книгу" ) );
+		test::expectEqual( from( "книгу, да", ", да", russian ), std::string( ", да" ) );
+		test::expectEqual( from( "日本語を勉強", "語を", japanese() ), std::string( "語を勉強" ) );
+		test::expectEqual( from( "학교에서 사람을", "서 사", *lg::lang::findLanguage( "ko" ) ), std::string( "학교에서 사람을" ) );
+		test::expectEqual( from( "в νότια", "τια", *lg::lang::findLanguage( "el" ) ), std::string( "νότια" ) );
+		// At most `limit` characters back, and never from the middle of a character.
+		test::expectEqual( lg::lang::wordStart( "книга", 8, russian, 2 ), std::size_t{ 4 } );
+		test::expectEqual( lg::lang::wordStart( "книга", 3, russian ), std::size_t{ 3 } );
+		test::expectEqual( lg::lang::wordStart( "книга", 99, russian ), std::size_t{ 99 } );
+	} );
+
 	const test::Registrar text_variants( "text variants", [] {
 		std::vector<lg::lang::TextVariant> variants;
 		japanese().variants( U"ｶﾞｯｺｳ", variants );
@@ -161,6 +186,28 @@ namespace
 
 		result = translator.lookup( set, "。食べる" );
 		test::expect( result.empty() );
+	} );
+
+	const test::Registrar selection_readings( "furigana over a selection, word by word", [] {
+		const auto set = fixtureSet();
+		if ( !test::expect( set != nullptr ) )
+		{
+			return;
+		}
+		lg::lookup::Translator translator;
+		const auto             joined = []( const std::vector<lg::lang::RubySegment>& segments ) {
+			std::string out;
+			for ( const auto& segment : segments )
+			{
+				out += segment.reading.empty() ? segment.text : std::format( "{}[{}]", segment.text, segment.reading );
+			}
+			return out;
+		};
+		// Compounds, particles in between, and the kanji of inflected forms keep their readings.
+		test::expectEqual( joined( translator.readings( set, "日本語を勉強していました。", {} ) ), std::string( "日本語[にほんご]を勉強[べんきょう]していました。" ) );
+		test::expectEqual( joined( translator.readings( set, "食べさせられなかった", {} ) ), std::string( "食[た]べさせられなかった" ) );
+		// What no dictionary has stays as it is.
+		test::expectEqual( joined( translator.readings( set, "hello 学校", {} ) ), std::string( "hello 学校[がっこう]" ) );
 	} );
 
 	const test::Registrar translator_limit_checks( "translator limits", [] {

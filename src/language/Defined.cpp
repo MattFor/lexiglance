@@ -6,6 +6,7 @@
 #include <lexiglance/language/Alphabetic.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <optional>
 #include <string>
@@ -68,6 +69,11 @@ namespace lexiglance::lang
 				return isScriptCharacter( c ) || isStressMark( c ) || word_characters_.contains( c );
 			}
 
+			[[nodiscard]] bool separatesWords() const noexcept override
+			{
+				return spaces_;
+			}
+
 			[[nodiscard]] std::span<const Fold> folds() const noexcept override
 			{
 				return folds_;
@@ -81,6 +87,11 @@ namespace lexiglance::lang
 			[[nodiscard]] std::span<const std::string_view> sampleWords() const noexcept override
 			{
 				return sample_words_;
+			}
+
+			[[nodiscard]] std::string_view exampleSentence() const noexcept override
+			{
+				return example_sentence_.empty() ? std::string_view( sample_text_ ) : std::string_view( example_sentence_ );
 			}
 
 			[[nodiscard]] std::string_view commonsPrefix() const noexcept override
@@ -98,8 +109,10 @@ namespace lexiglance::lang
 			std::string                                name_;
 			std::vector<std::pair<char32_t, char32_t>> script_;
 			std::u32string                             word_characters_;
+			bool                                       spaces_ = true;
 			std::vector<Fold>                          folds_;
 			std::string                                sample_text_;
+			std::string                                example_sentence_;
 			std::vector<std::string>                   sample_storage_;
 			std::vector<std::string_view>              sample_words_;
 			std::string                                commons_prefix_;
@@ -134,6 +147,15 @@ namespace lexiglance::lang
 			}
 
 			language->word_characters_ = utf8::toUtf32( root["word_characters"].asString() );
+			// Scripts written without spaces between words: Chinese characters, kana, Thai, Lao, Tibetan, Myanmar, Khmer.
+			constexpr std::array<std::pair<char32_t, char32_t>, 9> unspaced{
+				{ { 0x0E00, 0x0EFF }, { 0x0F00, 0x0FFF }, { 0x1000, 0x109F }, { 0x1780, 0x17FF }, { 0x3040, 0x30FF }, { 0x3400, 0x4DBF }, { 0x4E00, 0x9FFF }, { 0xF900, 0xFAFF }, { 0x20000, 0x3FFFF } }
+			};
+			const bool written_unspaced = std::ranges::any_of( language->script_, [&]( const auto& range ) {
+				return std::ranges::any_of( unspaced, [&]( const auto& other ) { return range.first <= other.second && other.first <= range.second; } );
+			} );
+
+			language->spaces_ = root["spaces"].asBool( !written_unspaced );
 			for ( const json::Member& fold : root["folds"].members() )
 			{
 				const auto from = utf8::toUtf32( fold.key );
@@ -161,6 +183,7 @@ namespace lexiglance::lang
 					language->sample_text_.append( language->sample_text_.empty() ? "" : " " ).append( word );
 				}
 			}
+			language->example_sentence_   = root["example_sentence"].asString();
 			language->commons_prefix_     = root["commons_prefix"].asString();
 			language->paddle_             = root["ocr"]["paddle"].asString();
 			language->tesseract_          = root["ocr"]["tesseract"].asString();
@@ -190,6 +213,8 @@ namespace lexiglance::lang
 			language->deinflector_.setMinimumStem( static_cast<std::size_t>( std::max<std::int64_t>( 0, root["minimum_stem"].asInt( 0 ) ) ) );
 			language->deinflector_.finalize();
 			language->recommend( recommendationsOf( root ) );
+			language->setTranslationModel( translationModelOf( root ) );
+			language->setDistinctiveLetters( distinctiveLettersOf( root ) );
 			return language;
 		}
 
@@ -198,6 +223,25 @@ namespace lexiglance::lang
 	Result<std::unique_ptr<Language>> defineLanguage( const json::Value& root )
 	{
 		return DefinedLanguage::define( root );
+	}
+
+	std::u32string distinctiveLettersOf( const json::Value& root )
+	{
+		return utf8::toUtf32( root["distinctive_letters"].asString() );
+	}
+
+	TranslationModel translationModelOf( const json::Value& root )
+	{
+		const json::Value& model = root["translation"];
+		TranslationModel   out{ .repository = std::string( model["model"].asString() ), .revision = std::string( model["revision"].asString( "main" ) ), .bytes = 0, .full_bytes = 0 };
+		out.bytes      = static_cast<std::uint64_t>( std::max<std::int64_t>( 0, model["size"].asInt( 0 ) ) );
+		out.full_bytes = static_cast<std::uint64_t>( std::max<std::int64_t>( 0, model["full_size"].asInt( 0 ) ) );
+		// A repository is "owner/name": nothing that could leave the models' directory.
+		if ( out.repository.find( ".." ) != std::string::npos || out.directory().empty() || out.revision.find( '/' ) != std::string::npos )
+		{
+			return {};
+		}
+		return out;
 	}
 
 	std::vector<Recommendation> recommendationsOf( const json::Value& root )

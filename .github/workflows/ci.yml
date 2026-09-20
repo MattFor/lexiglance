@@ -14,7 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  QT_VERSION: "6.8.3"
   APT_PACKAGES: >-
     ninja-build zlib1g-dev libcairo2-dev libpango1.0-dev libx11-dev libxi-dev libxfixes-dev libxrandr-dev
     libxext-dev libatspi2.0-dev libcurl4-openssl-dev libgl-dev libxkbcommon-dev qt6-base-dev
@@ -108,6 +107,35 @@ jobs:
           git ls-files 'src/platform/linux/*.cpp'
           | xargs -P "$(nproc)" -n 4 clang-tidy -p build --quiet --warnings-as-errors='*'
 
+  fedora:
+    name: Fedora (GCC, .rpm package)
+    # What the release's .rpm is built on: it builds, passes the tests, installs with dnf and uninstalls with rpm.
+    # Fedora moves to new GCC and Qt releases quickly, so its warnings are reported but do not fail the build.
+    runs-on: ubuntu-24.04
+    container: fedora:42
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: >-
+          dnf install -y gcc-c++ cmake ninja-build pkgconf-pkg-config rpm-build zlib-devel cairo-devel pango-devel
+          libX11-devel libXi-devel libXfixes-devel libXrandr-devel libXext-devel at-spi2-core-devel libcurl-devel
+          mesa-libGL-devel libxkbcommon-devel qt6-qtbase-devel dejavu-sans-fonts
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Package
+        run: cd build && cpack -G RPM
+      - name: Install and uninstall the package
+        run: |
+          dnf install -y ./build/lexiglance-*.rpm
+          lexiglanced --version
+          rpm -e lexiglance
+          test ! -e /usr/bin/lexiglanced
+
   windows:
     name: Windows (MinGW-w64, tests under wine)
     runs-on: ubuntu-24.04
@@ -167,20 +195,3 @@ jobs:
           ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem build/lexiglance-*.zip | Select-Object -First 1).FullName
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem build/*-setup.exe | Select-Object -First 1).FullName
-
-  macos:
-    name: macOS (portable part)
-    runs-on: macos-15
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          cache: true
-      - name: Configure
-        run: brew install ninja && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEXIGLANCE_BUILD_DAEMON=OFF
-      - name: Build
-        run: cmake --build build
-      - name: Test
-        run: ctest --test-dir build --output-on-failure

@@ -32,7 +32,8 @@ namespace lexiglance::daemon
 
 	[[nodiscard]] std::string fillTemplate( std::string_view pattern, const Markers& markers );
 
-	// The sentence containing `offset`, cut at 。！？ and line breaks; returns it and the offset within it.
+	// The sentence containing `offset`: cut after 。！？… and after . ! ? before a space (so 3.5 and U.S. go on), closing
+	// brackets and quotes after them included, and at line breaks; returns it and the offset within it.
 	[[nodiscard]] std::pair<std::string, std::size_t> sentenceAround( std::string_view text, std::size_t offset );
 
 	// For each term (up to 24), whether Anki would accept it, i.e. has no note with the same first field. Blocking.

@@ -3,6 +3,7 @@
 #include "DaemonClient.h"
 #include "DesktopEntry.h"
 #include "Settings.h"
+#include "TranslationInstall.h"
 #include "UpdateGroup.h"
 #include "VcRedist.h"
 
@@ -96,15 +97,44 @@ namespace lexiglance::gui
 			)
 			                              .arg( daemonExecutable().toHtmlEscaped() );
 	#else
-			const QString entry = QStringLiteral(
-										  "[Desktop Entry]\nType=Application\nName=Lexiglance\nComment=System-wide pop-up dictionary\nExec=\"%1\"\n"
-										  "Icon=lexiglance\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n"
+			// From an AppImage, the AppImage file with --daemon: the daemon inside it lives in a mount that is gone
+			// once it ends, so its own path would start nothing at the next login.
+			const QString appimage = qEnvironmentVariable( "APPIMAGE" );
+			const QString exec     = appimage.isEmpty() ? QStringLiteral( "\"%1\"" ).arg( daemonExecutable() ) : QStringLiteral( "\"%1\" --daemon" ).arg( appimage );
+			const QString entry    = QStringLiteral(
+											 "[Desktop Entry]\nType=Application\nName=Lexiglance\nComment=System-wide pop-up dictionary\nExec=%1\n"
+											 "Icon=lexiglance\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n"
 			)
-			                              .arg( daemonExecutable() );
+			                                 .arg( exec );
 	#endif
 			return file.write( entry.toUtf8() ) > 0;
 #endif
 		}
+
+#if !defined( Q_OS_WIN ) && !defined( Q_OS_MACOS )
+		// An entry that starts nothing any more is written again for this copy: the program it names is gone, or it is
+		// inside the mount of an AppImage (which earlier versions wrote, and which disappears when the AppImage ends).
+		// An entry that works is left alone, whichever copy it starts.
+		void repairAutostart()
+		{
+			QFile file( autostartFile() );
+			if ( !file.open( QIODevice::ReadOnly ) )
+			{
+				return;
+			}
+			// Exec="/a path/lexiglanced" or Exec=/path/lexiglanced, with arguments or without.
+			static const QRegularExpression exec( QStringLiteral( "^Exec=(?:\"([^\"\n]+)\"|([^\\s]+))" ), QRegularExpression::MultilineOption );
+			const auto                      match   = exec.match( QString::fromUtf8( file.readAll() ) );
+			const QString                   program = match.hasMatch() ? ( match.captured( 1 ).isEmpty() ? match.captured( 2 ) : match.captured( 1 ) ) : QString();
+			if ( !program.isEmpty() && QFile::exists( program ) && !program.contains( QStringLiteral( "/.mount_" ) ) )
+			{
+				return;
+			}
+			file.close();
+			log::info( "autostart: the entry started {}, which is gone; it starts {} now", ss( program ), ss( qEnvironmentVariable( "APPIMAGE", daemonExecutable() ) ) );
+			( void )setAutostart( true );
+		}
+#endif
 
 #ifndef Q_OS_MACOS
 		// The settings application at login as well, in the tray: a second entry beside the daemon's.
@@ -231,6 +261,10 @@ namespace lexiglance::gui
 			if ( action == QStringLiteral( "install-vcredist" ) )
 			{
 				return QStringLiteral( "Download and install" );
+			}
+			if ( action == QStringLiteral( "download-translation" ) )
+			{
+				return QStringLiteral( "Download" );
 			}
 			if ( action == QStringLiteral( "resume" ) )
 			{
@@ -411,6 +445,12 @@ namespace lexiglance::gui
 
 		auto* startup_box    = new QGroupBox( QStringLiteral( "Startup" ) );
 		auto* startup_layout = new QVBoxLayout( startup_box );
+#if !defined( Q_OS_WIN ) && !defined( Q_OS_MACOS )
+		if ( autostartEnabled() )
+		{
+			repairAutostart();
+		}
+#endif
 		autostart_->setChecked( autostartEnabled() );
 		startup_layout->addWidget( autostart_ );
 		// Under the option it belongs to.
@@ -457,6 +497,23 @@ namespace lexiglance::gui
 		reset_layout->addWidget( reset_note, 1 );
 		reset_layout->addWidget( reset_all );
 		layout->addWidget( reset_box );
+
+		auto* uninstall_box    = new QGroupBox( QStringLiteral( "Uninstall" ) );
+		auto* uninstall_layout = new QHBoxLayout( uninstall_box );
+		auto* uninstall_note   = new QLabel( QStringLiteral( "Removes Lexiglance from this computer, with its autostart and menu entry, and unless you untick it your settings, dictionaries and downloaded models." ) );
+		uninstall_note->setWordWrap( true );
+		uninstall_note->setEnabled( false );
+		auto* uninstall = new QPushButton( QStringLiteral( "Uninstall Lexiglance..." ) );
+		uninstall_layout->addWidget( uninstall_note, 1 );
+		uninstall_layout->addWidget( uninstall );
+		layout->addWidget( uninstall_box );
+		connect( uninstall, &QPushButton::clicked, this, [this] {
+			if ( uninstall_ == nullptr )
+			{
+				uninstall_ = new UninstallOverlay( &client(), window() );
+			}
+			uninstall_->open();
+		} );
 		connect( reset_all, &QPushButton::clicked, this, [this] {
 			if ( !confirm( this, QStringLiteral( "Reset all settings" ), QStringLiteral( "Every setting goes back to its default: the trigger, scanning, OCR, the popup's look, audio and Anki. Installed dictionaries and their order are kept." ), QStringLiteral( "Reset all" ) ) )
 			{
@@ -550,31 +607,7 @@ namespace lexiglance::gui
 		connect( show_test, &QPushButton::clicked, this, show );
 		connect( test_text_, &QLineEdit::returnPressed, this, show );
 
-		client().onEvent( [this]( std::string_view name, const json::Value& params ) {
-			if ( name == "trigger.changed" )
-			{
-				setTrigger( params["held"].asBool() );
-			}
-			else if ( name == "capture.result" )
-			{
-				const bool found = params["found"].asBool();
-				saw_lookup_      = true;
-				last_capture_->setText( QStringLiteral( "Last lookup: <span style=\"color:%1\">%2</span> <span style=\"color:gray\">(%3)</span>" )
-				                                .arg( found ? QStringLiteral( "#3fa45b" ) : QStringLiteral( "#d19a1f" ), qs( params["summary"].asString() ).toHtmlEscaped(), qs( params["where"].asString() ).toHtmlEscaped() ) );
-			}
-			// What the health depends on changed: checked again once it settles, or when the page is next shown.
-			else if ( name == "dictionaries.changed" || name == "config.changed" || name == "status.changed" )
-			{
-				if ( isVisible() )
-				{
-					health_timer_->start();
-				}
-				else
-				{
-					health_stale_ = true;
-				}
-			}
-		} );
+		client().onEvent( [this]( std::string_view name, const json::Value& params ) { onDaemonEvent( name, params ); } );
 		health_timer_->setSingleShot( true );
 		health_timer_->setInterval( 1200 );
 		connect( health_timer_, &QTimer::timeout, this, [this] {
@@ -678,6 +711,42 @@ namespace lexiglance::gui
 		                           .arg( status["pid"].asInt() )
 		                           .arg( qs( status["backend"].asString() ) )
 		                           .arg( status["scale"].asDouble(), 0, 'g', 3 ) );
+	}
+
+	// What the daemon says while the page is open: the trigger going down, a lookup made, how far the health check has
+	// come, and what makes the check worth running again.
+	void OverviewPage::onDaemonEvent( std::string_view name, const json::Value& params )
+	{
+		if ( name == "trigger.changed" )
+		{
+			setTrigger( params["held"].asBool() );
+		}
+		else if ( name == "health.progress" )
+		{
+			if ( checking_ )
+			{
+				health_summary_->setText( QStringLiteral( "Checking %1... (%2 of %3)" ).arg( qs( params["checking"].asString() ) ).arg( params["done"].asInt() ).arg( params["total"].asInt() ) );
+			}
+		}
+		else if ( name == "capture.result" )
+		{
+			const bool found = params["found"].asBool();
+			saw_lookup_      = true;
+			last_capture_->setText( QStringLiteral( "Last lookup: <span style=\"color:%1\">%2</span> <span style=\"color:gray\">(%3)</span>" )
+			                                .arg( found ? QStringLiteral( "#3fa45b" ) : QStringLiteral( "#d19a1f" ), qs( params["summary"].asString() ).toHtmlEscaped(), qs( params["where"].asString() ).toHtmlEscaped() ) );
+		}
+		// What the health depends on changed: checked again once it settles, or when the page is next shown.
+		else if ( name == "dictionaries.changed" || name == "config.changed" || name == "status.changed" )
+		{
+			if ( isVisible() )
+			{
+				health_timer_->start();
+			}
+			else
+			{
+				health_stale_ = true;
+			}
+		}
 	}
 
 	void OverviewPage::checkHealth( bool interactive )
@@ -867,7 +936,9 @@ namespace lexiglance::gui
 		}
 		if ( passed > 0 )
 		{
-			summary += QStringLiteral( " <span style=\"color:gray\">· %1 checks passed · %2</span>" ).arg( passed ).arg( QDateTime::currentDateTime().toString( QStringLiteral( "HH:mm:ss" ) ) );
+			summary += QStringLiteral( " <span style=\"color:gray\">· %1 · %2</span>" )
+			                   .arg( passed == 1 ? QStringLiteral( "one check passed" ) : QStringLiteral( "%1 checks passed" ).arg( passed ) )
+			                   .arg( QDateTime::currentDateTime().toString( QStringLiteral( "HH:mm:ss" ) ) );
 		}
 		health_summary_->setText( summary );
 		fix_all_->setVisible( fixable > 0 );
@@ -904,6 +975,10 @@ namespace lexiglance::gui
 		else if ( action == QStringLiteral( "install-vcredist" ) )
 		{
 			installRuntime();
+		}
+		else if ( action == QStringLiteral( "download-translation" ) )
+		{
+			downloadTranslation( recheck );
 		}
 		else if ( action.startsWith( QStringLiteral( "open-" ) ) )
 		{
@@ -960,6 +1035,20 @@ namespace lexiglance::gui
 			installRuntime();
 			return;
 		}
+		// A download takes a while: the rest is done once it is.
+		if ( actions.contains( QStringLiteral( "download-translation" ) ) )
+		{
+			downloadTranslation( [this, restart_after = actions.contains( QStringLiteral( "restart" ) )] {
+				fixing_ = false;
+				if ( restart_after )
+				{
+					restart();
+					return;
+				}
+				QTimer::singleShot( 2000, this, [this] { checkHealth( true ); } );
+			} );
+			return;
+		}
 		fixing_ = false;
 		if ( actions.contains( QStringLiteral( "restart" ) ) )
 		{
@@ -968,6 +1057,38 @@ namespace lexiglance::gui
 		}
 		// The daemon needs a moment to act on what changed before checking again says anything.
 		QTimer::singleShot( 2000, this, [this] { checkHealth( true ); } );
+	}
+
+	void OverviewPage::downloadTranslation( std::function<void()> then )
+	{
+		if ( translation_ == nullptr )
+		{
+			translation_ = new translation_install::Installer( &client(), this );
+		}
+		fixing_ = true;
+		fix_all_->setEnabled( false );
+		health_progress_->show();
+		health_summary_->setText( QStringLiteral( "Downloading the translation models..." ) );
+		const auto languages = lang::enabledLanguages( settings().config().disabled_languages );
+		translation_->install(
+				translation_install::wanted( languages, settings().config().translation ),
+				false,
+				[this]( qint64 received, qint64 total ) { showProgress( health_progress_, received, total ); },
+				[this, then = std::move( then )]( const QString& error ) {
+					health_progress_->hide();
+					fixing_ = false;
+					fix_all_->setEnabled( true );
+					if ( !error.isEmpty() )
+					{
+						health_summary_->setText( QStringLiteral( "<span style=\"color:#e0605a\">Not downloaded: %1</span>" ).arg( error.toHtmlEscaped() ) );
+						return;
+					}
+					if ( then )
+					{
+						then();
+					}
+				}
+		);
 	}
 
 	void OverviewPage::installRuntime()

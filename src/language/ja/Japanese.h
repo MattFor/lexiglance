@@ -28,6 +28,11 @@ namespace lexiglance::lang::ja
 		// Also Latin letters and digits, which Japanese words contain (Tシャツ, CD).
 		[[nodiscard]] bool isLookupCharacter( char32_t c ) const noexcept override;
 
+		[[nodiscard]] bool separatesWords() const noexcept override
+		{
+			return false;
+		}
+
 		void variants( std::u32string_view source, std::vector<TextVariant>& out ) const override;
 
 		[[nodiscard]] const Deinflector& deinflector() const noexcept override
@@ -41,6 +46,11 @@ namespace lexiglance::lang::ja
 		[[nodiscard]] std::string_view sampleText() const noexcept override
 		{
 			return "日本語の辞書、ひらがな、カタカナ";
+		}
+
+		[[nodiscard]] std::string_view exampleSentence() const noexcept override
+		{
+			return "私は昨日、友達と一緒に図書館で本を読みました。";
 		}
 
 		[[nodiscard]] std::span<const std::string_view> sampleWords() const noexcept override;

@@ -20,6 +20,8 @@ namespace lexiglance::paths
 	[[nodiscard]] std::filesystem::path configFile();
 	[[nodiscard]] std::filesystem::path dictionariesDir();
 	[[nodiscard]] std::filesystem::path ocrDir();
+	// Offline translation models, a directory for each.
+	[[nodiscard]] std::filesystem::path translationDir();
 
 	// Unix domain socket path, or a named pipe name on Windows.
 	[[nodiscard]] std::string ipcEndpoint();

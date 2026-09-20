@@ -5,6 +5,8 @@
 #include <lexiglance/core/Glob.h>
 #include <lexiglance/core/Hash.h>
 #include <lexiglance/core/Md5.h>
+#include <lexiglance/core/Process.h>
+#include <lexiglance/core/Thread.h>
 #include <lexiglance/core/Json.h>
 #include <lexiglance/core/Utf8.h>
 #include <lexiglance/core/Zip.h>
@@ -12,6 +14,10 @@
 
 #include <fstream>
 #include <sstream>
+
+#ifndef _WIN32
+	#include <unistd.h>
+#endif
 
 namespace
 {
@@ -317,6 +323,55 @@ namespace
 		test::expect( old && !old->scan.known_languages_only );
 		const lg::config::Config defaults;
 		test::expect( defaults.scan.known_languages_only && defaults.disabled_languages.empty() && defaults.audio.sources == std::vector<std::string>{ "jpod101", "commons" } );
+	} );
+
+#ifdef __linux__
+	const test::Registrar process_name( "naming the main thread leaves the process known by its program's name", [] {
+		const std::string before( lg::thread::name() );
+		lg::thread::setName( "renamed" );
+		test::expectEqual( lg::thread::name(), std::string_view( "renamed" ) );
+		// ps, pgrep and othersNamed() still see lexiglance_tests (the kernel keeps 15 characters of it).
+		test::expect( lg::process::isRunning( ::getpid(), "lexiglance_tests" ) );
+		test::expect( !lg::process::isRunning( ::getpid(), "renamed" ) );
+		lg::thread::setName( before );
+	} );
+#endif
+
+	const test::Registrar config_translation( "configuration of translation, languages whose translation is off included", [] {
+		lg::config::Config config;
+		config.translation.selections         = false;
+		config.translation.sentence_key       = "Control_R";
+		config.translation.disabled_languages = { "ru", "el" };
+		config.translation.model              = "full";
+		config.translation.setModelFor( "ja", "compact" );
+		const auto parsed = lg::config::Config::parse( config.toJson() );
+		if ( !test::expect( parsed.has_value() ) )
+		{
+			return;
+		}
+		test::expect( !parsed->translation.selections );
+		test::expectEqual( parsed->translation.sentence_key, std::string( "Control_R" ) );
+		test::expect( parsed->translation.disabled_languages == std::vector<std::string>{ "ru", "el" } );
+		test::expect( !parsed->translation.translates( "ru" ) && parsed->translation.translates( "ja" ) );
+		test::expectEqual( parsed->translation.model, std::string( "full" ) );
+		// A language with weights of its own keeps them; the others follow the one above the table.
+		test::expectEqual( parsed->translation.modelFor( "ja" ), std::string_view( "compact" ) );
+		test::expectEqual( parsed->translation.modelFor( "ru" ), std::string_view( "full" ) );
+		// Chosen again: the one entry changes rather than a second one appearing.
+		auto again = *parsed;
+		again.translation.setModelFor( "ja", "full" );
+		test::expect( again.translation.models.size() == 1 && again.translation.modelFor( "ja" ) == "full" );
+		// Anything but "full" in the file means the compact weights.
+		const auto odd_weights = lg::config::Config::parse( R"({"translation":{"models":{"ja":"huge","ru":"full"}}})" );
+		test::expect( odd_weights && odd_weights->translation.modelFor( "ja" ) == "compact" && odd_weights->translation.modelFor( "ru" ) == "full" );
+		// Every language is translated to begin with, and a file from before has none turned off and compact models.
+		const auto old = lg::config::Config::parse( R"({"translation":{"enabled":true}})" );
+		test::expect( old && old->translation.disabled_languages.empty() && old->translation.translates( "uk" ) && old->translation.model == "compact" );
+		// Anything else is compact too, as are the statistics of translations counted to begin with.
+		const auto odd = lg::config::Config::parse( R"({"translation":{"model":"huge"},"statistics":false})" );
+		test::expect( odd && odd->translation.model == "compact" && !odd->statistics && odd->statistics_translations );
+		const auto split = lg::config::Config::parse( R"({"statistics_translations":false})" );
+		test::expect( split && split->statistics && !split->statistics_translations );
 	} );
 
 	const test::Registrar config_newest_settings( "configuration round trip of compositor, wheel and dictionary settings", [] {

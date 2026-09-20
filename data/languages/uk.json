@@ -4,11 +4,19 @@
     "script": ["0400-052F"],
     "word_characters": "-‐‑'’ʼ",
     "sample_text": "Чуєш їх, доцю, га? Кумедна ж ти, прощайся без ґольфів!",
+    "example_sentence": "Учора ми з другом довго читали цікаві книжки.",
     "sample_words": ["їжа", "мова"],
     "commons_prefix": "Uk",
     "ocr": {
         "paddle": "PP-OCRv5/rec/eslav_PP-OCRv5_rec_mobile.onnx",
         "tesseract": "ukr"
+    },
+    "distinctive_letters": "іїєґІЇЄҐ",
+    "translation": {
+        "model": "Xenova/opus-mt-uk-en",
+        "revision": "b2ad6afa424aaeff8913ff350860b7a7b7c0a607",
+        "size": 116526356,
+        "full_size": 438703458
     },
     "dictionaries": [
         {

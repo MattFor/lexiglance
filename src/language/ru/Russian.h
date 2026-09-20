@@ -26,6 +26,7 @@ namespace lexiglance::lang::ru
 		[[nodiscard]] bool isScriptCharacter( char32_t c ) const noexcept override;
 
 		[[nodiscard]] std::string_view sampleText() const noexcept override;
+		[[nodiscard]] std::string_view exampleSentence() const noexcept override;
 
 		[[nodiscard]] std::span<const std::string_view> sampleWords() const noexcept override;
 

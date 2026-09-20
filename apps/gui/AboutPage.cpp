@@ -13,7 +13,9 @@
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDesktopServices>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -187,7 +189,17 @@ namespace lexiglance::gui
 		text_->setFrameShape( QFrame::NoFrame );
 		layout->addWidget( text_, 1 );
 
-		connect( text_, &QTextBrowser::anchorClicked, this, []( const QUrl& url ) { QDesktopServices::openUrl( url ); } );
+		connect( text_, &QTextBrowser::anchorClicked, this, [this]( const QUrl& url ) {
+			// A file gone since the page was drawn (a log deleted, the diagnosis zip cleaned away) says so instead of an
+			// error from the file manager.
+			if ( url.isLocalFile() && !QFileInfo::exists( url.toLocalFile() ) )
+			{
+				showSummary( QStringLiteral( "%1 is not there any more." ).arg( QDir::toNativeSeparators( url.toLocalFile() ) ) );
+				render();
+				return;
+			}
+			QDesktopServices::openUrl( url );
+		} );
 		connect( diagnosis_, &QPushButton::clicked, this, [this] { copyDiagnosis(); } );
 
 		daemon_ = QStringLiteral( "not running" );
@@ -242,6 +254,14 @@ namespace lexiglance::gui
 		const auto    row   = []( const QString& label, const QString& value ) {
 			return QStringLiteral( "<tr><td style=\"padding-right: 18px\">%1</td><td>%2</td></tr>" ).arg( label, value );
 		};
+		// A file that may not be there yet: a link once it is, before that its path greyed and why.
+		const auto file = [&]( const QString& path, const QString& absent ) {
+			if ( QFileInfo::exists( path ) )
+			{
+				return link( QUrl::fromLocalFile( path ).toString(), QDir::toNativeSeparators( path ) );
+			}
+			return QStringLiteral( "<span style=\"color: %1\">%2 (%3)</span>" ).arg( muted, QDir::toNativeSeparators( path ).toHtmlEscaped(), absent.toHtmlEscaped() );
+		};
 
 		QString html = QStringLiteral( "<h3>System</h3><table cellspacing=\"3\">" );
 		html += row( QStringLiteral( "Lexiglance" ), QStringLiteral( "%1 (%2)" ).arg( qs( version ), buildName() ) );
@@ -257,9 +277,9 @@ namespace lexiglance::gui
 		std::error_code ec;
 		std::filesystem::create_directories( lang::languagesDirectory(), ec );
 		html += row( QStringLiteral( "Languages" ), folder( lang::languagesDirectory() ) );
-		html += row( QStringLiteral( "Daemon log" ), folder( paths::stateDir() / "daemon.log" ) );
-		html += row( QStringLiteral( "Application log" ), folder( paths::stateDir() / "application.log" ) );
-		html += row( QStringLiteral( "Diagnosis zip" ), folder( std::filesystem::path( ss( diagnosisZipPath() ) ) ) );
+		html += row( QStringLiteral( "Daemon log" ), file( qs( ( paths::stateDir() / "daemon.log" ).string() ), QStringLiteral( "not written yet: the daemon has not run" ) ) );
+		html += row( QStringLiteral( "Application log" ), file( qs( ( paths::stateDir() / "application.log" ).string() ), QStringLiteral( "not written yet" ) ) );
+		html += row( QStringLiteral( "Diagnosis zip" ), file( diagnosisZipPath(), QStringLiteral( "not made yet: Copy diagnosis makes it" ) ) );
 		html += QStringLiteral( "</table>" );
 
 		html += QStringLiteral( "<h3>Licence</h3><p>Lexiglance is free software under the %1. Copyright © 2026 %2.</p>" )
@@ -336,6 +356,8 @@ namespace lexiglance::gui
 
 			diagnosis_->setEnabled( true );
 			diagnosis_->setText( QStringLiteral( "Copied ✓" ) );
+			// Its path turns into a link.
+			render();
 			showSummary( QStringLiteral( "Diagnosis zip copied to the clipboard." ) );
 			QTimer::singleShot( 2000, diagnosis_, [this] { diagnosis_->setText( QStringLiteral( "Copy diagnosis..." ) ); } );
 			log::info( "diagnosis zip ready at {}", ss( zip_path ) );

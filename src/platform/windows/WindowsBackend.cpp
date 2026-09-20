@@ -497,6 +497,8 @@ namespace lexiglance::platform
 				{
 					chord_ = std::move( *chord );
 				}
+				sentence_key_   = config.translation.enabled ? config::extraKey( config.translation.sentence_key, chord_ ) : config::KeyGroup{};
+				sentence_held_  = false;
 				delay_          = std::chrono::milliseconds( config.scan.delay_ms );
 				move_threshold_ = config.scan.move_threshold;
 				selection_mode_ = config.scan.selection;
@@ -612,17 +614,16 @@ namespace lexiglance::platform
 				return popup_shown_;
 			}
 
-			void showHighlight( Rect rect, const render::Color& color ) override
+			void showHighlight( std::span<const Rect> rects, const render::Color& color ) override
 			{
-				if ( rect.empty() )
+				if ( rects.empty() || std::ranges::all_of( rects, &Rect::empty ) )
 				{
 					return;
 				}
 				const Rect before = highlight_shown_ ? highlight_rect_ : Rect{};
 				ensureHighlightWindow();
 				highlight_color_ = color;
-				const auto area  = render::highlightArea( { .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height }, look_ );
-				highlight_rect_  = { .x = area.x, .y = area.y, .width = area.width, .height = area.height };
+				setHighlightPieces( rects );
 				// Underlines take the rows below the text (and the room around it).
 				highlight_lines_ = render::highlightDepth( look_ );
 				const bool fill  = look_.shape == render::HighlightShape::Fill;
@@ -1158,13 +1159,33 @@ namespace lexiglance::platform
 				}
 			}
 
+			// The sentence key is held too.
+			[[nodiscard]] bool sentenceHeld() const
+			{
+				return std::ranges::any_of( sentence_key_, [this]( config::Key key ) { return down_.test( static_cast<std::size_t>( key ) ); } );
+			}
+
 			void updateTrigger()
 			{
-				const bool held = chordHeld();
+				const bool held     = chordHeld();
+				const bool sentence = held && sentenceHeld();
+				if ( held && trigger_active_ && sentence != sentence_held_ )
+				{
+					// Pressed over the text: looked at again, as a sentence to translate. Let go, the translation stays: the
+					// daemon keeps it while the pointer is over what it translates.
+					sentence_held_    = sentence;
+					sentence_pressed_ = sentence;
+					if ( sentence )
+					{
+						scan( true );
+					}
+				}
 				if ( held && !trigger_active_ )
 				{
-					trigger_active_ = true;
-					wheel_          = 0;
+					trigger_active_   = true;
+					sentence_held_    = sentence;
+					sentence_pressed_ = sentence;
+					wheel_            = 0;
 					if ( events_.trigger_changed )
 					{
 						events_.trigger_changed( true );
@@ -1174,8 +1195,10 @@ namespace lexiglance::platform
 				}
 				else if ( !held && trigger_active_ )
 				{
-					trigger_active_ = false;
-					scan_pending_   = false;
+					trigger_active_   = false;
+					sentence_held_    = false;
+					sentence_pressed_ = false;
+					scan_pending_     = false;
 					updateWheelLock();
 					// Focus may have moved while the trigger was held (ignored above); close now if it did.
 					if ( watching() )
@@ -1258,7 +1281,7 @@ namespace lexiglance::platform
 				last_point_ = at;
 				if ( events_.scan )
 				{
-					events_.scan( last_point_, windowAt( last_point_ ) );
+					events_.scan( last_point_, windowAt( last_point_ ), sentence_held_, std::exchange( sentence_pressed_, false ) );
 				}
 			}
 
@@ -1366,21 +1389,25 @@ namespace lexiglance::platform
 				{
 					overlays.push_back( { .rect = popup_rect_, .underneath = nullptr, .stipple = 0 } );
 				}
-				if ( highlight_shown_ && !transparent_.load( std::memory_order_relaxed ) )
+				const bool drawn  = highlight_shown_ && !transparent_.load( std::memory_order_relaxed );
+				const bool marked = drawn && look_.shape == render::HighlightShape::Fill && marker_ && underlay_gray_;
+				if ( marked )
 				{
-					const Rect& r = highlight_rect_;
-					const int   t = std::max( 1, look_.thickness );
+					// What the whole window hid is known: put back as it was.
+					overlays.push_back( { .rect = highlight_rect_, .underneath = underlay_gray_, .stipple = 0 } );
+				}
+				for ( const Rect& piece : highlight_pieces_ )
+				{
+					if ( !drawn || marked )
+					{
+						break;
+					}
+					const Rect r{ .x = highlight_rect_.x + piece.x, .y = highlight_rect_.y + piece.y, .width = piece.width, .height = piece.height };
+					const int  t = std::max( 1, look_.thickness );
 					switch ( look_.shape )
 					{
 						case render::HighlightShape::Fill:
-							if ( marker_ && underlay_gray_ )
-							{
-								overlays.push_back( { .rect = highlight_rect_, .underneath = underlay_gray_, .stipple = 0 } );
-							}
-							else
-							{
-								overlays.push_back( { .rect = highlight_rect_, .underneath = nullptr, .stipple = stipple() } );
-							}
+							overlays.push_back( { .rect = r, .underneath = nullptr, .stipple = stipple() } );
 							break;
 						case render::HighlightShape::Outline:
 						case render::HighlightShape::Brackets:
@@ -1413,6 +1440,41 @@ namespace lexiglance::platform
 				return highlight_color_.a < 0.3 ? 4 : 2;
 			}
 
+			// One window spans the whole highlight; each line of the text is a piece of it (window coordinates).
+			void setHighlightPieces( std::span<const Rect> rects )
+			{
+				std::vector<Rect> areas;
+				for ( const Rect& rect : rects )
+				{
+					if ( !rect.empty() )
+					{
+						const auto area = render::highlightArea( { .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height }, look_ );
+						areas.push_back( { .x = area.x, .y = area.y, .width = area.width, .height = area.height } );
+					}
+				}
+				highlight_rect_ = areas.front();
+				for ( const Rect& area : areas )
+				{
+					highlight_rect_ = highlight_rect_.united( area );
+				}
+				highlight_pieces_.clear();
+				for ( const Rect& area : areas )
+				{
+					highlight_pieces_.push_back( { .x = area.x - highlight_rect_.x, .y = area.y - highlight_rect_.y, .width = area.width, .height = area.height } );
+				}
+			}
+
+			[[nodiscard]] std::vector<render::Box> pieceBoxes() const
+			{
+				std::vector<render::Box> boxes;
+				boxes.reserve( highlight_pieces_.size() );
+				for ( const Rect& piece : highlight_pieces_ )
+				{
+					boxes.push_back( { .x = piece.x, .y = piece.y, .width = piece.width, .height = piece.height } );
+				}
+				return boxes;
+			}
+
 			// With the compositor setting off, the highlight looks as on X11 without one: opaque lines, and for a fill a
 			// highlighter mark around the glyphs (or fine dots on a textured background) that leaves the glyphs themselves
 			// as the live screen pixels. The pixels it covers, as an X bitmap.
@@ -1421,7 +1483,7 @@ namespace lexiglance::platform
 				const int  w      = highlight_rect_.width;
 				const int  h      = highlight_rect_.height;
 				const int  stride = ( w + 7 ) / 8;
-				const auto shaped = render::highlightMask( w, h, look_ );
+				const auto shaped = render::highlightMask( w, h, pieceBoxes(), look_ );
 				if ( look_.shape != render::HighlightShape::Fill )
 				{
 					return shaped;
@@ -1762,7 +1824,7 @@ namespace lexiglance::platform
 					cairo_set_operator( cr, CAIRO_OPERATOR_CLEAR );
 					cairo_paint( cr );
 					cairo_set_operator( cr, CAIRO_OPERATOR_OVER );
-					render::drawHighlight( cr, highlight_rect_.width, highlight_rect_.height, look_, c );
+					render::drawHighlight( cr, pieceBoxes(), look_, c );
 					cairo_destroy( cr );
 				}
 				else
@@ -1820,6 +1882,8 @@ namespace lexiglance::platform
 			std::unique_ptr<ScreenReader> screen_;
 			LayeredCanvas                 popup_canvas_;
 			LayeredCanvas                 highlight_canvas_;
+			// The highlight's pieces, a line of text each, in the window's coordinates.
+			std::vector<Rect> highlight_pieces_;
 
 			bool popup_shown_ = false;
 			HWND source_      = nullptr;
@@ -1842,7 +1906,12 @@ namespace lexiglance::platform
 			Clock::time_point badge_until_;
 			std::string       badge_;
 
-			config::KeyChord      chord_;
+			config::KeyChord chord_;
+			// Held with the trigger, the sentence under the pointer is translated.
+			config::KeyGroup sentence_key_;
+			bool             sentence_held_ = false;
+			// The sentence key went down and the scan it asked for has not gone out yet.
+			bool                  sentence_pressed_ = false;
 			std::bitset<32>       down_;
 			bool                  trigger_active_ = false;
 			int                   wheel_          = 0;

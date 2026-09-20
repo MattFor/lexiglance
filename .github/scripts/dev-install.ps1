@@ -2,8 +2,9 @@
 # without going through the installer. Windows cannot overwrite a running program, so whatever is running is stopped
 # first and started again afterwards, exactly as the installer does.
 #   pwsh .github/scripts/dev-install.ps1 [-Preset release] [-Prefix <dir>] [-SkipBuild] [-NoRestart]
-# Without -Prefix it goes where the installer put Lexiglance (HKCU\Software\Lexiglance, else
-# %LOCALAPPDATA%\Programs\Lexiglance), which keeps the Start menu shortcut and the autostart entries pointing at it.
+# Without -Prefix it goes where Lexiglance is started from at login (the Run entry), else where the installer put it
+# (HKCU\Software\Lexiglance, else %LOCALAPPDATA%\Programs\Lexiglance), which keeps the Start menu shortcut and the
+# autostart entries pointing at the copy that actually runs.
 [CmdletBinding()]
 param(
     [string]$Preset = 'release',
@@ -24,6 +25,17 @@ function Invoke-Checked {
 
 Push-Location $repository
 try {
+    if (-not $Prefix) {
+        # The copy the login autostart starts: <prefix>\bin\lexiglanced.exe.
+        $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Lexiglance' -ErrorAction SilentlyContinue).Lexiglance
+        if ($run) {
+            $daemon = $run.Trim().Trim('"')
+            if ($daemon -like '*\bin\lexiglanced.exe') {
+                $Prefix = Split-Path (Split-Path $daemon -Parent) -Parent
+                Write-Host "the autostart runs $daemon"
+            }
+        }
+    }
     if (-not $Prefix) {
         $Prefix = (Get-ItemProperty 'HKCU:\Software\Lexiglance' -Name 'InstallDir' -ErrorAction SilentlyContinue).InstallDir
     }

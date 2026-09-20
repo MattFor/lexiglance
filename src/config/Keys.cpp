@@ -187,6 +187,17 @@ namespace lexiglance::config
 		return chord;
 	}
 
+	KeyGroup extraKey( std::string_view name, const KeyChord& chord )
+	{
+		auto group = name.empty() ? Result<KeyGroup>( KeyGroup{} ) : parseKey( name );
+		if ( !group )
+		{
+			return {};
+		}
+		const bool shared = std::ranges::any_of( *group, [&]( Key key ) { return std::ranges::any_of( chord, [&]( const KeyGroup& held ) { return std::ranges::contains( held, key ); } ); } );
+		return shared ? KeyGroup{} : std::move( *group );
+	}
+
 	std::string_view keyName( Key key ) noexcept
 	{
 		const auto index = static_cast<std::size_t>( key );

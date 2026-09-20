@@ -108,6 +108,85 @@ namespace lexiglance::lookup
 		return shown.headword( entry.expression, entry.reading );
 	}
 
+	std::vector<lang::RubySegment> Translator::readings( const std::shared_ptr<const DictionarySet>& dictionaries, std::string_view text, LookupOptions options )
+	{
+		std::vector<lang::RubySegment> out;
+		const auto                     plain = [&out]( std::string_view piece ) {
+			if ( !out.empty() && out.back().reading.empty() )
+			{
+				out.back().text.append( piece );
+			}
+			else
+			{
+				out.push_back( { .text = std::string( piece ), .reading = {} } );
+			}
+		};
+		options.selection = false;
+		for ( std::size_t at = 0; at < text.size(); )
+		{
+			const std::string_view rest  = text.substr( at );
+			const LookupResult     found = lookup( dictionaries, rest, options );
+			// The longest entry written the way the text is, with its pieces as far as they fit: the same word spelled in
+			// kana (いっしょに beside 一緒に) reads nothing here, and the longest match of all may belong to a dictionary
+			// the popup does not show.
+			std::vector<lang::RubySegment> pieces;
+			std::size_t                    matched = 0;
+			std::size_t                    fitted  = 0;
+			for ( const TermEntry& entry : found.terms )
+			{
+				if ( entry.matched_length < matched )
+				{
+					continue;
+				}
+				const std::string_view         written = utf8::prefix( rest, entry.matched_length );
+				std::vector<lang::RubySegment> theirs;
+				std::size_t                    covers = 0;
+				for ( const lang::RubySegment& segment : found.headword( entry ) )
+				{
+					if ( !written.substr( covers ).starts_with( segment.text ) )
+					{
+						break;
+					}
+					theirs.push_back( segment );
+					covers += segment.text.size();
+				}
+				if ( covers > 0 && ( entry.matched_length > matched || covers > fitted ) )
+				{
+					matched = entry.matched_length;
+					fitted  = covers;
+					pieces  = std::move( theirs );
+				}
+			}
+			if ( fitted == 0 )
+			{
+				std::size_t next = at;
+				( void )utf8::decode( text, next );
+				plain( text.substr( at, next - at ) );
+				at = next;
+				continue;
+			}
+			// An inflected ending, or anything else the entry does not cover, goes plain.
+			const std::string_view surface = utf8::prefix( rest, matched );
+			for ( const lang::RubySegment& segment : pieces )
+			{
+				if ( segment.reading.empty() )
+				{
+					plain( segment.text );
+				}
+				else
+				{
+					out.push_back( segment );
+				}
+			}
+			if ( fitted < surface.size() )
+			{
+				plain( surface.substr( fitted ) );
+			}
+			at += surface.size();
+		}
+		return out;
+	}
+
 	void keepFirstDictionaries( LookupResult& result, std::size_t count )
 	{
 		if ( count == 0 )

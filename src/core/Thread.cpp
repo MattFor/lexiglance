@@ -14,6 +14,9 @@
 #ifdef __APPLE__
 	#include <pthread/qos.h>
 #endif
+#ifdef __FreeBSD__
+	#include <pthread_np.h>
+#endif
 
 namespace lexiglance
 {
@@ -48,6 +51,15 @@ namespace lexiglance
 			const std::string owned( name.substr( 0, 63 ) );
 			( void )pthread_setname_np( owned.c_str() );
 #elif defined( __linux__ ) || defined( __FreeBSD__ )
+	#ifdef __linux__
+			const bool main_thread = ::gettid() == ::getpid();
+	#else
+			const bool main_thread = pthread_main_np() != 0;
+	#endif
+			if ( main_thread )
+			{
+				return;
+			}
 			// The kernel limits thread names to 15 characters.
 			std::array<char, 16> buffer{};
 			( void )name.copy( buffer.data(), buffer.size() - 1 );

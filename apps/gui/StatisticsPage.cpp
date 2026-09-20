@@ -7,15 +7,17 @@
 
 #include <QFrame>
 #include <QGridLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLocale>
 #include <QPushButton>
-#include <QScrollBar>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <vector>
 
 namespace lexiglance::gui
@@ -24,10 +26,7 @@ namespace lexiglance::gui
 	namespace
 	{
 
-		// The captions of the figures across the top, in the order show() fills them.
-		constexpr std::array<const char*, 8> captions{ "Words looked up", "With an entry", "Different words", "Days used", "Popups shown", "Pronunciations played", "Anki notes added", "Characters read" };
-
-		QFrame* tile( QLabel* value, const QString& caption )
+		QFrame* tile( QLabel* value, QLabel* label )
 		{
 			auto* frame = new QFrame();
 			frame->setObjectName( QStringLiteral( "tile" ) );
@@ -36,12 +35,32 @@ namespace lexiglance::gui
 			layout->setSpacing( 2 );
 			value->setObjectName( QStringLiteral( "tileValue" ) );
 			value->setTextInteractionFlags( Qt::TextSelectableByMouse );
-			auto* label = new QLabel( caption );
 			label->setObjectName( QStringLiteral( "tileCaption" ) );
 			label->setWordWrap( true );
 			layout->addWidget( value );
 			layout->addWidget( label );
 			return frame;
+		}
+
+		// One of a row of choices, shown as a rounded button that is filled while chosen.
+		QPushButton* pill( const QString& text, QButtonGroup* group, int id )
+		{
+			auto* button = new QPushButton( text );
+			button->setCheckable( true );
+			button->setProperty( "pill", true );
+			button->setCursor( Qt::PointingHandCursor );
+			group->addButton( button, id );
+			return button;
+		}
+
+		// A titled card around one of the lists.
+		QGroupBox* card( const QString& title, QWidget* body )
+		{
+			auto* box    = new QGroupBox( title );
+			auto* layout = new QVBoxLayout( box );
+			layout->addWidget( body );
+			layout->addStretch( 1 );
+			return box;
 		}
 
 		QLabel* heading( const QString& text )
@@ -57,38 +76,6 @@ namespace lexiglance::gui
 		QString number( std::int64_t value )
 		{
 			return QLocale().toString( static_cast<qlonglong>( value ) );
-		}
-
-		// One row of a chart: what it is, how often, and a bar as long as its share of the largest.
-		QString bar( const QString& label, std::int64_t count, std::int64_t largest, const QString& colour )
-		{
-			const int share = largest > 0 ? std::clamp( static_cast<int>( ( count * 100 ) / largest ), 2, 100 ) : 2;
-			return QStringLiteral( "<tr><td style=\"padding-right: 14px\">%1</td><td align=\"right\" style=\"padding-right: 10px\">%2</td>"
-			                       "<td width=\"55%\"><table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr><td width=\"%3%\" bgcolor=\"%4\">&nbsp;</td><td></td></tr></table></td></tr>" )
-			        .arg( label.toHtmlEscaped(), number( count ) )
-			        .arg( share )
-			        .arg( colour );
-		}
-
-		// A chart of the entries of `items`, each an object with a `key` and a count, largest first.
-		QString chart( const json::Value& items, const char* key, const QString& colour, int limit )
-		{
-			std::int64_t largest = 0;
-			for ( const json::Value& item : items.items() )
-			{
-				largest = std::max( largest, item["count"].asInt() );
-			}
-			QString rows;
-			int     shown = 0;
-			for ( const json::Value& item : items.items() )
-			{
-				if ( shown++ >= limit )
-				{
-					break;
-				}
-				rows += bar( qs( item[key].asString() ), item["count"].asInt(), largest, colour );
-			}
-			return rows.isEmpty() ? QString() : QStringLiteral( "<table width=\"100%\" cellspacing=\"2\">%1</table>" ).arg( rows );
 		}
 
 		// Languages are counted by code; they are shown by name.
@@ -120,53 +107,142 @@ namespace lexiglance::gui
 
 	StatisticsPage::StatisticsPage( Context context, QWidget* parent ) :
 		Page( std::move( context ), parent ),
-		detail_( new QTextBrowser() ),
+		range_( new QButtonGroup( this ) ),
+		figure_( new QComboBox() ),
+		style_( new QButtonGroup( this ) ),
+		chart_( new ActivityChart() ),
+		words_( new BarList() ),
+		languages_( new BarList() ),
+		translated_( new BarList() ),
+		sources_( new BarList() ),
 		counting_( new QCheckBox( QStringLiteral( "Count what I look up" ) ) ),
+		counting_translations_( new QCheckBox( QStringLiteral( "Count translations" ) ) ),
 		note_( new QLabel() ),
 		poll_( new QTimer( this ) )
 	{
-		auto* layout = new QVBoxLayout( this );
+		auto* scroll  = new QScrollArea();
+		auto* content = new QWidget();
+		auto* layout  = new QVBoxLayout( content );
 		layout->setContentsMargins( 28, 24, 28, 20 );
 		layout->setSpacing( 14 );
-		layout->addWidget( heading( QStringLiteral( "Statistics" ) ) );
+
+		// The title, and the stretch of time everything below is about.
+		auto* top = new QHBoxLayout();
+		top->addWidget( heading( QStringLiteral( "Statistics" ) ) );
+		top->addStretch( 1 );
+		for ( const auto& [days, name] : { std::pair{ 7, "7 days" }, std::pair{ 30, "30 days" }, std::pair{ 90, "90 days" }, std::pair{ 365, "A year" }, std::pair{ 0, "All time" } } )
+		{
+			top->addWidget( pill( QString::fromLatin1( name ), range_, days ) );
+		}
+		layout->addLayout( top );
 		note_->setWordWrap( true );
 		note_->setEnabled( false );
 		layout->addWidget( note_ );
 
-		// Two rows of four figures, the same tiles the overview uses.
+		// Three rows of four figures, the same tiles the overview uses.
 		auto* grid = new QGridLayout();
 		grid->setSpacing( 10 );
-		for ( std::size_t i = 0; i < figures_.size(); ++i )
+		for ( std::size_t i = 0; i < values_.size(); ++i )
 		{
-			figures_[i] = new QLabel( QStringLiteral( "–" ) );
-			grid->addWidget( tile( figures_[i], QString::fromLatin1( captions[i] ) ), static_cast<int>( i / 4 ), static_cast<int>( i % 4 ) );
+			values_[i]   = new QLabel( QStringLiteral( "–" ) );
+			captions_[i] = new QLabel();
+			grid->addWidget( tile( values_[i], captions_[i] ), static_cast<int>( i / 4 ), static_cast<int>( i % 4 ) );
 		}
 		layout->addLayout( grid );
 
-		detail_->setOpenLinks( false );
-		detail_->setFrameShape( QFrame::NoFrame );
-		layout->addWidget( detail_, 1 );
+		// One figure day by day; the pointer over a day shows all of that day's.
+		auto* activity        = new QGroupBox( QStringLiteral( "Activity" ) );
+		auto* activity_layout = new QVBoxLayout( activity );
+		auto* controls        = new QHBoxLayout();
+		for ( std::size_t i = 0; i < figure_count; ++i )
+		{
+			figure_->addItem( figureName( static_cast<Figure>( i ) ), static_cast<int>( i ) );
+		}
+		controls->addWidget( figure_ );
+		controls->addStretch( 1 );
+		auto* hint = new QLabel( QStringLiteral( "Point at a day to see all of it" ) );
+		hint->setEnabled( false );
+		controls->addWidget( hint );
+		controls->addSpacing( 12 );
+		controls->addWidget( pill( QStringLiteral( "Bars" ), style_, static_cast<int>( ActivityChart::Style::Bars ) ) );
+		controls->addWidget( pill( QStringLiteral( "Line" ), style_, static_cast<int>( ActivityChart::Style::Line ) ) );
+		activity_layout->addLayout( controls );
+		activity_layout->addWidget( chart_ );
+		layout->addWidget( activity );
 
-		auto* row = new QHBoxLayout();
-		counting_->setToolTip( QStringLiteral( "The tally is kept in this computer's state directory and is never sent anywhere. Turning this off stops counting; what was counted stays until it is forgotten." ) );
-		row->addWidget( counting_, 1 );
+		// What came back most, side by side.
+		auto* lists = new QGridLayout();
+		lists->setSpacing( 12 );
+		lists->addWidget( card( QStringLiteral( "Words you look up most" ), words_ ), 0, 0, 3, 1 );
+		lists->addWidget( card( QStringLiteral( "Languages" ), languages_ ), 0, 1 );
+		lists->addWidget( card( QStringLiteral( "Translated from" ), translated_ ), 1, 1 );
+		lists->addWidget( card( QStringLiteral( "How the text was read" ), sources_ ), 2, 1 );
+		lists->setColumnStretch( 0, 1 );
+		lists->setColumnStretch( 1, 1 );
+		layout->addLayout( lists );
+		layout->addStretch( 1 );
+
+		auto*         row  = new QHBoxLayout();
+		const QString kept = QStringLiteral( "The tally is kept in this computer's state directory and is never sent anywhere. Turning this off stops counting them; what was counted stays until it is forgotten." );
+		counting_->setToolTip( QStringLiteral( "Lookups, the words found, the popups shown, sounds played and Anki cards made. " ) + kept );
+		counting_translations_->setToolTip( QStringLiteral( "The sentences translated, their languages and how long the translations took. " ) + kept );
+		row->addWidget( counting_ );
+		row->addSpacing( 16 );
+		row->addWidget( counting_translations_ );
+		row->addStretch( 1 );
 		auto* forget = new QPushButton( QStringLiteral( "Forget everything..." ) );
 		row->addWidget( forget );
 		layout->addLayout( row );
 
+		scroll->setWidget( content );
+		scroll->setWidgetResizable( true );
+		scroll->setFrameShape( QFrame::NoFrame );
+		scroll->setHorizontalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
+		auto* outer = new QVBoxLayout( this );
+		outer->setContentsMargins( 0, 0, 0, 0 );
+		outer->addWidget( scroll );
+
+		// The choices of the last time.
+		const auto memory = applicationMemory();
+		if ( auto* button = range_->button( memory.value( QStringLiteral( "statistics/range" ), 30 ).toInt() ) )
+		{
+			button->setChecked( true );
+		}
+		figure_->setCurrentIndex( std::clamp( memory.value( QStringLiteral( "statistics/figure" ), 0 ).toInt(), 0, static_cast<int>( figure_count ) - 1 ) );
+		if ( auto* button = style_->button( memory.value( QStringLiteral( "statistics/style" ), 0 ).toInt() ) )
+		{
+			button->setChecked( true );
+		}
+
+		connect( range_, &QButtonGroup::idClicked, this, [this] {
+			remember();
+			show();
+		} );
+		connect( style_, &QButtonGroup::idClicked, this, [this] {
+			remember();
+			show();
+		} );
+		connect( figure_, &QComboBox::currentIndexChanged, this, [this] {
+			remember();
+			show();
+		} );
 		connect( counting_, &QCheckBox::toggled, this, [this]( bool on ) {
 			settings().config().statistics = on;
 			settings().commit();
 			update();
 		} );
+		connect( counting_translations_, &QCheckBox::toggled, this, [this]( bool on ) {
+			settings().config().statistics_translations = on;
+			settings().commit();
+			update();
+		} );
 		connect( forget, &QPushButton::clicked, this, [this] {
-			if ( !confirm( this, QStringLiteral( "Forget the statistics" ), QStringLiteral( "Everything counted so far is forgotten: the words, the languages, the days. The dictionaries and settings are untouched." ), QStringLiteral( "Forget" ) ) )
+			if ( !confirm( this, QStringLiteral( "Forget the statistics" ), QStringLiteral( "Everything counted so far is forgotten: the words, the languages, the translations, the days. The dictionaries and settings are untouched." ), QStringLiteral( "Forget" ) ) )
 			{
 				return;
 			}
 			client().call( "stats.reset", "{}", [this]( const json::Value*, const QString& ) { update(); } );
 		} );
-
 		// While the page is open the figures follow along, so a lookup made next to this window shows up here.
 		poll_->setInterval( 5000 );
 		connect( poll_, &QTimer::timeout, this, [this] {
@@ -176,6 +252,7 @@ namespace lexiglance::gui
 			}
 		} );
 		poll_->start();
+		show();
 	}
 
 	void StatisticsPage::activated()
@@ -186,7 +263,17 @@ namespace lexiglance::gui
 	void StatisticsPage::refresh()
 	{
 		const QSignalBlocker blocker( counting_ );
+		const QSignalBlocker translations_blocker( counting_translations_ );
 		counting_->setChecked( settings().config().statistics );
+		counting_translations_->setChecked( settings().config().statistics_translations );
+	}
+
+	void StatisticsPage::remember() const
+	{
+		auto memory = applicationMemory();
+		memory.setValue( QStringLiteral( "statistics/range" ), range_->checkedId() );
+		memory.setValue( QStringLiteral( "statistics/figure" ), figure_->currentIndex() );
+		memory.setValue( QStringLiteral( "statistics/style" ), style_->checkedId() );
 	}
 
 	void StatisticsPage::update()
@@ -195,122 +282,178 @@ namespace lexiglance::gui
 			if ( stats == nullptr )
 			{
 				// A daemon from before this page knows no such request; it counts nothing until it is restarted.
-				const bool older = error.contains( QStringLiteral( "unknown method" ) );
-				if ( older )
+				if ( error.contains( QStringLiteral( "unknown method" ) ) )
 				{
 					note_->setText( QStringLiteral( "The running daemon is older than this window and counts nothing yet. Restart Lexiglance (Overview → Restart) to start the tally." ) );
 				}
-				else if ( error.isEmpty() )
-				{
-					note_->setText( QStringLiteral( "Lexiglance is not running, so there is nothing to count with." ) );
-				}
 				else
 				{
-					note_->setText( error );
+					note_->setText( error.isEmpty() ? QStringLiteral( "Lexiglance is not running, so there is nothing to count with." ) : error );
 				}
 				return;
 			}
-			show( *stats );
+			read( *stats );
+			show();
 		} );
 	}
 
-	void StatisticsPage::show( const json::Value& stats )
+	void StatisticsPage::read( const json::Value& stats )
 	{
-		const auto                        lookups = stats["lookups"].asInt();
-		const auto                        found   = stats["found"].asInt();
-		const std::array<std::int64_t, 8> values{ lookups, found, stats["distinct_words"].asInt(), stats["days_used"].asInt(), stats["popups"].asInt(), stats["audio"].asInt(), stats["anki"].asInt(), stats["characters"].asInt() };
-		for ( std::size_t i = 0; i < figures_.size(); ++i )
+		Tally tally;
+		tally.enabled              = stats["enabled"].asBool();
+		tally.translations_enabled = stats["translations_enabled"].isBool() ? stats["translations_enabled"].asBool() : tally.enabled;
+		tally.first_day            = QDate::fromString( qs( stats["first_day"].asString() ), Qt::ISODate );
+		tally.sessions             = stats["sessions"].asInt();
+		tally.distinct_words       = stats["distinct_words"].asInt();
+		tally.lookup_us            = stats["average_lookup_us"].asDouble();
+		tally.translation_ms       = stats["average_translation_ms"].asDouble();
+		for ( std::size_t i = 0; i < figure_count; ++i )
 		{
-			figures_[i]->setText( number( values[i] ) );
+			tally.totals[i] = stats[figureKey( static_cast<Figure>( i ) )].asInt();
 		}
+		for ( const json::Value& item : stats["days"].items() )
+		{
+			const QDate day = QDate::fromString( qs( item["day"].asString() ), Qt::ISODate );
+			if ( !day.isValid() )
+			{
+				continue;
+			}
+			auto& values = tally.days[day];
+			for ( std::size_t i = 0; i < figure_count; ++i )
+			{
+				values[i] = item[figureKey( static_cast<Figure>( i ) )].asInt();
+			}
+			// A daemon from before 1.3.0 counts only the lookups of a day.
+			if ( item.find( "lookups" ) == nullptr )
+			{
+				values[static_cast<std::size_t>( Figure::Lookups )] = item["count"].asInt();
+			}
+		}
+		const auto rows = [&]( const char* list, const char* key, const std::function<QString( const QString& )>& name ) {
+			std::vector<BarList::Row> out;
+			for ( const json::Value& item : stats[list].items() )
+			{
+				out.push_back( { .label = name( qs( item[key].asString() ) ), .count = item["count"].asInt() } );
+			}
+			return out;
+		};
+		tally.words      = rows( "words", "word", []( const QString& word ) { return word; } );
+		tally.languages  = rows( "languages", "language", languageName );
+		tally.translated = rows( "translated_languages", "language", languageName );
+		tally.sources    = rows( "sources", "source", sourceName );
+		tally_           = std::move( tally );
+		loaded_          = true;
+	}
 
-		const QString since = qs( stats["first_day"].asString() );
-		QString       summary;
-		if ( lookups > 0 )
+	std::vector<Period> StatisticsPage::periods() const
+	{
+		const QDate today = QDate::currentDate();
+		const int   range = range_->checkedId();
+		QDate       first = range > 0 ? today.addDays( 1 - range ) : tally_.first_day;
+		if ( range <= 0 && !tally_.days.empty() && ( !first.isValid() || tally_.days.begin()->first < first ) )
 		{
-			summary = QStringLiteral( "Since %1: %2 words looked up over %3, %4 of them found (%5%), in %6 µs each." )
-			                  .arg( since.isEmpty() ? QStringLiteral( "the first lookup" ) : since, number( lookups ) )
-			                  .arg( stats["days_used"].asInt() == 1 ? QStringLiteral( "one day" ) : QStringLiteral( "%1 days" ).arg( stats["days_used"].asInt() ) )
-			                  .arg( number( found ) )
-			                  .arg( lookups > 0 ? ( found * 100 ) / lookups : 0 )
-			                  .arg( stats["average_lookup_us"].asDouble(), 0, 'f', 1 );
+			first = tally_.days.begin()->first;
 		}
-		else
+		if ( !first.isValid() || first > today )
+		{
+			first = today;
+		}
+		// Long stretches are shown by the week, ending today, so every bar stays wide enough to point at.
+		const auto          length = first.daysTo( today ) + 1;
+		const int           width  = length > 120 ? 7 : 1;
+		std::vector<Period> out;
+		for ( QDate end = today; end >= first; end = end.addDays( -width ) )
+		{
+			Period period{ .first = std::max( first, end.addDays( 1 - width ) ), .last = end };
+			for ( auto it = tally_.days.lower_bound( period.first ); it != tally_.days.end() && it->first <= period.last; ++it )
+			{
+				for ( std::size_t i = 0; i < figure_count; ++i )
+				{
+					period.values[i] += it->second[i];
+				}
+			}
+			out.push_back( period );
+		}
+		std::ranges::reverse( out );
+		return out;
+	}
+
+	void StatisticsPage::show()
+	{
+		const int  range    = range_->checkedId();
+		const bool all_time = range <= 0;
+		const auto chosen   = periods();
+
+		// The figures of the range: summed from its days, or the totals kept since counting began.
+		std::array<std::int64_t, figure_count> sums{};
+		std::int64_t                           active = 0;
+		for ( const Period& period : chosen )
+		{
+			for ( std::size_t i = 0; i < figure_count; ++i )
+			{
+				sums[i] += period.values[i];
+			}
+		}
+		for ( const auto& [day, values] : tally_.days )
+		{
+			const bool inside = all_time || day > QDate::currentDate().addDays( -range );
+			active += inside && std::ranges::any_of( values, []( std::int64_t value ) { return value > 0; } ) ? 1 : 0;
+		}
+		if ( all_time )
+		{
+			sums = tally_.totals;
+		}
+		const QString ever = all_time ? QString() : QStringLiteral( " (all time)" );
+		const auto    set  = [&]( std::size_t tile, const QString& value, const QString& caption ) {
+			values_[tile]->setText( loaded_ ? value : QStringLiteral( "–" ) );
+			captions_[tile]->setText( caption );
+		};
+		const auto sum = [&]( Figure figure ) { return number( sums[static_cast<std::size_t>( figure )] ); };
+		set( 0, sum( Figure::Lookups ), QStringLiteral( "Words looked up" ) );
+		set( 1, sum( Figure::Found ), QStringLiteral( "With an entry" ) );
+		set( 2, sum( Figure::Characters ), QStringLiteral( "Characters read" ) );
+		set( 3, number( active ), QStringLiteral( "Days used" ) );
+		set( 4, sum( Figure::Popups ), QStringLiteral( "Popups shown" ) );
+		set( 5, sum( Figure::Audio ), QStringLiteral( "Pronunciations played" ) );
+		set( 6, sum( Figure::Anki ), QStringLiteral( "Anki notes added" ) );
+		set( 7, number( tally_.distinct_words ), QStringLiteral( "Different words" ) + ever );
+		set( 8, sum( Figure::Translations ), QStringLiteral( "Translations" ) );
+		set( 9, sum( Figure::TranslatedCharacters ), QStringLiteral( "Characters translated" ) );
+		set( 10, tally_.translation_ms > 0 ? QStringLiteral( "%1 ms" ).arg( tally_.translation_ms, 0, 'f', 0 ) : QStringLiteral( "–" ), QStringLiteral( "Per translation" ) + ever );
+		set( 11, tally_.lookup_us > 0 ? QStringLiteral( "%1 µs" ).arg( tally_.lookup_us, 0, 'f', 0 ) : QStringLiteral( "–" ), QStringLiteral( "Per lookup" ) + ever );
+
+		QString summary;
+		if ( !loaded_ )
+		{
+			summary = QStringLiteral( "Asking Lexiglance for its tally..." );
+		}
+		else if ( tally_.totals[static_cast<std::size_t>( Figure::Lookups )] == 0 && tally_.totals[static_cast<std::size_t>( Figure::Translations )] == 0 )
 		{
 			summary = QStringLiteral( "Nothing has been looked up yet. Hold the trigger over a word and this page fills itself." );
 		}
-		if ( !stats["enabled"].asBool() )
+		else
+		{
+			summary = QStringLiteral( "Counting since %1, over %2." ).arg( tally_.first_day.isValid() ? QLocale().toString( tally_.first_day, QLocale::LongFormat ) : QStringLiteral( "the first lookup" ), tally_.sessions == 1 ? QStringLiteral( "one session" ) : QStringLiteral( "%1 sessions" ).arg( number( tally_.sessions ) ) );
+		}
+		if ( loaded_ && !tally_.enabled && !tally_.translations_enabled )
 		{
 			summary += QStringLiteral( " Counting is off, so these figures stand still." );
 		}
+		else if ( loaded_ && !tally_.enabled )
+		{
+			summary += QStringLiteral( " Lookups are not counted, so their figures stand still." );
+		}
+		else if ( loaded_ && !tally_.translations_enabled )
+		{
+			summary += QStringLiteral( " Translations are not counted, so their figures stand still." );
+		}
 		note_->setText( summary );
 
-		const QString muted = palette().color( QPalette::PlaceholderText ).name();
-		QString       html;
-		const auto    section = [&]( const QString& title, const QString& body, const QString& empty ) {
-			html += QStringLiteral( "<h3>%1</h3>" ).arg( title );
-			html += body.isEmpty() ? QStringLiteral( "<p style=\"color: %1\">%2</p>" ).arg( muted, empty ) : body;
-		};
-
-		section( QStringLiteral( "Words you look up most" ), chart( stats["words"], "word", QStringLiteral( "#5b8def" ), 20 ), QStringLiteral( "No word has been found twice yet." ) );
-
-		{
-			std::int64_t largest = 0;
-			for ( const json::Value& item : stats["languages"].items() )
-			{
-				largest = std::max( largest, item["count"].asInt() );
-			}
-			QString rows;
-			for ( const json::Value& item : stats["languages"].items() )
-			{
-				rows += bar( languageName( qs( item["language"].asString() ) ), item["count"].asInt(), largest, QStringLiteral( "#3fa45b" ) );
-			}
-			section( QStringLiteral( "Languages" ), rows.isEmpty() ? QString() : QStringLiteral( "<table width=\"100%\" cellspacing=\"2\">%1</table>" ).arg( rows ), QStringLiteral( "Nothing has been found in any language yet." ) );
-		}
-
-		// Where the text came from, with the daemon's own names put into words.
-		{
-			std::int64_t largest = 0;
-			for ( const json::Value& item : stats["sources"].items() )
-			{
-				largest = std::max( largest, item["count"].asInt() );
-			}
-			QString rows;
-			for ( const json::Value& item : stats["sources"].items() )
-			{
-				rows += bar( sourceName( qs( item["source"].asString() ) ), item["count"].asInt(), largest, QStringLiteral( "#d19a1f" ) );
-			}
-			section( QStringLiteral( "How the text was read" ), rows.isEmpty() ? QString() : QStringLiteral( "<table width=\"100%\" cellspacing=\"2\">%1</table>" ).arg( rows ), QStringLiteral( "Nothing has been read from the screen yet." ) );
-		}
-
-		// The last two weeks, oldest first, so a run of days reads left to right.
-		{
-			std::vector<std::pair<QString, std::int64_t>> days;
-			for ( const json::Value& item : stats["days"].items() )
-			{
-				days.emplace_back( qs( item["day"].asString() ), item["count"].asInt() );
-			}
-			if ( days.size() > 14 )
-			{
-				days.erase( days.begin(), days.end() - 14 );
-			}
-			std::int64_t largest = 0;
-			for ( const auto& [day, count] : days )
-			{
-				largest = std::max( largest, count );
-			}
-			QString rows;
-			for ( const auto& [day, count] : days )
-			{
-				rows += bar( day, count, largest, QStringLiteral( "#9b7fe0" ) );
-			}
-			section( QStringLiteral( "The last days" ), rows, QStringLiteral( "No day has a lookup on it yet." ) );
-		}
-
-		html += QStringLiteral( "<br><p style=\"color: %1\">Kept on this computer only, in the state directory beside the logs (About → Files).</p>" ).arg( muted );
-		const int scroll = detail_->verticalScrollBar() != nullptr ? detail_->verticalScrollBar()->value() : 0;
-		detail_->setHtml( html );
-		detail_->verticalScrollBar()->setValue( scroll );
+		chart_->setPeriods( chosen, static_cast<Figure>( std::max( 0, figure_->currentIndex() ) ), static_cast<ActivityChart::Style>( std::max( 0, style_->checkedId() ) ) );
+		words_->setRows( std::vector<BarList::Row>( tally_.words.begin(), tally_.words.begin() + static_cast<std::ptrdiff_t>( std::min<std::size_t>( tally_.words.size(), 15 ) ) ), QColor( 0x5b, 0x8d, 0xef ), QStringLiteral( "No word has been found yet." ) );
+		languages_->setRows( tally_.languages, QColor( 0x3f, 0xa4, 0x5b ), QStringLiteral( "Nothing has been found in any language yet." ) );
+		translated_->setRows( tally_.translated, QColor( 0xd0, 0x6a, 0x9c ), QStringLiteral( "Nothing has been translated yet." ) );
+		sources_->setRows( tally_.sources, QColor( 0xd1, 0x9a, 0x1f ), QStringLiteral( "Nothing has been read from the screen yet." ) );
 	}
 
 } // namespace lexiglance::gui

@@ -12,6 +12,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QStackedWidget>
+#include <QTextBrowser>
 #include <QWidget>
 
 #include <cstdint>
@@ -24,10 +25,10 @@
 namespace lexiglance::gui
 {
 
-	// First-run (and post-update) setup: welcome, languages, then dictionaries and OCR downloaded without further clicks.
-	// For the first five seconds Escape and clicks beside the card do nothing, so the welcome is not dismissed by
-	// accident. First-run setup cannot be skipped at all. Dev builds can open it again from Help; that path reinstalls
-	// dictionaries and OCR.
+	// First-run (and post-update) setup: welcome, languages, then dictionaries and OCR downloaded without further clicks
+	// (the keys explained meanwhile), and a sentence to try the popup on. For the first five seconds Escape and clicks
+	// beside the card do nothing, so the welcome is not dismissed by accident. First-run setup cannot be skipped at all.
+	// Dev builds can open it again from Help; that path reinstalls dictionaries and OCR.
 	class SetupWizard final : public QWidget
 	{
 	public:
@@ -73,6 +74,13 @@ namespace lexiglance::gui
 		[[nodiscard]] bool                               locked() const;
 		[[nodiscard]] bool                               dismissible() const;
 		[[nodiscard]] std::vector<const lang::Language*> selectedLanguages() const;
+		// The translation option's label: how much it adds for the languages chosen.
+		void updateTranslationBox();
+		// The keys as they are set, for the tips while downloading and the sentence to try.
+		void updateKeys();
+		// The sentence to try the popup on, in the first language chosen, and the box as tall as it.
+		void updatePractice();
+		void fitPractice();
 
 		Context                  context_;
 		std::function<void()>    finished_;
@@ -90,7 +98,12 @@ namespace lexiglance::gui
 		QProgressBar*            dict_bar_;
 		QLabel*                  ocr_label_;
 		QProgressBar*            ocr_bar_;
+		QCheckBox*               translation_box_;
+		QLabel*                  translation_note_;
+		QLabel*                  tips_;
 		QLabel*                  done_blurb_;
+		QTextBrowser*            practice_;
+		QLabel*                  practice_status_;
 		QPushButton*             done_;
 		std::vector<QCheckBox*>  language_boxes_;
 		std::vector<std::string> language_codes_;
@@ -98,7 +111,9 @@ namespace lexiglance::gui
 		bool                     installing_   = false;
 		bool                     reinstall_    = false;
 		bool                     required_     = false;
-		QString                  redist_;
+		// A word was found on the sentence to try.
+		bool    tried_ = false;
+		QString redist_;
 	};
 
 } // namespace lexiglance::gui

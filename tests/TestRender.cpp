@@ -159,3 +159,44 @@ namespace
 	} );
 
 } // namespace
+
+namespace
+{
+
+	namespace lg   = lexiglance;
+	namespace test = lexiglance::test;
+
+	const test::Registrar popup_translation( "popup with a translation", [] {
+		lg::render::PopupRenderer      renderer;
+		const lg::lookup::LookupResult nothing;
+		// A sentence no dictionary has a word of still gets a popup for its translation.
+		test::expect( renderer.render( nothing ) == nullptr );
+		const lg::render::Translation waiting{ .source = "Я читаю книгу.", .text = {}, .problem = {} };
+		const auto                    first = renderer.render( nothing, {}, 0, &waiting );
+		if ( !test::expect( first != nullptr ) )
+		{
+			return;
+		}
+		// Not an entry: middle-click finds no entry there to play, a click copies the text.
+		test::expect( !first->entryAt( 5 ).has_value() );
+		test::expect( first->regionAt( 5 ) != nullptr && first->regionAt( 5 )->text == "Я читаю книгу." );
+
+		const lg::render::Translation done{ .source = "Я читаю книгу.", .text = "I am reading a book.", .problem = {} };
+		const auto                    second = renderer.render( nothing, {}, 0, &done );
+		test::expect( second != nullptr && second->regionAt( 5 ) != nullptr && second->regionAt( 5 )->text == "I am reading a book." );
+	} );
+
+	const test::Registrar popup_regions( "popup regions count entries only", [] {
+		const std::vector<lg::render::PopupImage::Region> regions{
+			{ .top = 0, .bottom = 20, .text = "translation", .entry = false },
+			{ .top = 20, .bottom = 40, .text = "first", .entry = true },
+			{ .top = 40, .bottom = 60, .text = "second", .entry = true },
+		};
+		const lg::render::PopupImage image( cairo_image_surface_create( CAIRO_FORMAT_ARGB32, 1, 1 ), 100, 60, regions );
+		test::expect( !image.entryAt( 10 ).has_value() );
+		test::expectEqual( image.entryAt( 30 ).value_or( 99 ), std::size_t{ 0 } );
+		test::expectEqual( image.entryAt( 50 ).value_or( 99 ), std::size_t{ 1 } );
+		test::expectEqual( image.regionAt( 10 )->text, std::string( "translation" ) );
+	} );
+
+} // namespace

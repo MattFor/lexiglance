@@ -1,6 +1,13 @@
 {
     "code": "ru",
     "name": "Russian",
+    "distinctive_letters": "ыэъёЫЭЪЁ",
+    "translation": {
+        "model": "Xenova/opus-mt-ru-en",
+        "revision": "afe8c6c738ec81b6d033fd8f44f9678a639a7c67",
+        "size": 117766786,
+        "full_size": 442803920
+    },
     "dictionaries": [
         {
             "name": "Wiktionary Russian-English",

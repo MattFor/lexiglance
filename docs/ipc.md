@@ -1,7 +1,9 @@
 # Daemon protocol
 
-`lexiglanced` listens on `$XDG_RUNTIME_DIR/lexiglance/daemon.sock` (a Unix domain socket, owner only). Messages are
-single-line JSON objects.
+`lexiglanced` listens on `$XDG_RUNTIME_DIR/lexiglance/daemon.sock` (a Unix domain socket, owner only); a runtime
+directory so deep that the path would not fit in a socket address moves it to `/tmp/lexiglance-<uid>-<hash>/daemon.sock`.
+On Windows it listens on the named pipe `\\.\pipe\lexiglance-<username>` instead. Messages are single-line JSON
+objects.
 
 One daemon runs per user: it holds an exclusive lock on `$XDG_RUNTIME_DIR/lexiglance/daemon.lock`, which records its
 pid. A second `lexiglanced` exits; `lexiglanced --replace` takes over instead: it asks the running daemon to shut down,
@@ -30,6 +32,8 @@ seconds.
 | `dictionaries.remove`         | `{title}`                                                    |                                                                                                                                                                                     |
 | `dictionaries.reload`         |                                                              |                                                                                                                                                                                     |
 | `lookup`                      | `{text, markup?: "html" \| "plain" \| "pango", max_length?}` | terms, kanji, timing                                                                                                                                                                |
+| `translate`                   | `{text, language?}`                                          | `{language, translation}`: `text` in English, by the model of `language` or of the language it is written in                                                                        |
+| `translation.reload`          |                                                              | the translation models are loaded afresh when next needed (after a download)                                                                                                        |
 | `popup.show` / `popup.hide`   | `{text}` /                                                   | shows a popup at the pointer                                                                                                                                                        |
 | `popup.preview`               | `{text, config?}`                                            | `{png (base64), width, height, scale}`                                                                                                                                              |
 | `highlight.preview`           | `{config?}`                                                  | `{png (base64), width, height, scale}`: the highlight over sample text, light and dark                                                                                              |
@@ -39,7 +43,7 @@ seconds.
 | `audio.play`                  | `{expression, reading}`                                      | plays the term's pronunciation                                                                                                                                                      |
 | `anki.add`                    | `{text, entry?, sentence?}`                                  | `{note}`: looks `text` up and adds that entry to Anki                                                                                                                               |
 | `capture.reset`               |                                                              | rebuilds the text capture (after installing an OCR model)                                                                                                                           |
-| `stats`                       |                                                              | the tally kept between runs: `{enabled, first_day, days_used, sessions, lookups, found, characters, popups, audio, anki, distinct_words, average_lookup_us, words: [{word, count}], languages: [{language, count}], sources: [{source, count}], days: [{day, count}]}` |
+| `stats`                       |                                                              | the tally kept between runs: `{enabled, translations_enabled, first_day, days_used, sessions, lookups, found, characters, popups, audio, anki, translations, translated_characters, distinct_words, average_lookup_us, average_translation_ms, words: [{word, count}], languages: [{language, count}], translated_languages: [{language, count}], sources: [{source, count}], days: [{day, count, lookups, found, characters, popups, audio, anki, translations, translated_characters}]}` |
 | `stats.reset`                 |                                                              | forgets everything counted so far                                                                                                                                                   |
 | `shutdown`                    |                                                              |                                                                                                                                                                                     |
 
@@ -48,4 +52,5 @@ seconds.
 `config.changed`, `status.changed`, `dictionaries.changed`, `import.started`, `import.progress`,
 `import.finished`, `keys.recorded`, `trigger.changed` (`{held}`: the trigger chord was pressed or let go) and
 `capture.result` (`{summary, where, found, entries}`: what the latest lookup on screen read, a few times a second at
-most).
+most) and `health.progress` (`{checking, done, total}`: the part of the health check being worked through, sent as
+each begins).

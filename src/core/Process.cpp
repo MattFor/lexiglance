@@ -1,8 +1,10 @@
 #include <lexiglance/core/Process.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <charconv>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -22,6 +24,7 @@
 	#include <fcntl.h>
 	#include <sys/file.h>
 	#include <sys/stat.h>
+	#include <sys/wait.h>
 	#include <unistd.h>
 #endif
 
@@ -449,10 +452,20 @@ namespace lexiglance::process
 		{
 			comm.pop_back();
 		}
-		// The kernel keeps at most 15 characters of the name.
+		// The kernel keeps at most 15 characters of the name. Builds before 1.3.0 renamed their main thread, and so the
+		// process ("daemon", "settings"): their executable tells them apart then (one replaced since has " (deleted)").
 		if ( comm != name.substr( 0, 15 ) )
 		{
-			return false;
+			std::error_code ec;
+			std::string     program = fs::read_symlink( dir / "exe", ec ).filename().string();
+			if ( constexpr std::string_view deleted = " (deleted)"; program.ends_with( deleted ) )
+			{
+				program.resize( program.size() - deleted.size() );
+			}
+			if ( ec || program != name )
+			{
+				return false;
+			}
 		}
 		const auto fields = statFields( pid );
 		return !fields.empty() && fields.front() != "Z" && fields.front() != "X";
@@ -546,5 +559,225 @@ namespace lexiglance::process
 	}
 
 #endif
+
+#ifdef _WIN32
+	namespace
+	{
+
+		// One command line, each argument quoted as CommandLineToArgvW reads it back.
+		std::wstring commandLine( const fs::path& program, std::span<const std::string> arguments )
+		{
+			const auto quoted = []( const std::wstring& argument ) {
+				std::wstring out         = L"\"";
+				std::size_t  backslashes = 0;
+				for ( const wchar_t c : argument )
+				{
+					if ( c == L'\\' )
+					{
+						++backslashes;
+						continue;
+					}
+					out.append( c == L'"' ? ( backslashes * 2 ) + 1 : backslashes, L'\\' );
+					backslashes = 0;
+					out.push_back( c );
+				}
+				out.append( backslashes * 2, L'\\' );
+				out.push_back( L'"' );
+				return out;
+			};
+			std::wstring line = quoted( program.wstring() );
+			for ( const std::string& argument : arguments )
+			{
+				line.append( L" " ).append( quoted( fs::path( std::u8string( argument.begin(), argument.end() ) ).wstring() ) );
+			}
+			return line;
+		}
+
+	} // namespace
+
+	bool startDetached( const fs::path& program, std::span<const std::string> arguments )
+	{
+		std::wstring        line = commandLine( program, arguments );
+		STARTUPINFOW        startup{ .cb = sizeof( STARTUPINFOW ) };
+		PROCESS_INFORMATION started{};
+		if ( CreateProcessW( program.c_str(), line.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &startup, &started ) == FALSE )
+		{
+			return false;
+		}
+		CloseHandle( started.hThread );
+		CloseHandle( started.hProcess );
+		return true;
+	}
+
+	fs::path findProgram( std::string_view name )
+	{
+		const std::wstring wide = fs::path( std::u8string( name.begin(), name.end() ) ).wstring();
+		std::wstring       found( MAX_PATH, L'\0' );
+		const DWORD        length = SearchPathW( nullptr, wide.c_str(), L".exe", static_cast<DWORD>( found.size() ), found.data(), nullptr );
+		if ( length == 0 || length >= found.size() )
+		{
+			return {};
+		}
+		found.resize( length );
+		return found;
+	}
+
+	int run( const fs::path& program, std::span<const std::string> arguments, bool quiet )
+	{
+		std::wstring        line = commandLine( program, arguments );
+		STARTUPINFOW        startup{ .cb = sizeof( STARTUPINFOW ) };
+		PROCESS_INFORMATION started{};
+		if ( CreateProcessW( program.c_str(), line.data(), nullptr, nullptr, FALSE, quiet ? CREATE_NO_WINDOW : 0, nullptr, nullptr, &startup, &started ) == FALSE )
+		{
+			return -1;
+		}
+		CloseHandle( started.hThread );
+		const Handle process( started.hProcess );
+		DWORD        code = 0;
+		if ( WaitForSingleObject( process.get(), INFINITE ) != WAIT_OBJECT_0 || GetExitCodeProcess( process.get(), &code ) == FALSE )
+		{
+			return -1;
+		}
+		return static_cast<int>( code );
+	}
+#else
+	namespace
+	{
+
+		// argv for exec: pointers into `owned`, which has to outlive it.
+		std::vector<char*> argumentVector( const std::string& path, std::vector<std::string>& owned )
+		{
+			std::vector<char*> argv{ const_cast<char*>( path.c_str() ) };
+			for ( std::string& argument : owned )
+			{
+				argv.push_back( argument.data() );
+			}
+			argv.push_back( nullptr );
+			return argv;
+		}
+
+		void discardOutput() noexcept
+		{
+			const int null = ::open( "/dev/null", O_RDWR ); // NOLINT(cppcoreguidelines-pro-type-vararg): open(2) is variadic
+			if ( null >= 0 )
+			{
+				::dup2( null, 0 );
+				::dup2( null, 1 );
+				::dup2( null, 2 );
+			}
+		}
+
+	} // namespace
+
+	fs::path findProgram( std::string_view name )
+	{
+		const char*      path        = std::getenv( "PATH" );
+		std::string_view directories = path != nullptr ? path : "/usr/local/bin:/usr/bin:/bin";
+		while ( !directories.empty() )
+		{
+			const auto     colon     = directories.find( ':' );
+			const fs::path directory = directories.substr( 0, colon );
+			directories              = colon == std::string_view::npos ? std::string_view() : directories.substr( colon + 1 );
+			const fs::path candidate = directory / name;
+			if ( !directory.empty() && ::access( candidate.c_str(), X_OK ) == 0 )
+			{
+				if ( std::error_code ec; fs::is_regular_file( candidate, ec ) )
+				{
+					return candidate;
+				}
+			}
+		}
+		return {};
+	}
+
+	int run( const fs::path& program, std::span<const std::string> arguments, bool quiet )
+	{
+		// Everything the child needs is made before fork: only async-signal-safe calls come between it and exec.
+		const std::string        path = program.string();
+		std::vector<std::string> owned( arguments.begin(), arguments.end() );
+		std::vector<char*>       argv  = argumentVector( path, owned );
+		const pid_t              child = ::fork();
+		if ( child < 0 )
+		{
+			return -1;
+		}
+		if ( child == 0 )
+		{
+			if ( quiet )
+			{
+				discardOutput();
+			}
+			::execv( argv[0], argv.data() );
+			::_exit( 127 );
+		}
+		int status = 0;
+		while ( ::waitpid( child, &status, 0 ) < 0 )
+		{
+			if ( errno != EINTR )
+			{
+				return -1;
+			}
+		}
+		return WIFEXITED( status ) ? WEXITSTATUS( status ) : -1;
+	}
+
+	bool startDetached( const fs::path& program, std::span<const std::string> arguments )
+	{
+		// Everything the child needs is made before fork: only async-signal-safe calls come between it and exec.
+		const std::string        path = program.string();
+		std::vector<std::string> owned( arguments.begin(), arguments.end() );
+		std::vector<char*>       argv = argumentVector( path, owned );
+		// Forked twice: the grandchild belongs to init, so it is reaped by it and not left a zombie here.
+		const pid_t child = ::fork();
+		if ( child < 0 )
+		{
+			return false;
+		}
+		if ( child == 0 )
+		{
+			::setsid();
+			const pid_t grandchild = ::fork();
+			if ( grandchild == 0 )
+			{
+				discardOutput();
+				::execv( argv[0], argv.data() );
+				::_exit( 127 );
+			}
+			::_exit( grandchild < 0 ? 1 : 0 );
+		}
+		int status = 0;
+		while ( ::waitpid( child, &status, 0 ) < 0 && errno == EINTR )
+		{
+		}
+		return WIFEXITED( status ) && WEXITSTATUS( status ) == 0 && ::access( path.c_str(), X_OK ) == 0;
+	}
+#endif
+
+	fs::path sibling( std::string_view name )
+	{
+#ifdef _WIN32
+		const std::string file = std::string( name ) + ".exe";
+#else
+		const std::string file( name );
+#endif
+		const fs::path here = executable().parent_path();
+		std::string    folder( name.starts_with( "lexiglance" ) ? name.substr( 10 ) : name );
+		if ( folder.empty() )
+		{
+			folder = "gui";
+		}
+		else if ( folder == "d" )
+		{
+			folder = "daemon";
+		}
+		for ( const fs::path& candidate : { here / file, here.parent_path() / folder / file } )
+		{
+			if ( std::error_code ec; fs::is_regular_file( candidate, ec ) )
+			{
+				return candidate;
+			}
+		}
+		return {};
+	}
 
 } // namespace lexiglance::process

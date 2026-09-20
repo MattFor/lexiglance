@@ -119,6 +119,11 @@ namespace lexiglance::paths
 		return dataDir() / "ocr";
 	}
 
+	fs::path translationDir()
+	{
+		return dataDir() / "translation";
+	}
+
 	std::string ipcEndpoint()
 	{
 #ifdef _WIN32

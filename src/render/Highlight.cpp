@@ -174,7 +174,26 @@ namespace lexiglance::render
 		cairo_restore( cr );
 	}
 
+	void drawHighlight( cairo_t* cr, std::span<const Box> pieces, const HighlightLook& look, const Color& color )
+	{
+		for ( const Box& piece : pieces )
+		{
+			cairo_save( cr );
+			cairo_rectangle( cr, piece.x, piece.y, piece.width, piece.height );
+			cairo_clip( cr );
+			cairo_translate( cr, piece.x, piece.y );
+			drawHighlight( cr, piece.width, piece.height, look, color );
+			cairo_restore( cr );
+		}
+	}
+
 	std::vector<std::uint8_t> highlightMask( int width, int height, const HighlightLook& look )
+	{
+		const Box whole{ .x = 0, .y = 0, .width = width, .height = height };
+		return highlightMask( width, height, std::span( &whole, 1 ), look );
+	}
+
+	std::vector<std::uint8_t> highlightMask( int width, int height, std::span<const Box> pieces, const HighlightLook& look )
 	{
 		const int                 stride_bytes = ( std::max( 0, width ) + 7 ) / 8;
 		std::vector<std::uint8_t> bits( static_cast<std::size_t>( stride_bytes ) * static_cast<std::size_t>( std::max( 0, height ) ), 0 );
@@ -186,7 +205,7 @@ namespace lexiglance::render
 		cairo_t*         cr      = cairo_create( surface );
 		// Crisp edges: a window shape has no partial pixels.
 		cairo_set_antialias( cr, CAIRO_ANTIALIAS_NONE );
-		drawHighlight( cr, width, height, look, Color{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 } );
+		drawHighlight( cr, pieces, look, Color{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 } );
 		cairo_destroy( cr );
 		cairo_surface_flush( surface );
 		const unsigned char* data   = cairo_image_surface_get_data( surface );

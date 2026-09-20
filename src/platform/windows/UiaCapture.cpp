@@ -288,8 +288,9 @@ namespace lexiglance::platform
 				return "ui-automation";
 			}
 
-			std::optional<CapturedText> capture( Point point, const WindowInfo& window, std::size_t max_chars ) override
+			std::optional<CapturedText> capture( Point point, const WindowInfo& window, CaptureScope scope ) override
 			{
+				const std::size_t max_chars = scope.characters;
 				if ( !automation_ || window.own || max_chars == 0 )
 				{
 					return std::nullopt;
@@ -372,11 +373,19 @@ namespace lexiglance::platform
 				{
 					return std::nullopt;
 				}
-				// The characters of the first `length` code points of the captured text.
+				// The characters of the first `length` code points of the captured text, which may start before the one the
+				// range holds (the beginning of its word).
 				const auto head  = utf8::prefix( captured.text, length );
-				const auto units = win32::wide( head ).size();
+				const auto units = static_cast<int>( std::max<std::size_t>( win32::wide( head ).size(), 1 ) );
+				const auto lead  = static_cast<int>( win32::wide( utf8::prefix( captured.text, captured.rewound ) ).size() );
+				int        back  = 0;
 				int        moved = 0;
-				( void )span->MoveEndpointByUnit( TextPatternRangeEndpoint_End, TextUnit_Character, static_cast<int>( std::max<std::size_t>( units, 1 ) ) - 1, &moved );
+				if ( lead > 0 )
+				{
+					// As far as the provider went back (not past the start of its text).
+					( void )span->MoveEndpointByUnit( TextPatternRangeEndpoint_Start, TextUnit_Character, -lead, &back );
+				}
+				( void )span->MoveEndpointByUnit( TextPatternRangeEndpoint_End, TextUnit_Character, units + std::min( back, 0 ) - 1, &moved );
 				const auto boxes = rectanglesOf( span.get() );
 				if ( boxes.empty() )
 				{

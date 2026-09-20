@@ -57,6 +57,10 @@ namespace lexiglance::config
 
 	[[nodiscard]] Result<KeyChord> parseChord( std::span<const std::string> names );
 
+	// A key held together with a chord for something more (the sentence key): its group, or none when the name is empty
+	// or unknown, or the chord has one of its keys already (it would always be held with it).
+	[[nodiscard]] KeyGroup extraKey( std::string_view name, const KeyChord& chord );
+
 	[[nodiscard]] std::string_view keyName( Key key ) noexcept;
 
 	// keyName as this platform's users know the key: "Left Super" on X11, "Left Win" on Windows,

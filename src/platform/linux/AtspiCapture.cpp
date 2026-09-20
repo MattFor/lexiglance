@@ -162,8 +162,9 @@ namespace lexiglance::platform
 				return "at-spi";
 			}
 
-			std::optional<CapturedText> capture( Point point, const WindowInfo& window, std::size_t max_chars ) override
+			std::optional<CapturedText> capture( Point point, const WindowInfo& window, CaptureScope scope ) override
 			{
+				const std::size_t max_chars = scope.characters;
 				if ( !desktop_ )
 				{
 					return std::nullopt;
@@ -277,14 +278,15 @@ namespace lexiglance::platform
 				}
 
 				ErrorSink  error;
-				const auto end = captured.offset + static_cast<gint>( length );
-				if ( auto range = toRect( atspi_text_get_range_extents( text, captured.offset, end, ATSPI_COORD_TYPE_SCREEN, error.out() ) ) )
+				const auto start = std::max( 0, captured.offset - static_cast<gint>( captured.rewound ) );
+				const auto end   = start + static_cast<gint>( length );
+				if ( auto range = toRect( atspi_text_get_range_extents( text, start, end, ATSPI_COORD_TYPE_SCREEN, error.out() ) ) )
 				{
 					return range;
 				}
 
 				// Some toolkits do not implement range extents: join the first and last character boxes.
-				const auto first = toRect( atspi_text_get_character_extents( text, captured.offset, ATSPI_COORD_TYPE_SCREEN, error.out() ) );
+				const auto first = toRect( atspi_text_get_character_extents( text, start, ATSPI_COORD_TYPE_SCREEN, error.out() ) );
 				const auto last  = toRect( atspi_text_get_character_extents( text, end - 1, ATSPI_COORD_TYPE_SCREEN, error.out() ) );
 				if ( !first || !last || last->y != first->y )
 				{

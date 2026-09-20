@@ -3,6 +3,7 @@
 
 #include <lexiglance/core/Error.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -196,6 +197,57 @@ namespace lexiglance::config
 		int button_size = 0;
 	};
 
+	// Which weights one language's model is loaded from, when both are downloaded (the Translation page).
+	struct LanguageModel
+	{
+		// The language's code ("ja").
+		std::string language;
+		// "compact" or "full".
+		std::string model;
+
+		[[nodiscard]] bool operator==( const LanguageModel& ) const = default;
+	};
+
+	// Sentences translated offline into English, by a model per language (downloaded on the Scanning page).
+	struct TranslationSettings
+	{
+		bool enabled = true;
+		// Selected text longer than any word found in it is translated as well as looked up.
+		bool selections = true;
+		// Held with the trigger, the whole sentence under the pointer is translated. Empty: no such key.
+		std::string sentence_key = "Shift_L";
+		// Languages (codes) whose text is not translated (the Translation page's ticks).
+		std::vector<std::string> disabled_languages;
+		// The models' weights for a language that has not been given its own: "compact" (quantized, a quarter of the
+		// download) or "full" (faster on most processors and a little more accurate, but about twice the memory).
+		std::string model = "compact";
+		// The languages that have: each may have both precisions downloaded and use either.
+		std::vector<LanguageModel> models;
+
+		[[nodiscard]] bool translates( std::string_view language ) const
+		{
+			return std::ranges::find( disabled_languages, language ) == disabled_languages.end();
+		}
+
+		// Which weights `language` is translated with: its own choice, else the one every other language uses.
+		[[nodiscard]] std::string_view modelFor( std::string_view language ) const
+		{
+			const auto it = std::ranges::find( models, language, &LanguageModel::language );
+			return it != models.end() ? std::string_view( it->model ) : std::string_view( model );
+		}
+
+		// Remembers that `language` is translated with `precision` ("compact" or "full").
+		void setModelFor( std::string_view language, std::string_view precision )
+		{
+			if ( const auto it = std::ranges::find( models, language, &LanguageModel::language ); it != models.end() )
+			{
+				it->model = precision;
+				return;
+			}
+			models.push_back( { .language = std::string( language ), .model = std::string( precision ) } );
+		}
+	};
+
 	struct AudioSettings
 	{
 		bool enabled  = true;
@@ -259,12 +311,15 @@ namespace lexiglance::config
 		std::vector<std::string> disabled_languages;
 		std::string              log_level = "info";
 		bool                     paused    = false;
-		// Whether the daemon counts what it looks up, for the Statistics page. The tally never leaves this computer.
-		bool                              statistics = true;
+		// Whether the daemon counts what it looks up, and the translations it shows, for the Statistics page. The tally
+		// never leaves this computer.
+		bool                              statistics              = true;
+		bool                              statistics_translations = true;
 		ScanSettings                      scan;
 		PopupSettings                     popup;
 		AudioSettings                     audio;
 		AnkiSettings                      anki;
+		TranslationSettings               translation;
 		std::vector<DictionaryPreference> dictionaries;
 
 		// Missing or malformed fields keep their defaults; an invalid trigger is an error.

@@ -1,5 +1,6 @@
 #include "DesktopEntry.h"
 #include "MainWindow.h"
+#include "UpdateGroup.h"
 
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
@@ -20,6 +21,8 @@
 #include <filesystem>
 #include <print>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #ifdef _WIN32
 	#ifndef NOMINMAX
@@ -92,8 +95,43 @@ namespace
 		qInstallMessageHandler( &logQtMessage );
 	}
 
+	// lexiglance --daemon [arguments]: the daemon beside this program, in its place. An AppImage starts this program, so
+	// that is how its login autostart starts the daemon; replacing the process keeps the AppImage mounted for it.
+	int runDaemon( int argc, char** argv, int from )
+	{
+		namespace lg       = lexiglance;
+		const auto program = lg::process::sibling( "lexiglanced" );
+		if ( program.empty() )
+		{
+			std::println( stderr, "error: lexiglanced is not beside {}", lg::process::executable().string() );
+			return 1;
+		}
+		std::vector<std::string> arguments( argv + from, argv + argc );
+#ifdef _WIN32
+		return lg::process::startDetached( program, arguments ) ? 0 : 1;
+#else
+		const std::string  path = program.string();
+		std::vector<char*> list{ const_cast<char*>( path.c_str() ) };
+		for ( std::string& argument : arguments )
+		{
+			list.push_back( argument.data() );
+		}
+		list.push_back( nullptr );
+		::execv( path.c_str(), list.data() );
+		std::println( stderr, "error: cannot start {}", path );
+		return 1;
+#endif
+	}
+
 	int run( int argc, char** argv )
 	{
+		for ( int i = 1; i < argc; ++i )
+		{
+			if ( std::string_view( argv[i] ) == "--daemon" )
+			{
+				return runDaemon( argc, argv, i + 1 );
+			}
+		}
 #ifdef _WIN32
 		// A windowed program has no console; messages (--menu-entry) go to the terminal it was started from, if any.
 		if ( AttachConsole( ATTACH_PARENT_PROCESS ) != FALSE )
@@ -126,6 +164,11 @@ namespace
 			lexiglance::gui::MainWindow window;
 			window.resize( 1080, 780 );
 			window.showPage( arguments[shot + 1] );
+			// --search <text> along with it: the page is drawn with that looked up, as the documentation shows it.
+			if ( const auto asked = arguments.indexOf( QStringLiteral( "--search" ) ); asked >= 0 && asked + 1 < arguments.size() )
+			{
+				window.search( arguments[asked + 1] );
+			}
 			const int wait = shot + 3 < arguments.size() ? arguments[shot + 3].toInt() : 3500;
 			QTimer::singleShot( std::max( 100, wait ), &window, [&window, file = arguments[shot + 2]] {
 				window.grab().save( file );
@@ -156,7 +199,23 @@ namespace
 		// A second launch brings the running window to the front instead. One started by an update (--updated) waits
 		// for the version it replaces to end.
 		const QString instance = QStringLiteral( "lexiglance-gui-%1" ).arg( userKey() );
-		const bool    updated  = arguments.contains( QStringLiteral( "--updated" ) );
+
+		// lexiglance --background-update: started by the daemon now and then, so a copy updates itself even when this
+		// window is never opened. It shows nothing, and leaves updating to a window that is open (which updates on its
+		// own); it does not count as one either, so opening the window meanwhile opens it as usual.
+		if ( arguments.contains( QStringLiteral( "--background-update" ) ) )
+		{
+			QLocalSocket existing;
+			existing.connectToServer( instance );
+			if ( existing.waitForConnected( 250 ) )
+			{
+				lexiglance::log::info( "update: the settings window is open and updates by itself" );
+				return 0;
+			}
+			const lexiglance::gui::UpdateGroup updater( nullptr, true );
+			return QApplication::exec();
+		}
+		const bool updated = arguments.contains( QStringLiteral( "--updated" ) );
 		for ( int waited = 0;; ++waited )
 		{
 			QLocalSocket existing;

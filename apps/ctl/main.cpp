@@ -1,6 +1,9 @@
+#include <lexiglance/config/Config.h>
 #include <lexiglance/core/Health.h>
 #include <lexiglance/core/Json.h>
 #include <lexiglance/core/Paths.h>
+#include <lexiglance/core/Process.h>
+#include <lexiglance/core/Uninstall.h>
 #include <lexiglance/core/Version.h>
 #include <lexiglance/dictionary/DictionaryStore.h>
 #include <lexiglance/dictionary/StructuredContent.h>
@@ -8,12 +11,17 @@
 #include <lexiglance/language/Language.h>
 #include <lexiglance/lookup/Translator.h>
 #include <lexiglance/ocr/Paddle.h>
+#include <lexiglance/translate/Model.h>
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <iterator>
 #include <print>
 #include <span>
 #include <string>
@@ -54,11 +62,15 @@ namespace
 		std::println( "  lookup <text>                                     look up the start of <text>" );
 		std::println( "  bench <text> [iterations]                         measure lookup latency" );
 		std::println( "  ocr <image.ppm>                                   read the text in an image with PaddleOCR" );
+		std::println( "  translate <text> [--language <code>]              translate <text> into English offline" );
 		std::println( "" );
 		std::println( "  status | pause | resume | reload | hide           control the running daemon" );
 		std::println( "  show <text>                                       show a popup at the pointer" );
 		std::println( "  health                                            check that everything works (exit 1 on problems)" );
 		std::println( "  stats [reset]                                     what has been looked up so far, or forget it" );
+		std::println( "" );
+		std::println( "  uninstall [--keep-data] [--yes]                   remove Lexiglance, and its settings, dictionaries" );
+		std::println( "                                                    and downloaded models unless --keep-data" );
 	}
 
 	// A detail of several lines, with the later ones under the first instead of against the margin.
@@ -384,6 +396,182 @@ namespace
 		return image;
 	}
 
+	int translateCommand( const Args& args )
+	{
+		std::string      text;
+		std::string_view code;
+		for ( std::size_t i = 0; i < args.size(); ++i )
+		{
+			if ( args[i] == "--language" && i + 1 < args.size() )
+			{
+				code = args[++i];
+				continue;
+			}
+			text.append( text.empty() ? "" : " " ).append( args[i] );
+		}
+		if ( text.empty() )
+		{
+			usage();
+			return 2;
+		}
+		const lg::lang::Language* language = code.empty() ? lg::lang::translationLanguage( text ) : lg::lang::findLanguage( code );
+		if ( language == nullptr || language->translationModel().empty() )
+		{
+			std::println( stderr, "error: no translation model for {}", code.empty() ? std::string( "the language of this text" ) : std::string( code ) );
+			return 1;
+		}
+		// The precision the settings ask for of this language, or the other one when only that is downloaded.
+		const auto settings  = lg::config::Config::load( lg::paths::configFile() );
+		const auto wanted    = lg::translate::precisionNamed( settings ? settings->translation.modelFor( language->code() ) : std::string_view() );
+		const auto directory = lg::paths::translationDir() / language->translationModel().directory();
+		auto       model     = lg::translate::Model::load( directory, lg::translate::downloaded( directory, wanted ).value_or( wanted ), lg::paths::ocrDir() / "runtime", 4 );
+		if ( !model )
+		{
+			std::println( stderr, "error: {} (download it in the settings application: Translation page)", model.error().message );
+			return 1;
+		}
+		const auto started    = std::chrono::steady_clock::now();
+		auto       translated = ( *model )->translate( text );
+		if ( !translated )
+		{
+			std::println( stderr, "error: {}", translated.error().message );
+			return 1;
+		}
+		std::println( "{}", *translated );
+		std::println( stderr, "({}, {} ms)", language->name(), std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started ).count() );
+		return 0;
+	}
+
+	bool isRoot()
+	{
+#ifdef _WIN32
+		return false;
+#else
+		return ::geteuid() == 0;
+#endif
+	}
+
+	// Takes Lexiglance off this computer: its programs (by the package manager, or the Windows uninstaller), its
+	// autostart and menu entries, and unless --keep-data the settings, dictionaries and downloaded models.
+	int uninstallCommand( const Args& args )
+	{
+		namespace un   = lg::uninstall;
+		bool keep_data = false;
+		bool yes       = false;
+		for ( const std::string_view arg : args )
+		{
+			if ( arg == "--keep-data" )
+			{
+				keep_data = true;
+			}
+			else if ( arg == "--yes" || arg == "-y" )
+			{
+				yes = true;
+			}
+			else
+			{
+				usage();
+				return 2;
+			}
+		}
+		const auto places = un::Places::current();
+		const auto plan   = un::plan( places, keep_data );
+		if ( plan.kind == un::Kind::WindowsSetup )
+		{
+			// Its own uninstaller does all of it, and asks unless --yes.
+			std::vector<std::string> options;
+			if ( yes )
+			{
+				options.emplace_back( "/S" );
+			}
+			if ( keep_data )
+			{
+				options.emplace_back( "/KEEPDATA" );
+			}
+			if ( !lg::process::startDetached( plan.where, options ) )
+			{
+				std::println( stderr, "error: cannot start {}", plan.where.string() );
+				return 1;
+			}
+			std::println( "{} is uninstalling Lexiglance", plan.where.string() );
+			return 0;
+		}
+		if ( plan.kind == un::Kind::WindowsPortable )
+		{
+			std::println( stderr, "error: a portable copy is uninstalled from the settings application (Overview, Uninstall), which removes its folder once it has ended" );
+			return 1;
+		}
+
+		std::println( "This removes:" );
+		for ( const std::string& line : un::describe( plan ) )
+		{
+			std::println( "  - {}", line );
+		}
+		if ( !yes )
+		{
+			std::print( "Uninstall Lexiglance? [y/N] " );
+			( void )std::fflush( stdout );
+			std::string answer;
+			if ( !std::getline( std::cin, answer ) || ( answer != "y" && answer != "Y" && answer != "yes" ) )
+			{
+				std::println( "Nothing was removed." );
+				return 1;
+			}
+		}
+
+		// First what takes root, which can be refused with nothing changed yet: the package, or programs in a prefix
+		// this user cannot change.
+		std::vector<std::string>           root_command = plan.package;
+		std::vector<std::filesystem::path> own          = plan.programs;
+		if ( root_command.empty() && std::ranges::any_of( own, un::needsRoot ) )
+		{
+			root_command = { "rm", "-rf", "--" };
+			std::ranges::transform( own, std::back_inserter( root_command ), []( const std::filesystem::path& path ) { return path.string(); } );
+			own.clear();
+		}
+		if ( !root_command.empty() )
+		{
+			if ( !isRoot() )
+			{
+				root_command.insert( root_command.begin(), "sudo" );
+			}
+			const auto  program = lg::process::findProgram( root_command.front() );
+			std::string shown;
+			for ( const std::string& part : root_command )
+			{
+				shown.append( shown.empty() ? "" : " " ).append( part );
+			}
+			if ( program.empty() )
+			{
+				std::println( stderr, "error: {} is not installed; run as root: {}", root_command.front(), shown );
+				return 1;
+			}
+			std::println( "{}", shown );
+			const std::span<const std::string> arguments( root_command.begin() + 1, root_command.end() );
+			if ( const int code = lg::process::run( program, arguments, false ); code != 0 )
+			{
+				std::println( stderr, "error: {} failed (exit code {}); nothing else was removed", root_command.front(), code );
+				return 1;
+			}
+		}
+
+		un::stopPrograms( places, std::chrono::seconds( 3 ) );
+		std::vector<std::filesystem::path> rest = own;
+		rest.insert( rest.end(), plan.integration.begin(), plan.integration.end() );
+		rest.insert( rest.end(), plan.data.begin(), plan.data.end() );
+		const auto failures = un::remove( rest );
+		for ( const std::string& failure : failures )
+		{
+			std::println( stderr, "error: cannot remove {}", failure );
+		}
+		if ( plan.kind == un::Kind::BuildTree )
+		{
+			std::println( "The build in {} stays: delete it yourself if it should go too.", plan.where.string() );
+		}
+		std::println( "{}", failures.empty() ? "Lexiglance was uninstalled." : "Lexiglance was uninstalled, except for the above." );
+		return failures.empty() ? 0 : 1;
+	}
+
 	int ocrCommand( const Args& args )
 	{
 		if ( args.empty() )
@@ -456,6 +644,14 @@ namespace
 		if ( command == "ocr" )
 		{
 			return ocrCommand( args );
+		}
+		if ( command == "translate" )
+		{
+			return translateCommand( args );
+		}
+		if ( command == "uninstall" )
+		{
+			return uninstallCommand( args );
 		}
 		if ( command == "status" )
 		{

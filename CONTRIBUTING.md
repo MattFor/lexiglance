@@ -28,17 +28,21 @@ Other presets: `release` (LTO), `release-native` (tuned for your CPU), `asan` / 
 
 ## Trying a change on your own desktop
 
-Builds and then replaces the Lexiglance installed on this machine with it, restarting whatever was running:
+Builds and then replaces the Lexiglance this machine actually runs, the copy its login autostart (or service) starts,
+restarting whatever was running:
 
 ```sh
-bash .github/scripts/dev-install.sh              # release preset into /usr/local, sudo only if needed
+bash .github/scripts/dev-install.sh              # what the autostart runs: a build tree is rebuilt in place, an
+                                                 # installed copy is installed over (sudo only if needed)
 bash .github/scripts/dev-install.sh debug ~/.local
 ```
 
 ```powershell
-pwsh .github/scripts/dev-install.ps1             # release preset, into wherever setup.exe put it
+pwsh .github/scripts/dev-install.ps1             # release preset, into what the autostart runs (else where setup.exe put it)
 pwsh .github/scripts/dev-install.ps1 -Preset debug -SkipBuild
 ```
+
+It also points out other copies earlier on `PATH`, which the terminal or the applications menu would run instead.
 
 On Windows the daemon and the settings application are stopped first, because Windows cannot overwrite a running
 program; on Linux the daemon's supervisor is asked to stop and start it. Settings and dictionaries live outside the

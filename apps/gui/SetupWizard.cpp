@@ -3,14 +3,17 @@
 #include "DaemonClient.h"
 #include "OcrInstall.h"
 #include "Settings.h"
+#include "TranslationInstall.h"
 #include "VcRedist.h"
 
+#include <lexiglance/config/Keys.h>
 #include <lexiglance/core/Json.h>
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Process.h>
 #include <lexiglance/core/Version.h>
 
+#include <QAbstractTextDocumentLayout>
 #include <QDateTime>
 #include <QEvent>
 #include <QFile>
@@ -27,6 +30,7 @@
 #include <chrono>
 
 #include <algorithm>
+#include <cmath>
 #include <deque>
 #include <memory>
 #include <span>
@@ -72,16 +76,45 @@ namespace lexiglance::gui
 			return jobs;
 		}
 
-		QLabel* makeBullet( const QString& text )
+		// A line of the welcome: an icon, what Lexiglance does in bold, and a sentence about it.
+		QWidget* feature( const QString& icon, const QString& title, const QString& text )
 		{
-			auto* row = new QLabel( QStringLiteral( "<table cellspacing='0' cellpadding='0'><tr>"
-			                                        "<td style='padding-right:10px;vertical-align:top;'>•</td>"
-			                                        "<td>%1</td></tr></table>" )
-			                                .arg( text.toHtmlEscaped() ) );
-			row->setTextFormat( Qt::RichText );
-			row->setWordWrap( true );
-			row->setAlignment( Qt::AlignHCenter );
+			auto* row    = new QWidget();
+			auto* layout = new QHBoxLayout( row );
+			layout->setContentsMargins( 0, 0, 0, 0 );
+			layout->setSpacing( 14 );
+			auto* picture = new QLabel();
+			picture->setPixmap( QIcon::fromTheme( icon ).pixmap( 26, 26 ) );
+			picture->setAlignment( Qt::AlignTop | Qt::AlignHCenter );
+			picture->setFixedWidth( 30 );
+			layout->addWidget( picture );
+			auto* words = new QLabel( QStringLiteral( "<b>%1</b><br>%2" ).arg( title.toHtmlEscaped(), text.toHtmlEscaped() ) );
+			words->setTextFormat( Qt::RichText );
+			words->setWordWrap( true );
+			layout->addWidget( words, 1 );
 			return row;
+		}
+
+		// "Japanese, Russian and Greek".
+		QString listed( const QStringList& names )
+		{
+			if ( names.size() < 2 )
+			{
+				return names.join( QString() );
+			}
+			return QStringLiteral( "%1 and %2" ).arg( names.mid( 0, names.size() - 1 ).join( QStringLiteral( ", " ) ), names.back() );
+		}
+
+		// The first words of a language's sample, to show beside its name.
+		QString sampleOf( const lang::Language& language )
+		{
+			const QString text = qs( language.sampleText() );
+			if ( text.size() <= 30 )
+			{
+				return text;
+			}
+			const auto space = text.lastIndexOf( QLatin1Char( ' ' ), 30 );
+			return text.left( space > 10 ? space : 30 ).remove( QRegularExpression( QStringLiteral( "[,、]$" ) ) ) + QStringLiteral( "…" );
 		}
 
 		void styleBar( QProgressBar* bar )
@@ -144,7 +177,12 @@ namespace lexiglance::gui
 		dict_bar_( new QProgressBar() ),
 		ocr_label_( new QLabel( QStringLiteral( "OCR and runtime" ) ) ),
 		ocr_bar_( new QProgressBar() ),
+		translation_box_( new QCheckBox( QStringLiteral( "Translate sentences into English too" ) ) ),
+		translation_note_( new QLabel() ),
+		tips_( new QLabel() ),
 		done_blurb_( new QLabel() ),
+		practice_( new QTextBrowser() ),
+		practice_status_( new QLabel() ),
 		done_( new QPushButton( QStringLiteral( "Get started" ) ) )
 	{
 		hide();
@@ -178,19 +216,27 @@ namespace lexiglance::gui
 		welcome_title_->setWordWrap( true );
 		welcome_layout->addWidget( welcome_title_ );
 
-		auto* blurb = new QLabel( QStringLiteral( "A system-wide dictionary for reading in any program." ) );
+		auto* blurb = new QLabel( QStringLiteral( "A pop-up dictionary for reading in the languages you learn, in any program." ) );
 		blurb->setAlignment( Qt::AlignHCenter );
 		blurb->setWordWrap( true );
 		welcome_layout->addWidget( blurb );
 
-		auto* bullets = new QVBoxLayout();
-		bullets->setContentsMargins( 24, 8, 24, 4 );
-		bullets->setSpacing( 6 );
-		bullets->addWidget( makeBullet( QStringLiteral( "Hold a key and point at a word anywhere on screen" ) ) );
-		bullets->addWidget( makeBullet( QStringLiteral( "Dictionaries for Japanese, Russian, Chinese, and more" ) ) );
-		bullets->addWidget( makeBullet( QStringLiteral( "Screen reading (OCR) for games, images, and video" ) ) );
-		bullets->addWidget( makeBullet( QStringLiteral( "Optional export to Anki for spaced repetition" ) ) );
-		welcome_layout->addLayout( bullets );
+		QStringList offered;
+		for ( const lang::Language* language : lang::languages() )
+		{
+			if ( !language->recommendedDictionaries().empty() )
+			{
+				offered << qs( language->name() );
+			}
+		}
+		auto* features = new QVBoxLayout();
+		features->setContentsMargins( 20, 14, 20, 4 );
+		features->setSpacing( 12 );
+		features->addWidget( feature( QStringLiteral( "edit-find" ), QStringLiteral( "Point at a word" ), QStringLiteral( "Hold a key over text anywhere: a browser, a chat, a game, a video. What it means appears beside it." ) ) );
+		features->addWidget( feature( QStringLiteral( "preferences-desktop-locale" ), QStringLiteral( "Whole sentences in English" ), QStringLiteral( "Hold one more key and the sentence is translated, on this computer." ) ) );
+		features->addWidget( feature( QStringLiteral( "accessories-dictionary" ), QStringLiteral( "Dictionaries ready to use" ), QStringLiteral( "For %1, downloaded in a moment, with what reads text in games and videos." ).arg( listed( offered ) ) ) );
+		features->addWidget( feature( QStringLiteral( "document-send" ), QStringLiteral( "Keep what you learn" ), QStringLiteral( "Send words to Anki, with the sentence they came from." ) ) );
+		welcome_layout->addLayout( features );
 
 		lock_hint_->setWordWrap( true );
 		lock_hint_->setAlignment( Qt::AlignHCenter );
@@ -213,30 +259,47 @@ namespace lexiglance::gui
 		languages_title->setFont( title_font );
 		languages_title->setWordWrap( true );
 		languages_layout->addWidget( languages_title );
-		auto* languages_blurb = new QLabel( QStringLiteral( "Lexiglance will download recommended dictionaries and OCR models for each one you select." ) );
+		auto* languages_blurb = new QLabel( QStringLiteral( "The recommended dictionaries of each, and what reads its text from the screen, are downloaded next. "
+		                                                    "Languages can be added or turned off later on the Scanning page." ) );
 		languages_blurb->setWordWrap( true );
 		languages_layout->addWidget( languages_blurb );
 
 		auto* scroll = new QScrollArea();
 		scroll->setWidgetResizable( true );
 		scroll->setFrameShape( QFrame::NoFrame );
-		auto* list_host   = new QWidget();
+		// The card's own colour behind the list.
+		auto* list_host = new QWidget();
+		list_host->setObjectName( QStringLiteral( "setupLanguages" ) );
+		scroll->setStyleSheet( QStringLiteral( "QScrollArea, QScrollArea > QWidget, QWidget#setupLanguages { background: transparent; }" ) );
 		auto* list_layout = new QVBoxLayout( list_host );
-		list_layout->setContentsMargins( 0, 8, 0, 8 );
+		list_layout->setContentsMargins( 0, 10, 0, 10 );
+		list_layout->setSpacing( 10 );
 		for ( const lang::Language* language : lang::languages() )
 		{
 			if ( language->recommendedDictionaries().empty() )
 			{
 				continue;
 			}
-			auto* box = new QCheckBox( qs( language->name() ) );
+			auto* row    = new QHBoxLayout();
+			auto* box    = new QCheckBox( qs( language->name() ) );
+			auto* sample = new QLabel( sampleOf( *language ) );
+			sample->setEnabled( false );
+			box->setMinimumWidth( 120 );
+			row->addWidget( box );
+			row->addWidget( sample, 1 );
 			language_boxes_.push_back( box );
 			language_codes_.emplace_back( language->code() );
-			list_layout->addWidget( box );
+			list_layout->addLayout( row );
 		}
 		list_layout->addStretch( 1 );
 		scroll->setWidget( list_host );
 		languages_layout->addWidget( scroll, 1 );
+		translation_box_->setChecked( true );
+		languages_layout->addWidget( translation_box_ );
+		translation_note_->setWordWrap( true );
+		translation_note_->setEnabled( false );
+		translation_note_->setContentsMargins( 26, 0, 0, 6 );
+		languages_layout->addWidget( translation_note_ );
 
 		auto* languages_footer = new QHBoxLayout();
 		auto* back             = new QPushButton( QStringLiteral( "Back" ) );
@@ -273,6 +336,12 @@ namespace lexiglance::gui
 		install_layout->addWidget( ocr_label_ );
 		install_layout->addWidget( ocr_bar_ );
 
+		// While it downloads: how Lexiglance is used.
+		tips_->setWordWrap( true );
+		tips_->setTextFormat( Qt::RichText );
+		install_layout->addSpacing( 12 );
+		install_layout->addWidget( tips_ );
+
 		auto* install_continue = new QPushButton( QStringLiteral( "Continue anyway" ) );
 		install_continue->setObjectName( QStringLiteral( "setupContinueAnyway" ) );
 		install_continue->setProperty( "primary", true );
@@ -293,7 +362,7 @@ namespace lexiglance::gui
 		done_logo->setAlignment( Qt::AlignHCenter );
 		done_logo->setPixmap( mark.scaled( 56, 56, Qt::KeepAspectRatio, Qt::SmoothTransformation ) );
 		done_layout->addWidget( done_logo );
-		auto* done_title = new QLabel( QStringLiteral( "You are ready" ) );
+		auto* done_title = new QLabel( QStringLiteral( "Try it now" ) );
 		done_title->setFont( title_font );
 		done_title->setAlignment( Qt::AlignHCenter );
 		done_layout->addWidget( done_title );
@@ -301,7 +370,29 @@ namespace lexiglance::gui
 		done_blurb_->setAlignment( Qt::AlignHCenter );
 		done_blurb_->setTextFormat( Qt::RichText );
 		done_layout->addWidget( done_blurb_ );
+		// A sentence to point at, in the language chosen first: text the daemon reads like any other program's.
+		QFont practice_font = practice_->font();
+		practice_font.setPointSizeF( practice_font.pointSizeF() * 1.7 );
+		practice_->setFont( practice_font );
+		practice_->setFrameShape( QFrame::NoFrame );
+		practice_->setStyleSheet( QStringLiteral( "QTextBrowser { border: none; border-radius: 10px; background: rgba(127, 127, 127, 0.10); }" ) );
+		practice_->setVerticalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
+		practice_->setHorizontalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
+		practice_->setFocusPolicy( Qt::NoFocus );
+		practice_->document()->setDocumentMargin( 14 );
+		// However the sentence comes to be laid out (a longer one wraps), the box is as tall as it.
+		connect( practice_->document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this, [this] { fitPractice(); } );
+		done_layout->addSpacing( 10 );
+		done_layout->addWidget( practice_ );
+		practice_status_->setWordWrap( true );
+		practice_status_->setAlignment( Qt::AlignHCenter );
+		practice_status_->setTextFormat( Qt::RichText );
+		done_layout->addWidget( practice_status_ );
 		done_layout->addStretch( 1 );
+		auto* later = new QLabel( QStringLiteral( "Everything else is explained in Help, at the bottom of the sidebar." ) );
+		later->setAlignment( Qt::AlignHCenter );
+		later->setEnabled( false );
+		done_layout->addWidget( later );
 		auto* done_footer = new QHBoxLayout();
 		done_footer->addStretch( 1 );
 		done_->setProperty( "primary", true );
@@ -325,6 +416,8 @@ namespace lexiglance::gui
 		for ( QCheckBox* box : language_boxes_ )
 		{
 			connect( box, &QCheckBox::toggled, this, [this]( bool on ) {
+				updateTranslationBox();
+				updatePractice();
 				if ( on )
 				{
 					return;
@@ -338,7 +431,29 @@ namespace lexiglance::gui
 			} );
 		}
 
+		// The sentence to try answers the keys: what the daemon did with them shows under it.
+		context_.client->onEvent( [this]( std::string_view name, const json::Value& params ) {
+			if ( !isVisible() || pages_->currentIndex() != static_cast<int>( Page::Done ) )
+			{
+				return;
+			}
+			if ( name == "trigger.changed" && params["held"].asBool() && !tried_ )
+			{
+				practice_status_->setText( QStringLiteral( "Now point at a word of the sentence." ) );
+			}
+			else if ( name == "capture.result" && params["found"].asBool() && params["entries"].asInt() > 0 )
+			{
+				tried_ = true;
+				practice_status_->setText( QStringLiteral( "<span style=\"color:#3fa45b; font-weight:600\">✓ It works.</span> It does the same in every program." ) );
+			}
+			else if ( name == "capture.result" && !tried_ )
+			{
+				practice_status_->setText( QStringLiteral( "<span style=\"color:#d19a1f\">Nothing found there</span>: point at the middle of a word." ) );
+			}
+		} );
+
 		parent->installEventFilter( this );
+		practice_->installEventFilter( this );
 	}
 
 	void SetupWizard::open( int lock_seconds, bool reinstall, bool required )
@@ -370,17 +485,15 @@ namespace lexiglance::gui
 		{
 			language_boxes_.front()->setChecked( true );
 		}
-		done_blurb_->setText(
-				QStringLiteral( "Hold <b>%1</b> and point at a word in any program.<br>"
-		                        "Open <b>Help</b> in the sidebar any time for a short guide." )
-						.arg( chordText( context_.settings->config().scan.trigger ).toHtmlEscaped() )
-		);
+		updateTranslationBox();
+		updateKeys();
+		updatePractice();
 		showPage( Page::Welcome );
 		if ( locked() )
 		{
 			lock_hint_->setText(
 					required_ ? QStringLiteral( "This card stays for a few seconds so setup is not closed by accident. Setup cannot be skipped." )
-					          : QStringLiteral( "This card stays for a few seconds so setup is not closed by accident." )
+							  : QStringLiteral( "This card stays for a few seconds so setup is not closed by accident." )
 			);
 			lock_hint_->show();
 			continue_->setEnabled( false );
@@ -454,6 +567,10 @@ namespace lexiglance::gui
 		{
 			place();
 		}
+		if ( watched == practice_ && event->type() == QEvent::Resize )
+		{
+			fitPractice();
+		}
 		return QWidget::eventFilter( watched, event );
 	}
 
@@ -502,6 +619,10 @@ namespace lexiglance::gui
 	{
 		pages_->setCurrentIndex( static_cast<int>( page ) );
 		place();
+		if ( page == Page::Done )
+		{
+			updatePractice();
+		}
 	}
 
 	std::vector<const lang::Language*> SetupWizard::selectedLanguages() const
@@ -608,8 +729,13 @@ namespace lexiglance::gui
 				} );
 			}
 
-			batch->ocr     = ocr_install::paddleFiles( selectedLanguages() );
-			batch->ocr     = reinstall_ ? ocr_install::toDownload( std::move( batch->ocr ) ) : ocr_install::missingOnly( std::move( batch->ocr ) );
+			batch->ocr = ocr_install::paddleFiles( selectedLanguages() );
+			batch->ocr = reinstall_ ? ocr_install::toDownload( std::move( batch->ocr ) ) : ocr_install::missingOnly( std::move( batch->ocr ) );
+			// The translation models come with them, over the same runtime.
+			if ( translation_box_->isChecked() )
+			{
+				std::ranges::move( translation_install::files( translation_install::wanted( selectedLanguages(), context_.settings->config().translation ), reinstall_ ), std::back_inserter( batch->ocr ) );
+			}
 			batch->runtime = ocr_install::ocrPath( "runtime" );
 			batch->archive = ocr_install::runtimeArchive();
 			redist_.clear();
@@ -642,15 +768,16 @@ namespace lexiglance::gui
 			dict_label_->setText( QStringLiteral( "Dictionaries" ) );
 			dict_bar_->setRange( 0, 0 );
 		}
+		const QString models = translation_box_->isChecked() ? QStringLiteral( "OCR, translation and runtime" ) : QStringLiteral( "OCR and runtime" );
 		if ( batch->ocr.empty() )
 		{
-			ocr_label_->setText( QStringLiteral( "OCR and runtime (already installed)" ) );
+			ocr_label_->setText( models + QStringLiteral( " (already installed)" ) );
 			ocr_bar_->setRange( 0, 1 );
 			ocr_bar_->setValue( 1 );
 		}
 		else
 		{
-			ocr_label_->setText( QStringLiteral( "OCR and runtime" ) );
+			ocr_label_->setText( models );
 			ocr_bar_->setRange( 0, 0 );
 		}
 
@@ -663,7 +790,7 @@ namespace lexiglance::gui
 			return;
 		}
 
-		install_status_->setText( QStringLiteral( "Downloading dictionaries, OCR models, and runtime together..." ) );
+		install_status_->setText( translation_box_->isChecked() ? QStringLiteral( "Downloading dictionaries, OCR and translation models, and runtime together..." ) : QStringLiteral( "Downloading dictionaries, OCR models, and runtime together..." ) );
 
 		for ( std::size_t i = 0; i < batch->dicts.size(); ++i )
 		{
@@ -897,9 +1024,63 @@ namespace lexiglance::gui
 		after_runtime( {} );
 	}
 
+	void SetupWizard::updateTranslationBox()
+	{
+		const auto    chosen = selectedLanguages();
+		const auto    size   = translation_install::bytes( translation_install::wanted( chosen, context_.settings->config().translation ) );
+		const bool    any    = !translation_install::withModel( chosen ).empty();
+		const QString label  = size > 0 ? QStringLiteral( "Translate sentences into English too (%1 more)" ).arg( translation_install::megabytes( size ) ) : QStringLiteral( "Translate sentences into English too" );
+		translation_box_->setText( label );
+		translation_box_->setEnabled( any );
+		translation_note_->setVisible( any );
+	}
+
+	void SetupWizard::updateKeys()
+	{
+		const auto&   config   = context_.settings->config();
+		const QString trigger  = chordText( config.scan.trigger ).toHtmlEscaped();
+		const QString sentence = config.translation.sentence_key.empty() ? QString() : qs( config::displayName( config.translation.sentence_key ) ).toHtmlEscaped();
+		translation_note_->setText( sentence.isEmpty() ? QStringLiteral( "Translated on this computer, nothing is sent anywhere. Faster full precision models are on the Translation page." ) : QStringLiteral( "Hold %1 with the trigger over a sentence to read it in English. Translated on this computer; "
+		                                                                                                                                                                                                        "faster full precision models are on the Translation page." )
+		                                                                                                                                                                                                .arg( sentence ) );
+		QString    tips = QStringLiteral( "<b>Meanwhile, how it works</b><table cellspacing=\"0\" cellpadding=\"3\" style=\"margin-top:6px\">" );
+		const auto tip  = [&]( const QString& what, const QString& how ) { tips += QStringLiteral( "<tr><td style=\"padding-right:14px\">%1</td><td>%2</td></tr>" ).arg( what, how ); };
+		tip( QStringLiteral( "Look up a word" ), QStringLiteral( "Hold <b>%1</b> and point at it" ).arg( trigger ) );
+		tip( QStringLiteral( "Select more characters" ), QStringLiteral( "Keep holding it and use the scroll wheel" ) );
+		if ( !sentence.isEmpty() )
+		{
+			tip( QStringLiteral( "Translate the sentence" ), QStringLiteral( "Hold <b>%1</b> as well" ).arg( sentence ) );
+		}
+		tip( QStringLiteral( "In the popup" ), QStringLiteral( "Scroll for more entries, click one to copy it" ) );
+		tips_->setText( tips + QStringLiteral( "</table>" ) );
+		done_blurb_->setText( sentence.isEmpty() ? QStringLiteral( "Hold <b>%1</b> and point at a word below." ).arg( trigger ) : QStringLiteral( "Hold <b>%1</b> and point at a word below. Then add <b>%2</b> to read the sentence in English." ).arg( trigger, sentence ) );
+	}
+
+	void SetupWizard::updatePractice()
+	{
+		const auto chosen = selectedLanguages();
+		tried_            = false;
+		practice_status_->setText( QStringLiteral( "<span style=\"color:gray\">Keep holding the key and use the scroll wheel to select more characters.</span>" ) );
+		practice_->setHtml( chosen.empty() ? QString() : QStringLiteral( "<p align=\"center\">%1</p>" ).arg( qs( chosen.front()->exampleSentence() ).toHtmlEscaped() ) );
+		fitPractice();
+	}
+
+	void SetupWizard::fitPractice()
+	{
+		// As tall as the sentence, which wraps at the card's width.
+		practice_->document()->setTextWidth( practice_->viewport()->width() );
+		const int height = static_cast<int>( std::ceil( practice_->document()->size().height() ) ) + ( 2 * practice_->frameWidth() );
+		if ( practice_->height() != height )
+		{
+			practice_->setFixedHeight( height );
+		}
+	}
+
 	void SetupWizard::finishInstall( const QString& error )
 	{
-		installing_           = false;
+		installing_ = false;
+		// Translation models that came are loaded when next needed.
+		context_.client->call( "translation.reload" );
 		auto* continue_anyway = findChild<QPushButton*>( QStringLiteral( "setupContinueAnyway" ) );
 		if ( !error.isEmpty() )
 		{

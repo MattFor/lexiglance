@@ -6,6 +6,7 @@ add_executable(
     AboutPage.cpp
     AnkiPage.cpp
     AppearancePage.cpp
+    CardOverlay.cpp
     Common.cpp
     DaemonClient.cpp
     DesktopEntry.cpp
@@ -20,8 +21,12 @@ add_executable(
     SearchPage.cpp
     Settings.cpp
     SetupWizard.cpp
+    StatisticsCharts.cpp
     StatisticsPage.cpp
     Themes.cpp
+    TranslationInstall.cpp
+    TranslationPage.cpp
+    UninstallOverlay.cpp
     UpdateGroup.cpp
     VcRedist.cpp
     resources.qrc)
@@ -43,10 +48,16 @@ qt_add_resources(
     ${LEXIGLANCE_ICON_THEME})
 
 # lexiglance::ocr for the Visual C++ runtime check behind Health's Fix issues
-# and the PaddleOCR download (VcRedist.cpp).
+# and the PaddleOCR download (VcRedist.cpp); lexiglance::translate for what a
+# translation model consists of.
 target_link_libraries(
-    lexiglance PRIVATE lexiglance::core lexiglance::ocr lexiglance::options
-                       Qt6::Widgets Qt6::Network)
+    lexiglance
+    PRIVATE lexiglance::core
+            lexiglance::ocr
+            lexiglance::translate
+            lexiglance::options
+            Qt6::Widgets
+            Qt6::Network)
 
 install(TARGETS lexiglance RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 

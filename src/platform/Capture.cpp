@@ -48,7 +48,7 @@ namespace lexiglance::platform
 		return mode_ == config::OcrMode::Always || std::ranges::any_of( ocr_windows_, [&]( const std::string& pattern ) { return globMatch( pattern, window.wm_class ); } );
 	}
 
-	std::optional<CapturedText> ChainCapture::capture( Point point, const WindowInfo& window, std::size_t max_chars )
+	std::optional<CapturedText> ChainCapture::capture( Point point, const WindowInfo& window, CaptureScope scope )
 	{
 		const bool ocr_enabled = ocr_ && mode_ != config::OcrMode::Off;
 		const bool ocr_first   = ocr_enabled && prefersOcr( window );
@@ -58,7 +58,7 @@ namespace lexiglance::platform
 			{
 				return std::nullopt;
 			}
-			auto text = source->capture( point, window, max_chars );
+			auto text = source->capture( point, window, scope );
 			if ( text && !text->text.empty() )
 			{
 				text->origin = source;
@@ -96,6 +96,15 @@ namespace lexiglance::platform
 			return std::nullopt;
 		}
 		return text.origin->bounds( text, length );
+	}
+
+	std::vector<Rect> ChainCapture::lineBounds( const CapturedText& text, std::size_t length )
+	{
+		if ( text.origin == nullptr || text.origin == this )
+		{
+			return {};
+		}
+		return text.origin->lineBounds( text, length );
 	}
 
 	std::optional<std::chrono::milliseconds> ChainCapture::idle()

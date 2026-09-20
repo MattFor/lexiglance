@@ -25,6 +25,23 @@ namespace lexiglance::ocr
 		std::vector<float>        data;
 	};
 
+	// A named input for OnnxModel::run: its element type, shape and data, which must stay valid while the model runs.
+	struct Input
+	{
+		enum class Type : std::uint8_t
+		{
+			Float,
+			Int64,
+			Bool
+		};
+
+		std::string_view              name;
+		Type                          type = Type::Float;
+		std::span<const std::int64_t> shape;
+		const void*                   data  = nullptr;
+		std::size_t                   bytes = 0;
+	};
+
 	// The two ways OCR is simply not set up yet: the models are not there, or the runtime to run them is not. Both are
 	// ordinary states rather than faults, which is what loadFailureActionable() tells apart.
 	inline constexpr std::string_view paddle_absent  = "PaddleOCR is not downloaded";
@@ -63,6 +80,13 @@ namespace lexiglance::ocr
 
 		// Runs the model on one float input and returns its first output.
 		[[nodiscard]] Result<Tensor> run( std::span<float> input, std::span<const std::int64_t> shape );
+
+		// Runs the model on named inputs and returns the named outputs (float tensors), in the order asked for.
+		[[nodiscard]] Result<std::vector<Tensor>> run( std::span<const Input> inputs, std::span<const std::string> outputs );
+
+		// The names of the model's inputs and outputs.
+		[[nodiscard]] std::vector<std::string> inputNames() const;
+		[[nodiscard]] std::vector<std::string> outputNames() const;
 
 		// A custom metadata entry, e.g. a recognition model's "character" list; empty when absent.
 		[[nodiscard]] std::string metadata( const char* key ) const;

@@ -480,6 +480,11 @@ namespace lexiglance::lang::ru
 		return "Съешь же ещё этих мягких французских булок, да выпей чаю";
 	}
 
+	std::string_view Russian::exampleSentence() const noexcept
+	{
+		return "Вчера мы с другом долго читали интересные книги.";
+	}
+
 	std::span<const std::string_view> Russian::sampleWords() const noexcept
 	{
 		static constexpr std::array<std::string_view, 2> words{ "книги", "говорю" };

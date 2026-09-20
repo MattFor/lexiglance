@@ -1,8 +1,17 @@
-add_executable(lexiglanced main.cpp Anki.cpp Audio.cpp Daemon.cpp Health.cpp
-                           IpcServer.cpp Stats.cpp)
+add_executable(
+    lexiglanced
+    main.cpp
+    Anki.cpp
+    Audio.cpp
+    Daemon.cpp
+    Health.cpp
+    IpcServer.cpp
+    Stats.cpp
+    Translation.cpp)
 
-target_link_libraries(lexiglanced PRIVATE lexiglance::platform lexiglance::net
-                                          lexiglance::options)
+target_link_libraries(
+    lexiglanced PRIVATE lexiglance::platform lexiglance::net
+                        lexiglance::translate lexiglance::options)
 
 if(WIN32)
     # A background program: no console window opens when it starts (its output

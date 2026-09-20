@@ -282,6 +282,7 @@ namespace lexiglance::config
 		readString( root, "log_level", config.log_level );
 		readBool( root, "paused", config.paused );
 		readBool( root, "statistics", config.statistics );
+		readBool( root, "statistics_translations", config.statistics_translations );
 
 		const json::Value& scan = root["scan"];
 		readStrings( scan, "trigger", config.scan.trigger );
@@ -371,6 +372,32 @@ namespace lexiglance::config
 		readBool( audio, "enabled", config.audio.enabled );
 		readBool( audio, "autoplay", config.audio.autoplay );
 		readStrings( audio, "sources", config.audio.sources );
+
+		const json::Value& translation = root["translation"];
+		readBool( translation, "enabled", config.translation.enabled );
+		readBool( translation, "selections", config.translation.selections );
+		readString( translation, "sentence_key", config.translation.sentence_key );
+		readStrings( translation, "disabled_languages", config.translation.disabled_languages );
+		readString( translation, "model", config.translation.model );
+		if ( config.translation.model != "full" )
+		{
+			config.translation.model = "compact";
+		}
+		// The languages that use weights of their own; anything but "full" means the compact ones.
+		for ( const json::Member& chosen : translation["models"].members() )
+		{
+			std::string weights;
+			readString( translation["models"], chosen.key, weights );
+			if ( !chosen.key.empty() && chosen.key.size() <= 16 && config.translation.models.size() < 64 )
+			{
+				config.translation.models.push_back( { .language = std::string( chosen.key ), .model = weights == "full" ? "full" : "compact" } );
+			}
+		}
+		// A key this platform does not know would never be seen held: the default instead of silently none.
+		if ( !config.translation.sentence_key.empty() && !parseKey( config.translation.sentence_key ) )
+		{
+			config.translation.sentence_key = TranslationSettings{}.sentence_key;
+		}
 
 		const json::Value& anki = root["anki"];
 		readBool( anki, "enabled", config.anki.enabled );
@@ -465,6 +492,7 @@ namespace lexiglance::config
 		out.field( "log_level", log_level );
 		out.field( "paused", paused );
 		out.field( "statistics", statistics );
+		out.field( "statistics_translations", statistics_translations );
 
 		out.key( "scan" ).beginObject();
 		writeStrings( out, "trigger", scan.trigger );
@@ -543,6 +571,20 @@ namespace lexiglance::config
 		out.field( "enabled", audio.enabled );
 		out.field( "autoplay", audio.autoplay );
 		writeStrings( out, "sources", audio.sources );
+		out.endObject();
+
+		out.key( "translation" ).beginObject();
+		out.field( "enabled", translation.enabled );
+		out.field( "selections", translation.selections );
+		out.field( "sentence_key", translation.sentence_key );
+		writeStrings( out, "disabled_languages", translation.disabled_languages );
+		out.field( "model", translation.model );
+		out.key( "models" ).beginObject();
+		for ( const auto& chosen : translation.models )
+		{
+			out.field( chosen.language, chosen.model );
+		}
+		out.endObject();
 		out.endObject();
 
 		out.key( "anki" ).beginObject();

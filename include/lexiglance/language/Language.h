@@ -56,6 +56,31 @@ namespace lexiglance::lang
 		}
 	};
 
+	// An offline model that translates the language into English (OPUS-MT, from Hugging Face). Languages sharing one
+	// share its download.
+	struct TranslationModel
+	{
+		// "Xenova/opus-mt-ru-en".
+		std::string repository;
+		// The commit the files are taken from, so every download gets the same ones.
+		std::string revision;
+		// All its files together, in bytes (for the download button): compact, and with its full weights.
+		std::uint64_t bytes      = 0;
+		std::uint64_t full_bytes = 0;
+
+		[[nodiscard]] bool empty() const noexcept
+		{
+			return repository.empty();
+		}
+
+		// Its directory below paths::translationDir(): the repository's own name ("opus-mt-ru-en").
+		[[nodiscard]] std::string directory() const
+		{
+			const auto slash = repository.rfind( '/' );
+			return repository.substr( slash == std::string::npos ? 0 : slash + 1 );
+		}
+	};
+
 	// A dictionary the settings application offers for a language.
 	struct Recommendation
 	{
@@ -90,6 +115,13 @@ namespace lexiglance::lang
 		// Scanning stops at the first character for which this is false. By default: the script's characters.
 		[[nodiscard]] virtual bool isLookupCharacter( char32_t c ) const noexcept;
 
+		// Whether spaces separate the words (Russian, Korean): pointing anywhere in a word then looks up the whole word.
+		// Languages written without them (Japanese) are looked up from the character under the pointer.
+		[[nodiscard]] virtual bool separatesWords() const noexcept
+		{
+			return true;
+		}
+
 		// Appends the spellings to search, the (width normalised) source first. By default: the text as written.
 		virtual void variants( std::u32string_view source, std::vector<TextVariant>& out ) const;
 
@@ -109,6 +141,14 @@ namespace lexiglance::lang
 
 		// A line in the language, to check fonts with.
 		[[nodiscard]] virtual std::string_view sampleText() const noexcept = 0;
+
+		// An everyday sentence in the language, to try translation and the popup on (the health check, the first-run
+		// setup): a font's sample line is often a pangram or a list, which translates badly. The sample line when there
+		// is none.
+		[[nodiscard]] virtual std::string_view exampleSentence() const noexcept
+		{
+			return sampleText();
+		}
 
 		// Everyday words (inflected ones welcome) that every general dictionary has, to test lookups and OCR with.
 		[[nodiscard]] virtual std::span<const std::string_view> sampleWords() const noexcept = 0;
@@ -135,8 +175,33 @@ namespace lexiglance::lang
 			recommended_ = std::move( dictionaries );
 		}
 
+		// The model that translates sentences of the language, from its file (empty: none).
+		[[nodiscard]] const TranslationModel& translationModel() const noexcept
+		{
+			return translation_;
+		}
+
+		void setTranslationModel( TranslationModel model )
+		{
+			translation_ = std::move( model );
+		}
+
+		// Letters of the language that others of its script lack (Ukrainian і, ї, є, ґ), from its file: they tell its text
+		// apart where the script alone cannot.
+		[[nodiscard]] std::u32string_view distinctiveLetters() const noexcept
+		{
+			return distinctive_;
+		}
+
+		void setDistinctiveLetters( std::u32string letters )
+		{
+			distinctive_ = std::move( letters );
+		}
+
 	private:
 		std::vector<Recommendation> recommended_;
+		TranslationModel            translation_;
+		std::u32string              distinctive_;
 	};
 
 	// Every supported language, read once: Japanese and Russian (which come as code), then the files built in from
@@ -162,6 +227,17 @@ namespace lexiglance::lang
 	// Whether `text` starts in the script of one of `among` (empty: every language), and not, say, in English interface
 	// text.
 	[[nodiscard]] bool startsInKnownScript( std::string_view text, std::span<const Language* const> among = {} );
+
+	// The language to translate `text` from, among `among` (empty: every language) that have a translation model: the
+	// one most of its letters are written in, told apart from others of the same script by the letters only it has
+	// (Ukrainian і, Russian ы) and otherwise by `preferred`. None when most of its letters are in none of their scripts
+	// (English text is not translated as Japanese).
+	[[nodiscard]] const Language* translationLanguage( std::string_view text, const Language* preferred = nullptr, std::span<const Language* const> among = {} );
+
+	// The byte offset in `text` where the word holding the character at byte `offset` starts, when `language` separates
+	// its words: the first letter of книгу when pointing at its у. `offset` itself when the language writes no spaces or
+	// that character is not part of a word. Goes back at most `limit` characters.
+	[[nodiscard]] std::size_t wordStart( std::string_view text, std::size_t offset, const Language& language, std::size_t limit = 32 );
 
 } // namespace lexiglance::lang
 

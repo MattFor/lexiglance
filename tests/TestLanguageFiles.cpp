@@ -46,6 +46,24 @@ namespace
 		test::expect( std::ranges::any_of( variants, []( const auto& v ) { return v.text == "елки"; } ) );
 	} );
 
+	const test::Registrar spaced_language_files( "whether a language file separates its words", [] {
+		// By its script unless the file says: Chinese characters and Thai are written without spaces.
+		const auto spaced = []( std::string_view json ) {
+			auto defined = lg::lang::parseLanguage( json );
+			return defined.has_value() && ( *defined )->separatesWords();
+		};
+		test::expect( spaced( R"({"code": "xx", "script": ["0400-04FF"]})" ) );
+		test::expect( !spaced( R"({"code": "xx", "script": ["4E00-9FFF"]})" ) );
+		test::expect( !spaced( R"({"code": "xx", "script": ["0E00-0E7F"]})" ) );
+		test::expect( spaced( R"({"code": "xx", "script": ["4E00-9FFF"], "spaces": true})" ) );
+		test::expect( !spaced( R"({"code": "xx", "script": ["0400-04FF"], "spaces": false})" ) );
+		test::expect( !lg::lang::findLanguage( "ja" )->separatesWords() );
+		for ( const std::string_view code : { "ru", "uk", "ko", "el" } )
+		{
+			test::expect( lg::lang::findLanguage( code )->separatesWords() );
+		}
+	} );
+
 	const test::Registrar broken_language_files( "mistakes in a language file are reported", [] {
 		test::expect( !lg::lang::parseLanguage( R"({"name": "No code", "script": ["0400-04FF"]})" ).has_value() );
 		test::expect( !lg::lang::parseLanguage( R"({"code": "xx"})" ).has_value() );

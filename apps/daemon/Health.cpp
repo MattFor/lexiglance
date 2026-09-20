@@ -195,11 +195,11 @@ namespace lexiglance::daemon
 			Check      check{ .id = "daemon", .title = "Lexiglance daemon" };
 			const auto uptime = std::chrono::duration_cast<std::chrono::seconds>( Clock::now() - started_ );
 #ifdef _WIN32
-			const int  pid    = _getpid();
+			const int pid = _getpid();
 #else
-			const int  pid    = ::getpid();
+			const int pid = ::getpid();
 #endif
-			check.detail      = std::format( "Version {}, pid {}, running for {} ({}).", version, pid, readableDuration( uptime ), process::executable().string() );
+			check.detail = std::format( "Version {}, pid {}, running for {} ({}).", version, pid, readableDuration( uptime ), process::executable().string() );
 			if ( process::executableReplaced() )
 			{
 				check.status = Severity::Warning;
@@ -546,12 +546,48 @@ namespace lexiglance::daemon
 	{
 		const auto         cfg = config();
 		std::vector<Check> checks;
+		// What is about to be looked at, so the settings application can say so instead of only "Checking...". Some of it
+		// takes seconds (reading the screen, translating a test sentence).
+		std::vector<std::string_view> steps{ "Lexiglance itself", "languages and dictionaries", "how the screen is read" };
+		if ( translation_ )
+		{
+			steps.emplace_back( "how sentences are translated" );
+		}
+		if ( cfg->audio.enabled && !cfg->audio.sources.empty() )
+		{
+			steps.emplace_back( "audio" );
+		}
+		if ( cfg->anki.enabled )
+		{
+			steps.emplace_back( "Anki" );
+		}
+		steps.emplace_back( "settings and folders" );
+		std::size_t done = 0;
+		const auto  step = [&]( std::string_view what ) {
+			json::Writer out;
+			out.beginObject().field( "checking", what ).field( "done", static_cast<std::uint64_t>( ++done ) ).field( "total", static_cast<std::uint64_t>( steps.size() ) ).endObject();
+			ipc_.broadcast( "health.progress", out.str() );
+			// The check holds the server's thread while it works, so what it says goes out now rather than at the end.
+			ipc_.flush();
+		};
+
+		step( steps[0] );
 		checkDaemon( checks, *cfg, interactive );
+		step( steps[1] );
 		checkLanguages( checks, *cfg );
+		step( steps[2] );
 		checkScreen( checks, *cfg );
+		if ( translation_ )
+		{
+			step( "how sentences are translated" );
+			auto translated = languagesInUse( *cfg );
+			std::erase_if( translated, [&]( const lang::Language* language ) { return !cfg->translation.translates( language->code() ); } );
+			translation_->diagnose( translated, cfg->translation.enabled, checks );
+		}
 
 		if ( cfg->audio.enabled && !cfg->audio.sources.empty() )
 		{
+			step( "audio" );
 			Check check{ .id = "audio", .title = "Audio" };
 #ifdef _WIN32
 			check.detail = "Pronunciations play through Windows (MCI); clips in formats other than MP3 and WAV need ffplay or mpv on PATH.";
@@ -572,6 +608,7 @@ namespace lexiglance::daemon
 
 		if ( cfg->anki.enabled )
 		{
+			step( "Anki" );
 			Check check{ .id = "anki", .title = "Anki" };
 			if ( const auto anki = ankiVersion( cfg->anki ) )
 			{
@@ -593,6 +630,7 @@ namespace lexiglance::daemon
 		}
 
 		{
+			step( "settings and folders" );
 			Check check{ .id = "config", .title = "Settings file" };
 			if ( !directoryWritable( config_path_.parent_path() ) )
 			{

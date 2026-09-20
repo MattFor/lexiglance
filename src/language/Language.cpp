@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iterator>
 #include <sstream>
+#include <tuple>
 #include <utility>
 
 namespace lexiglance::lang
@@ -50,6 +51,8 @@ namespace lexiglance::lang
 			if ( it != registry.owned.end() && std::cmp_less( it - registry.owned.begin(), registry.coded ) )
 			{
 				( *it )->recommend( recommendationsOf( root ) );
+				( *it )->setTranslationModel( translationModelOf( root ) );
+				( *it )->setDistinctiveLetters( distinctiveLettersOf( root ) );
 				return;
 			}
 			auto defined = defineLanguage( root );
@@ -191,6 +194,84 @@ namespace lexiglance::lang
 		}
 		const char32_t c = utf8::first( text );
 		return std::ranges::any_of( among.empty() ? languages() : among, [c]( const Language* language ) { return language->isScriptCharacter( c ); } );
+	}
+
+	const Language* translationLanguage( std::string_view text, const Language* preferred, std::span<const Language* const> among )
+	{
+		if ( among.empty() )
+		{
+			among = languages();
+		}
+		std::vector<const Language*> candidates;
+		std::ranges::copy_if( among, std::back_inserter( candidates ), []( const Language* language ) { return !language->translationModel().empty(); } );
+
+		// Letters: what is neither a space nor punctuation, digits or symbols of ASCII and general punctuation.
+		const auto               letter  = []( char32_t c ) { return ( c >= U'A' && c <= U'Z' ) || ( c >= U'a' && c <= U'z' ) || ( c >= 0xC0 && ( c < 0x2000 || c > 0x2BFF ) && ( c < 0x3000 || c > 0x303F ) && ( c < 0xFF00 || c > 0xFF0F ) ); };
+		std::size_t              letters = 0;
+		std::vector<std::size_t> written( candidates.size(), 0 );
+		std::vector<std::size_t> distinctive( candidates.size(), 0 );
+		for ( const char32_t c : utf8::codepoints( text ) )
+		{
+			if ( !letter( c ) )
+			{
+				continue;
+			}
+			++letters;
+			for ( std::size_t i = 0; i < candidates.size(); ++i )
+			{
+				written[i] += candidates[i]->isScriptCharacter( c ) ? 1 : 0;
+				distinctive[i] += candidates[i]->distinctiveLetters().contains( c ) ? 1 : 0;
+			}
+		}
+		const Language* best = nullptr;
+		for ( std::size_t i = 0; i < candidates.size(); ++i )
+		{
+			// Most of the letters, then the most letters of its own, then the one preferred.
+			if ( written[i] * 2 <= letters )
+			{
+				continue;
+			}
+			if ( best == nullptr )
+			{
+				best = candidates[i];
+				continue;
+			}
+			const auto j = static_cast<std::size_t>( std::ranges::find( candidates, best ) - candidates.begin() );
+			if ( std::tuple( distinctive[i], written[i], candidates[i] == preferred ) > std::tuple( distinctive[j], written[j], best == preferred ) )
+			{
+				best = candidates[i];
+			}
+		}
+		return best;
+	}
+
+	std::size_t wordStart( std::string_view text, std::size_t offset, const Language& language, std::size_t limit )
+	{
+		const auto boundary = [&]( std::size_t at ) { return at == text.size() || ( static_cast<unsigned char>( text[at] ) & 0xC0U ) != 0x80U; };
+		if ( !language.separatesWords() || offset >= text.size() || !boundary( offset ) || !language.isLookupCharacter( utf8::first( text.substr( offset ) ) ) )
+		{
+			return offset;
+		}
+		std::size_t start = offset;
+		for ( std::size_t steps = 0; start > 0 && steps < limit; ++steps )
+		{
+			std::size_t previous = start - 1;
+			while ( previous > 0 && !boundary( previous ) )
+			{
+				--previous;
+			}
+			if ( !language.isLookupCharacter( utf8::first( text.substr( previous, start - previous ) ) ) )
+			{
+				break;
+			}
+			start = previous;
+		}
+		// A word starts with a letter, not with the hyphen or apostrophe before it ('слово).
+		for ( std::size_t next = start; start < offset && !language.isScriptCharacter( utf8::decode( text, next ) ); )
+		{
+			start = next;
+		}
+		return std::min( start, offset );
 	}
 
 	bool Language::isLookupCharacter( char32_t c ) const noexcept

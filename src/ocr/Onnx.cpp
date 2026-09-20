@@ -282,6 +282,127 @@ namespace lexiglance::ocr
 		return tensor;
 	}
 
+	Result<std::vector<Tensor>> OnnxModel::run( std::span<const Input> inputs, std::span<const std::string> outputs )
+	{
+		// ONNX Runtime wants a pointer even for an empty tensor (a cache with nothing in it yet).
+		static float nothing = 0.0F;
+
+		std::vector<OrtValue*>   values;
+		std::vector<std::string> input_names;
+		values.reserve( inputs.size() );
+		input_names.reserve( inputs.size() );
+		const auto release = [&]( std::span<OrtValue*> list ) {
+			for ( OrtValue* value : list )
+			{
+				if ( value != nullptr )
+				{
+					api_->ReleaseValue( value );
+				}
+			}
+		};
+		for ( const Input& input : inputs )
+		{
+			const auto type = input.type == Input::Type::Int64 ? ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
+			                : input.type == Input::Type::Bool  ? ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL
+			                                                   : ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+			// The runtime only reads inputs; its C API just has no const pointer for them.
+			void*     data  = input.bytes > 0 ? const_cast<void*>( input.data ) : static_cast<void*>( &nothing );
+			OrtValue* value = nullptr;
+			if ( auto made = check( api_, api_->CreateTensorWithDataAsOrtValue( memory_, data, input.bytes, input.shape.data(), input.shape.size(), type, &value ) ); !made )
+			{
+				release( values );
+				return fail( "input {}: {}", input.name, made.error().message );
+			}
+			values.push_back( value );
+			input_names.emplace_back( input.name );
+		}
+
+		std::vector<const char*> in_names;
+		std::vector<const char*> out_names;
+		for ( const std::string& name : input_names )
+		{
+			in_names.push_back( name.c_str() );
+		}
+		for ( const std::string& name : outputs )
+		{
+			out_names.push_back( name.c_str() );
+		}
+		std::vector<OrtValue*> results( outputs.size(), nullptr );
+		const auto             ran = check( api_, api_->Run( session_, nullptr, in_names.data(), values.data(), values.size(), out_names.data(), out_names.size(), results.data() ) );
+		release( values );
+		if ( !ran )
+		{
+			release( results );
+			return std::unexpected( ran.error() );
+		}
+
+		std::vector<Tensor> tensors( results.size() );
+		for ( std::size_t i = 0; i < results.size(); ++i )
+		{
+			OrtTensorTypeAndShapeInfo* info  = nullptr;
+			std::size_t                count = 0;
+			std::size_t                dims  = 0;
+			void*                      data  = nullptr;
+			if ( api_->GetTensorTypeAndShape( results[i], &info ) == nullptr )
+			{
+				ignore( api_, api_->GetDimensionsCount( info, &dims ) );
+				tensors[i].shape.resize( dims );
+				ignore( api_, api_->GetDimensions( info, tensors[i].shape.data(), dims ) );
+				ignore( api_, api_->GetTensorShapeElementCount( info, &count ) );
+				api_->ReleaseTensorTypeAndShapeInfo( info );
+			}
+			if ( count > 0 && api_->GetTensorMutableData( results[i], &data ) == nullptr && data != nullptr )
+			{
+				const auto* floats = static_cast<const float*>( data );
+				tensors[i].data.assign( floats, floats + count );
+			}
+		}
+		release( results );
+		return tensors;
+	}
+
+	std::vector<std::string> OnnxModel::inputNames() const
+	{
+		std::vector<std::string> names;
+		OrtAllocator*            allocator = nullptr;
+		std::size_t              count     = 0;
+		if ( !check( api_, api_->GetAllocatorWithDefaultOptions( &allocator ) ) || !check( api_, api_->SessionGetInputCount( session_, &count ) ) )
+		{
+			return names;
+		}
+		for ( std::size_t i = 0; i < count; ++i )
+		{
+			char* name = nullptr;
+			if ( check( api_, api_->SessionGetInputName( session_, i, allocator, &name ) ) && name != nullptr )
+			{
+				names.emplace_back( name );
+				ignore( api_, api_->AllocatorFree( allocator, name ) );
+			}
+		}
+		return names;
+	}
+
+	std::vector<std::string> OnnxModel::outputNames() const
+	{
+		std::vector<std::string> names;
+		OrtAllocator*            allocator = nullptr;
+		std::size_t              count     = 0;
+		if ( !check( api_, api_->GetAllocatorWithDefaultOptions( &allocator ) ) || !check( api_, api_->SessionGetOutputCount( session_, &count ) ) )
+		{
+			return names;
+		}
+		for ( std::size_t i = 0; i < count; ++i )
+		{
+			char* name = nullptr;
+			if ( check( api_, api_->SessionGetOutputName( session_, i, allocator, &name ) ) && name != nullptr )
+			{
+				names.emplace_back( name );
+				ignore( api_, api_->AllocatorFree( allocator, name ) );
+			}
+		}
+		return names;
+	}
+
 	std::string OnnxModel::metadata( const char* key ) const
 	{
 		OrtModelMetadata* metadata  = nullptr;

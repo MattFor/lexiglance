@@ -1,6 +1,12 @@
 {
     "code": "ja",
     "name": "Japanese",
+    "translation": {
+        "model": "Xenova/opus-mt-ja-en",
+        "revision": "1a906cfaaf7c8f4193f67f5885c082aa6dbd9d16",
+        "size": 114700427,
+        "full_size": 434201817
+    },
     "dictionaries": [
         {
             "name": "JMdict",

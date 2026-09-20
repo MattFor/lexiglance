@@ -7,11 +7,13 @@
 #include <lexiglance/render/Highlight.h>
 #include <lexiglance/render/PopupRenderer.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,6 +45,16 @@ namespace lexiglance::platform
 		{
 			return width <= 0 || height <= 0;
 		}
+
+		// The smallest rectangle holding both.
+		[[nodiscard]] Rect united( const Rect& other ) const noexcept
+		{
+			const int left   = std::min( x, other.x );
+			const int top    = std::min( y, other.y );
+			const int right  = std::max( x + width, other.x + other.width );
+			const int bottom = std::max( y + height, other.y + other.height );
+			return { .x = left, .y = top, .width = right - left, .height = bottom - top };
+		}
 	};
 
 	struct WindowInfo
@@ -56,6 +68,16 @@ namespace lexiglance::platform
 
 	class TextCapture;
 
+	// How much a capture reads.
+	struct CaptureScope
+	{
+		// Characters from the pointer on (Scanning -> the longest text looked up).
+		std::size_t characters = 20;
+		// The whole sentence around the pointer too, where it runs on over several lines: for a translation, or text chosen
+		// with the wheel beyond what was read. OCR reads the other lines only then, since each one costs time.
+		bool sentence = false;
+	};
+
 	struct CapturedText
 	{
 		std::string           text;
@@ -65,6 +87,12 @@ namespace lexiglance::platform
 		// Surrounding text (sentence or line) and the byte offset of `text` within it, for Anki notes.
 		std::string sentence;
 		std::size_t sentence_offset = 0;
+		// Characters at the start of `text` that come before the one under the pointer: the beginning of its word, put in
+		// front from `sentence` for languages that separate words. bounds() counts from the first of them.
+		std::size_t rewound = 0;
+		// Whether the spaces between words are still in `text` and `sentence`. OCR that reads a line as Japanese, set on
+		// a grid, drops them: moving back to the start of the word would then run into the words before it.
+		bool spaces = true;
 		// How sure the capture is of the text, 0 to 100 (accessibility text is exact; OCR reports its confidence).
 		float confidence = 100.0F;
 		// The capture that produced the text; it answers bounds() for it.
@@ -92,10 +120,18 @@ namespace lexiglance::platform
 			return {};
 		}
 
-		[[nodiscard]] virtual std::optional<CapturedText> capture( Point point, const WindowInfo& window, std::size_t max_chars ) = 0;
+		[[nodiscard]] virtual std::optional<CapturedText> capture( Point point, const WindowInfo& window, CaptureScope scope ) = 0;
 
 		// Screen bounds of the first `length` characters of a capture (for the highlight overlay).
 		[[nodiscard]] virtual std::optional<Rect> bounds( const CapturedText& text, std::size_t length ) = 0;
+
+		// The same, a rectangle for each line the characters are on, so a highlight over text that wraps covers just the
+		// text. Captures that cannot tell lines apart give the one rectangle.
+		[[nodiscard]] virtual std::vector<Rect> lineBounds( const CapturedText& text, std::size_t length )
+		{
+			const auto whole = bounds( text, length );
+			return whole ? std::vector<Rect>{ *whole } : std::vector<Rect>{};
+		}
 
 		// Upkeep while no capture is asked for, e.g. taking in the accessibility bus's messages, which pile up otherwise.
 		// Returns how soon it wants to run again (nullopt: never).
@@ -111,8 +147,10 @@ namespace lexiglance::platform
 	// Callbacks, all invoked on the UI thread.
 	struct Events
 	{
-		std::function<void( Point, const WindowInfo& )> scan;
-		std::function<void()>                           trigger_released;
+		// The pointer rests over text with the trigger held; `sentence`: the sentence key is held too, `sentence_pressed`:
+		// it went down just now (a press turns a translation on and off again; holding it while the pointer moves does not).
+		std::function<void( Point, const WindowInfo&, bool sentence, bool sentence_pressed )> scan;
+		std::function<void()>                                                                 trigger_released;
 		// The trigger chord became held (true) or was let go (false).
 		std::function<void( bool )>               trigger_changed;
 		std::function<void( Point )>              click_outside;
@@ -153,12 +191,13 @@ namespace lexiglance::platform
 		virtual void post( std::move_only_function<void()> task ) = 0;
 
 		// UI thread only from here on.
-		virtual void               configure( const config::Config& config )              = 0;
-		virtual void               showPopup( PopupContent content )                      = 0;
-		virtual void               hidePopup()                                            = 0;
-		[[nodiscard]] virtual bool popupVisible() const                                   = 0;
-		virtual void               showHighlight( Rect rect, const render::Color& color ) = 0;
-		virtual void               hideHighlight()                                        = 0;
+		virtual void               configure( const config::Config& config ) = 0;
+		virtual void               showPopup( PopupContent content )         = 0;
+		virtual void               hidePopup()                               = 0;
+		[[nodiscard]] virtual bool popupVisible() const                      = 0;
+		// Marks text on screen: a rectangle for each line of it.
+		virtual void showHighlight( std::span<const Rect> rects, const render::Color& color ) = 0;
+		virtual void hideHighlight()                                                          = 0;
 		// A short status in the corner of the popup, e.g. "Copied ✓".
 		virtual void                     showBadge( std::string text, std::chrono::milliseconds duration ) = 0;
 		[[nodiscard]] virtual Point      pointer()                                                         = 0;

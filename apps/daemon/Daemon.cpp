@@ -4,6 +4,7 @@
 #include <lexiglance/core/Glob.h>
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
+#include <lexiglance/core/Process.h>
 #include <lexiglance/core/Utf8.h>
 #include <lexiglance/core/Version.h>
 #include <lexiglance/dictionary/Classify.h>
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <format>
 #include <functional>
+#include <map>
 
 #include <unistd.h>
 
@@ -106,14 +108,185 @@ namespace lexiglance::daemon
 			return render::Design::Friendly;
 		}
 
+		// Which weights each language's model is loaded from, as the Translation page's choices say.
+		std::map<std::string, translate::Precision> precisions( const config::TranslationSettings& settings )
+		{
+			std::map<std::string, translate::Precision> out;
+			for ( const config::LanguageModel& language : settings.models )
+			{
+				out[language.language] = translate::precisionNamed( language.model );
+			}
+			return out;
+		}
+
+		// How far the pointer may have moved for a press of the sentence key to be the same spot as the press before it.
+		constexpr int sentence_reach = 24;
+
 		// Identifies what a popup from the screen shows, so an identical one is not drawn again; 0 for other popups.
-		std::uint64_t popupKey( bool from_screen, const platform::CapturedText& captured, std::uint32_t matched, int length, const platform::Rect& anchor )
+		std::uint64_t popupKey( bool from_screen, const platform::CapturedText& captured, std::uint32_t matched, int length, const platform::Rect& anchor, std::string_view translated )
 		{
 			if ( !from_screen )
 			{
 				return 0;
 			}
-			return std::hash<std::string>{}( std::format( "{}|{}|{}|{},{},{},{}", captured.text, matched, length, anchor.x, anchor.y, anchor.width, anchor.height ) );
+			return std::hash<std::string>{}( std::format( "{}|{}|{}|{},{},{},{}|{}", captured.text, matched, length, anchor.x, anchor.y, anchor.width, anchor.height, translated ) );
+		}
+
+		// Text to translate as one line: whitespace runs as single spaces, and not more than a screenful.
+		std::string oneLine( std::string_view text )
+		{
+			constexpr std::size_t most = 1000;
+			std::string           line;
+			for ( const char c : text )
+			{
+				const bool space = c == ' ' || c == '\t' || c == '\n' || c == '\r';
+				if ( space )
+				{
+					if ( !line.empty() && line.back() != ' ' )
+					{
+						line.push_back( ' ' );
+					}
+					continue;
+				}
+				line.push_back( c );
+			}
+			while ( !line.empty() && line.back() == ' ' )
+			{
+				line.pop_back();
+			}
+			if ( line.size() > most )
+			{
+				std::size_t cut = most;
+				while ( cut > 0 && ( static_cast<unsigned char>( line[cut] ) & 0xC0U ) == 0x80U )
+				{
+					--cut;
+				}
+				line.resize( cut );
+			}
+			return line;
+		}
+
+		// The language of the word under the pointer: of the text from there, or, on the hyphen or apostrophe inside a word
+		// (кто-нибудь, пам'ять), of the letter before it.
+		const lang::Language& wordLanguage( const platform::CapturedText& captured, const lang::Language* preferred, std::span<const lang::Language* const> enabled )
+		{
+			const std::string_view sentence = captured.sentence;
+			const std::size_t      at       = captured.sentence_offset;
+			if ( !lang::startsInKnownScript( captured.text, enabled ) && at > 0 && at <= sentence.size() )
+			{
+				std::size_t before = at - 1;
+				while ( before > 0 && ( static_cast<unsigned char>( sentence[before] ) & 0xC0U ) == 0x80U )
+				{
+					--before;
+				}
+				if ( const auto letter = sentence.substr( before, at - before ); lang::startsInKnownScript( letter, enabled ) )
+				{
+					return lang::languageOf( letter, preferred, enabled );
+				}
+			}
+			return lang::languageOf( captured.text, preferred, enabled );
+		}
+
+		// Puts the beginning of the word under the pointer in front of what was read (кни for книгу when pointing at its
+		// у), from the sentence around it, in languages that separate their words.
+		void startAtWord( platform::CapturedText& captured, const lang::Language& language )
+		{
+			const std::string_view sentence = captured.sentence;
+			const std::size_t      at       = captured.sentence_offset;
+			// Only when the sentence holds the text where the capture says it does, with its spaces.
+			if ( !captured.spaces || captured.text.empty() || at >= sentence.size() || !sentence.substr( at ).starts_with( utf8::prefix( captured.text, 1 ) ) )
+			{
+				return;
+			}
+			const std::size_t start = lang::wordStart( sentence, at, language );
+			if ( start >= at )
+			{
+				return;
+			}
+			const std::string_view before = sentence.substr( start, at - start );
+			captured.rewound += utf8::length( before );
+			captured.text.insert( 0, before );
+			captured.sentence_offset = start;
+		}
+
+		// The sentence from where the captured text starts, when it holds that text there.
+		std::string_view sentenceRest( const platform::CapturedText& captured )
+		{
+			if ( captured.sentence_offset >= captured.sentence.size() )
+			{
+				return {};
+			}
+			const std::string_view rest = std::string_view( captured.sentence ).substr( captured.sentence_offset );
+			return rest.starts_with( captured.text ) || std::string_view( captured.text ).starts_with( rest ) ? rest : std::string_view();
+		}
+
+		// How many characters the wheel can choose: all that was read, or up to the end of its sentence, which the capture
+		// may have cut short (scan.max_length) — a sentence to translate is often longer than a word to look up.
+		std::size_t reach( const platform::CapturedText& captured )
+		{
+			return std::max( utf8::length( captured.text ), utf8::length( sentenceRest( captured ) ) );
+		}
+
+		void reachSentenceEnd( platform::CapturedText& captured )
+		{
+			if ( const auto rest = sentenceRest( captured ); rest.size() > captured.text.size() )
+			{
+				captured.text = std::string( rest );
+			}
+		}
+
+		// The popup shows all of the text chosen with the wheel (`length` characters of `text`), although the lookup stops
+		// at punctuation (a 、).
+		void showWholeChoice( lookup::LookupResult& result, std::string_view text, int length )
+		{
+			if ( const auto chosen = utf8::prefix( text, static_cast<std::size_t>( std::max( 0, length ) ) ); chosen.size() > result.text.size() )
+			{
+				result.text     = std::string( chosen );
+				result.selected = static_cast<std::uint32_t>( utf8::length( chosen ) );
+			}
+		}
+
+		// Whether the pointer is on text chosen before, give or take a little: OCR's boxes hug the middle of the letters, and
+		// a hand turning the wheel or pressing a key moves the pointer by a few pixels.
+		bool onChosen( const platform::Rect& chosen, platform::Point point )
+		{
+			const int margin = std::clamp( chosen.height / 2, 4, 12 );
+			return point.x >= chosen.x - margin && point.x < chosen.x + chosen.width + margin && point.y >= chosen.y - margin && point.y < chosen.y + chosen.height + margin;
+		}
+
+		// How many characters `text` has without the punctuation and spaces it ends with.
+		std::size_t bareLength( std::string_view text )
+		{
+			std::u32string letters = utf8::toUtf32( text );
+			while ( !letters.empty() && std::u32string_view( U" \u3000。．！？!?.,、…‥」』）)\"'»”’" ).contains( letters.back() ) )
+			{
+				letters.pop_back();
+			}
+			return letters.size();
+		}
+
+		// The sentence around the captured text, as byte offsets into `sentence`. What a capture calls its sentence may be
+		// whole lines that hold others too (OCR reads by the line).
+		std::pair<std::size_t, std::size_t> sentenceSpan( std::string_view sentence, std::size_t offset )
+		{
+			const auto [text, at] = sentenceAround( sentence, offset );
+			const auto begin      = std::min( offset, sentence.size() ) - at;
+			return { begin, begin + text.size() };
+		}
+
+		// The rectangle holding them all; none for none.
+		std::optional<platform::Rect> spanning( const std::vector<platform::Rect>& rects )
+		{
+			if ( rects.empty() )
+			{
+				return std::nullopt;
+			}
+			platform::Rect all = rects.front();
+			for ( const platform::Rect& rect : rects )
+			{
+				all = all.united( rect );
+			}
+			return all;
 		}
 
 		std::size_t characters( const std::optional<platform::CapturedText>& captured )
@@ -194,7 +367,7 @@ namespace lexiglance::daemon
 		config_( std::make_shared<const config::Config>( std::move( config ) ) )
 	{
 		actions_ = std::make_unique<ThreadPool>( 2, false, "lg-actions" );
-		stats_.setEnabled( this->config()->statistics );
+		stats_.setEnabled( this->config()->statistics, this->config()->statistics_translations );
 		stats_.load( paths::stateDir() / "statistics.json" );
 		if ( lang::findLanguage( this->config()->language ) == nullptr )
 		{
@@ -236,6 +409,11 @@ namespace lexiglance::daemon
 	int Daemon::run()
 	{
 		reloadDictionaries();
+		// Before the IPC server starts: its thread serves "translate" and "translation.reload", and a daemon
+		// without desktop integration returns below without reaching the rest of the startup.
+		translation_ = std::make_unique<TranslationService>( [this]( std::uint64_t ticket, Result<std::string> translated, std::chrono::microseconds took ) { translationDone( ticket, std::move( translated ), took ); } );
+		translation_->setPrecisions( precisions( config()->translation ), translate::precisionNamed( config()->translation.model ) );
+
 		registerHandlers();
 
 #ifndef _WIN32
@@ -264,15 +442,32 @@ namespace lexiglance::daemon
 		}
 
 		platform::Events events;
-		events.scan             = [this]( platform::Point point, const platform::WindowInfo& window ) { onScan( point, window ); };
-		events.click_outside    = [this]( platform::Point ) { onClickOutside(); };
-		events.selection        = [this]( std::string text, platform::Point point ) { onSelection( std::move( text ), point ); };
-		events.trigger_released = [] {};
+		events.scan          = [this]( platform::Point point, const platform::WindowInfo& window, bool sentence, bool pressed ) { onScan( point, window, sentence, pressed ); };
+		events.click_outside = [this]( platform::Point ) { onClickOutside(); };
+		events.selection     = [this]( std::string text, platform::Point point ) { onSelection( std::move( text ), point ); };
+		// Turns of the wheel kept for a popup that never came go with the trigger.
+		events.trigger_released = [this] {
+			pending_wheel_   = 0;
+			translation_off_ = false;
+			sentence_asked_  = {};
+		};
 		// The settings application shows whether the trigger is seen (Overview, Health).
-		events.trigger_changed = [this]( bool held ) { ipc_.broadcast( "trigger.changed", held ? R"({"held":true})" : R"({"held":false})" ); };
-		events.popup_action    = [this]( std::size_t entry, render::PopupAction action ) { onPopupAction( entry, action ); };
-		events.adjust_length   = [this]( int delta ) { onAdjustLength( delta ); };
-		events.source_closed   = [this] { onClickOutside(); };
+		events.trigger_changed = [this]( bool held ) {
+			// The trigger going down is a sentence key press waiting to happen: the model loads now, so the translation
+			// does not wait for it. It is let go of again once nothing has been translated for a while.
+			if ( const auto cfg = config(); held && cfg->translation.enabled && !cfg->translation.sentence_key.empty() )
+			{
+				const lang::Language* language = lang::findLanguage( cfg->language );
+				if ( language != nullptr && cfg->translation.translates( language->code() ) )
+				{
+					translation_->warm( *language );
+				}
+			}
+			ipc_.broadcast( "trigger.changed", held ? R"({"held":true})" : R"({"held":false})" );
+		};
+		events.popup_action  = [this]( std::size_t entry, render::PopupAction action ) { onPopupAction( entry, action ); };
+		events.adjust_length = [this]( int delta ) { onAdjustLength( delta ); };
+		events.source_closed = [this] { onClickOutside(); };
 		if ( auto started = backend_->start( std::move( events ) ); !started )
 		{
 			log::error( "{}", started.error().message );
@@ -281,6 +476,7 @@ namespace lexiglance::daemon
 		backend_->configure( *config() );
 
 		capture_thread_ = std::jthread( [this]( const std::stop_token& stop ) { captureLoop( stop ); } );
+		update_thread_  = std::jthread( [this]( const std::stop_token& stop ) { updateLoop( stop ); } );
 		render_thread_  = std::jthread( [this]( const std::stop_token& stop ) { renderLoop( stop ); } );
 
 		const auto  cfg = config();
@@ -402,7 +598,11 @@ namespace lexiglance::daemon
 
 		auto snapshot = std::make_shared<const config::Config>( std::move( config ) );
 		config_.store( snapshot );
-		stats_.setEnabled( snapshot->statistics );
+		stats_.setEnabled( snapshot->statistics, snapshot->statistics_translations );
+		if ( translation_ )
+		{
+			translation_->setPrecisions( precisions( snapshot->translation ), translate::precisionNamed( snapshot->translation.model ) );
+		}
 		log::info(
 				"settings {}: scanning {}, OCR {}, accessibility {}, {} dictionaries",
 				save ? "saved" : "reloaded",
@@ -604,7 +804,19 @@ namespace lexiglance::daemon
 	// Pipeline
 	// ---------------------------------------------------------------------------------------------------------------------
 
-	void Daemon::onScan( platform::Point point, const platform::WindowInfo& window )
+	bool Daemon::translating()
+	{
+		const std::scoped_lock lock( translating_mutex_ );
+		return translating_.has_value();
+	}
+
+	void Daemon::forgetTranslation()
+	{
+		const std::scoped_lock lock( translating_mutex_ );
+		translating_.reset();
+	}
+
+	void Daemon::onScan( platform::Point point, const platform::WindowInfo& window, bool sentence, bool sentence_pressed )
 	{
 		const auto cfg = config();
 		if ( window.own || cfg->paused )
@@ -615,8 +827,67 @@ namespace lexiglance::daemon
 		{
 			return;
 		}
+		// A translation asked for with the sentence key stays while the pointer is over what it translates: the key let
+		// go, the pointer moving along the sentence.
+		const bool over = backend_->popupVisible() && current_.chosen && onChosen( *current_.chosen, point );
+		// The key pressed again over a translation turns it off: the same text is looked up without one, and pressing
+		// once more translates afresh. Only a press does this, not the key being held while the pointer moves.
+		if ( sentence_pressed )
+		{
+			// The press before this one is still being worked on at this spot (the screen read, the model loaded, the
+			// sentence translated): pressing again would throw that work away and start over, so it is let be.
+			const int dx = point.x - sentence_point_.x;
+			const int dy = point.y - sentence_point_.y;
+			if ( sentenceComing() && ( dx * dx ) + ( dy * dy ) <= sentence_reach * sentence_reach )
+			{
+				log::debug( "translation: already on its way, the sentence key is let be" );
+				return;
+			}
+			// Each press decides: over a translation it turns it off, anywhere else it translates. Between presses the key
+			// stays down, so the choice holds until the next one.
+			translation_off_ = over && current_.keeps;
+			if ( translation_off_ )
+			{
+				log::debug( "translation: turned off with the sentence key" );
+				sentence_asked_ = {};
+				forgetTranslation();
+				// What the wheel chose stays chosen: only the translation goes.
+				capture_requests_.post( { .generation = ++generation_, .point = point, .window = window, .length = forced_length_, .sentence = false } );
+				return;
+			}
+			sentence_asked_ = std::chrono::steady_clock::now();
+			sentence_point_ = point;
+		}
+		if ( over && current_.keeps )
+		{
+			return;
+		}
+		// Turned off a moment ago: the key is still held, so nothing is translated until it is let go and pressed again.
+		const bool translate = sentence && !translation_off_ && cfg->translation.enabled;
+		if ( translate )
+		{
+			// The model loads while the screen is read: that of the language on show, else of the one text is read in first.
+			const lang::Language* language = backend_->popupVisible() && current_.shown ? current_.shown->result.language : lang::findLanguage( cfg->language );
+			if ( language != nullptr && cfg->translation.translates( language->code() ) )
+			{
+				translation_->warm( *language );
+			}
+		}
+		// The sentence key over text chosen with the wheel translates just that text.
+		if ( over && translate && forced_length_ > 0 )
+		{
+			capture_requests_.post( { .generation = ++generation_, .length = forced_length_, .sentence = true } );
+			return;
+		}
 		forced_length_ = 0;
-		capture_requests_.post( { .generation = ++generation_, .point = point, .window = window } );
+		capture_requests_.post( { .generation = ++generation_, .point = point, .window = window, .sentence = translate } );
+	}
+
+	bool Daemon::sentenceComing()
+	{
+		// The translation itself is being made, or the screen is still being read for it (OCR takes a moment). The time
+		// bounds the wait: a press is never let be for long, whatever became of the one before it.
+		return translating() || ( sentence_asked_ != std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() - sentence_asked_ < std::chrono::seconds( 5 ) );
 	}
 
 	void Daemon::onSelection( std::string text, platform::Point point )
@@ -645,17 +916,19 @@ namespace lexiglance::daemon
 		}
 		backend_->hidePopup();
 		backend_->hideHighlight();
-		current_ = {};
+		current_        = {};
+		sentence_asked_ = {};
 		shown_key_.store( 0 );
 		cancelled_.store( generation_.load() );
 		autoplayed_.clear();
 	}
 
 	// A popup belongs to the latest scan, or shows exactly what the latest scan found (the pointer moved within the same
-	// text meanwhile) and nothing was dismissed since it was asked for.
+	// text meanwhile), and nothing was dismissed since it was asked for: the fuller image of a popup closed a moment ago, an
+	// Anki check mark or a translation arriving late must not bring it back.
 	bool Daemon::current( std::uint64_t generation, std::uint64_t key ) const
 	{
-		return generation == generation_.load() || ( key != 0 && key == latest_key_.load() && generation > cancelled_.load() );
+		return generation > cancelled_.load() && ( generation == generation_.load() || ( key != 0 && key == latest_key_.load() ) );
 	}
 
 	// Whether what a capture found is already on screen, or on its way there.
@@ -666,14 +939,22 @@ namespace lexiglance::daemon
 
 	void Daemon::onAdjustLength( int delta )
 	{
+		// The popup is still on its way (a slow capture, OCR, is reading): the turn is kept for it.
+		if ( !backend_->popupVisible() )
+		{
+			pending_wheel_ += delta;
+			return;
+		}
 		if ( !current_.shown || current_.shown->result.text.empty() )
 		{
 			return;
 		}
-		const auto available = static_cast<int>( std::max( current_.shown->available, utf8::length( current_.shown->result.text ) ) );
+		// One more than was read asks for the rest of the sentence, over its other lines.
+		const auto available = static_cast<int>( std::max( current_.shown->available, utf8::length( current_.shown->result.text ) ) ) + ( current_.shown->whole ? 0 : 1 );
 		const int  now       = forced_length_ > 0 ? forced_length_ : static_cast<int>( current_.shown->result.matched_length );
 		forced_length_       = std::clamp( now + delta, 1, std::max( 1, available ) );
-		capture_requests_.post( { .generation = ++generation_, .length = forced_length_ } );
+		// A translation asked for with the sentence key follows: it translates the text chosen now.
+		capture_requests_.post( { .generation = ++generation_, .length = forced_length_, .sentence = current_.keeps } );
 	}
 
 	void Daemon::onPopupAction( std::size_t entry, render::PopupAction action )
@@ -852,7 +1133,21 @@ namespace lexiglance::daemon
 		Reading reading;
 		if ( request.length > 0 )
 		{
+			// Text chosen with the wheel beyond what was read: the whole sentence at the same spot, over all its lines.
+			if ( state.last && !state.last_whole && state.capture && static_cast<std::size_t>( request.length ) > reach( *state.last ) )
+			{
+				if ( auto whole = readScreen( state, state.last_point, state.last_window, cfg, true, reading ) )
+				{
+					state.last = std::move( whole );
+				}
+				state.last_whole = true;
+			}
 			reading.captured = state.last;
+			reading.whole    = state.last_whole;
+			if ( reading.captured )
+			{
+				reachSentenceEnd( *reading.captured );
+			}
 		}
 		else if ( request.text )
 		{
@@ -860,25 +1155,38 @@ namespace lexiglance::daemon
 		}
 		else if ( state.capture )
 		{
-			const auto started = std::chrono::steady_clock::now();
-			{
-				const BusyMark busy( capture_busy_since_ );
-				reading.captured = state.capture->capture( request.point, request.window, static_cast<std::size_t>( cfg.scan.max_length ) );
-			}
-			reading.took = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started );
-			log::debug( "capture: {} characters in {} ms", characters( reading.captured ), reading.took.count() );
-			if ( reading.captured && reading.captured->origin != nullptr )
-			{
-				reading.source = reading.captured->origin->name();
-			}
-			// Interface text in other languages would only bring up noise.
-			if ( reading.captured && cfg.scan.known_languages_only && !lang::startsInKnownScript( reading.captured->text, lang::enabledLanguages( cfg.disabled_languages ) ) )
-			{
-				reading.unread = std::move( reading.captured->text );
-				reading.captured.reset();
-			}
+			reading.captured = readScreen( state, request.point, request.window, cfg, request.sentence, reading );
+			reading.whole    = request.sentence;
 		}
 		return reading;
+	}
+
+	std::optional<platform::CapturedText> Daemon::readScreen( CaptureState& state, platform::Point point, const platform::WindowInfo& window, const config::Config& cfg, bool sentence, Reading& reading )
+	{
+		std::optional<platform::CapturedText> captured;
+		const auto                            started = std::chrono::steady_clock::now();
+		{
+			const BusyMark busy( capture_busy_since_ );
+			captured = state.capture->capture( point, window, { .characters = static_cast<std::size_t>( cfg.scan.max_length ), .sentence = sentence } );
+		}
+		reading.took = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started );
+		log::debug( "capture: {} characters in {} ms{}", characters( captured ), reading.took.count(), sentence ? " (the whole sentence)" : "" );
+		if ( captured && captured->origin != nullptr )
+		{
+			reading.source = captured->origin->name();
+		}
+		const auto enabled = lang::enabledLanguages( cfg.disabled_languages );
+		if ( captured )
+		{
+			startAtWord( *captured, wordLanguage( *captured, lang::findLanguage( cfg.language ), enabled ) );
+		}
+		// Interface text in other languages would only bring up noise.
+		if ( captured && cfg.scan.known_languages_only && !lang::startsInKnownScript( captured->text, enabled ) )
+		{
+			reading.unread = std::move( captured->text );
+			captured.reset();
+		}
+		return captured;
 	}
 
 	void Daemon::recordScreenLookup( const CaptureRequest& request, const lookup::LookupResult& result, std::string_view source, std::string_view text )
@@ -958,7 +1266,7 @@ namespace lexiglance::daemon
 			const auto cfg = config();
 			refreshCapture( state, *cfg );
 
-			auto [captured, source, unread, took] = readRequest( state, *request, *cfg );
+			auto [captured, source, unread, took, whole] = readRequest( state, *request, *cfg );
 
 			if ( request->probe )
 			{
@@ -968,8 +1276,11 @@ namespace lexiglance::daemon
 
 			if ( !request->text && request->length == 0 )
 			{
-				state.last  = captured;
-				last_source = request->window.id;
+				state.last        = captured;
+				state.last_point  = request->point;
+				state.last_window = request->window;
+				state.last_whole  = whole;
+				last_source       = request->window.id;
 			}
 			if ( !captured )
 			{
@@ -982,6 +1293,13 @@ namespace lexiglance::daemon
 				options.selection  = true;
 			}
 			auto result = translator.lookup( dictionaries_.load(), captured->text, options );
+			showWholeChoice( result, captured->text, request->length );
+			// A selection no entry covers is shown as it is: with furigana over its kanji where the language has them.
+			if ( result.selected > result.matched_length && cfg->popup.show_furigana )
+			{
+				auto words           = lookupOptions( *cfg );
+				result.selected_ruby = translator.readings( dictionaries_.load(), utf8::prefix( result.text, result.selected ), std::move( words ) );
+			}
 			log::debug( "lookup: {} terms in {} us", result.terms.size(), std::chrono::duration_cast<std::chrono::microseconds>( result.elapsed ).count() );
 			// Only real lookups count towards the statistics shown in the settings application.
 			recordScreenLookup( *request, result, source, captured->text );
@@ -990,42 +1308,258 @@ namespace lexiglance::daemon
 				reportCapture( *request, captured->text, unread, source, took, result.terms.size() + result.kanji.size(), reported );
 			}
 
-			if ( result.empty() )
+			// A sentence asked for with the sentence key, or a selection no entry covers, is translated as well.
+			Translating translating = translationFor( *request, *captured, result, *cfg );
+
+			if ( result.empty() && !translating.shown )
 			{
-				latest_key_.store( 0 );
-				if ( cfg->scan.hide_on_no_result )
-				{
-					backend_->post( [this, generation = request->generation] {
-						if ( generation == generation_.load() )
-						{
-							dismiss();
-						}
-					} );
-				}
+				nothingFound( request->generation, cfg->scan.hide_on_no_result );
 				continue;
 			}
 
-			std::optional<platform::Rect> highlight;
-			if ( cfg->scan.highlight && state.capture && !request->text )
-			{
-				// A length chosen with the wheel is highlighted as chosen; otherwise the match.
-				highlight = state.capture->bounds( *captured, request->length > 0 ? static_cast<std::size_t>( request->length ) : result.matched_length );
-			}
-			const auto anchor = highlight.value_or( captured->character );
+			const bool  keeps     = request->sentence && translating.shown.has_value();
+			const bool  chosen    = keeps || request->length > 0;
+			const Marks marks     = cfg->scan.highlight || chosen ? marksFor( state, *request, *captured, result.matched_length, keeps ) : Marks{};
+			const auto  highlight = cfg->scan.highlight ? marks.highlight : std::vector<platform::Rect>{};
+			const auto  anchor    = spanning( highlight ).value_or( captured->character );
 			// Moving within the same text finds the same thing again: the popup on screen, or the one on its way, stays.
-			const std::uint64_t key = popupKey( !request->text.has_value(), *captured, result.matched_length, request->length, anchor );
+			const std::string_view translated_from = translating.shown ? std::string_view( translating.shown->source ) : std::string_view();
+			const std::uint64_t    key             = popupKey( !request->text.has_value(), *captured, result.matched_length, request->length, anchor, translated_from );
 			latest_key_.store( key );
 			if ( showing( key, posted_key, posted_generation ) )
 			{
 				continue;
 			}
-			posted_key                  = key;
-			posted_generation           = request->generation;
-			std::string sentence        = captured->sentence.empty() ? captured->text : std::move( captured->sentence );
-			const auto  sentence_offset = captured->sentence.empty() ? 0 : captured->sentence_offset;
-			const auto  available       = utf8::length( captured->text );
-			auto        shown           = std::make_shared<const Shown>( Shown{ .result = std::move( result ), .sentence = std::move( sentence ), .sentence_offset = sentence_offset, .available = available } );
-			render_requests_.post( { .generation = request->generation, .shown = std::move( shown ), .anchor = anchor, .highlight = highlight, .source = request->length > 0 ? last_source : request->window.id, .key = key } );
+			posted_key                    = key;
+			posted_generation             = request->generation;
+			const auto    available       = reach( *captured );
+			std::string   sentence        = captured->sentence.empty() ? captured->text : std::move( captured->sentence );
+			const auto    sentence_offset = captured->sentence.empty() ? 0 : captured->sentence_offset;
+			auto          shown           = std::make_shared<const Shown>( Shown{ .result = std::move( result ), .sentence = std::move( sentence ), .sentence_offset = sentence_offset, .available = available, .whole = whole, .translation = std::move( translating.shown ) } );
+			RenderRequest render{ .generation = request->generation, .shown = std::move( shown ), .anchor = anchor, .highlight = highlight, .source = request->length > 0 ? last_source : request->window.id, .key = key, .chosen = chosen ? marks.chosen : std::nullopt, .keeps = keeps };
+			// Posted under the lock translations are posted under, so a late one never takes the place of this newer popup.
+			const std::scoped_lock lock( translating_mutex_ );
+			translating_.reset();
+			if ( translating.language != nullptr )
+			{
+				translating_          = render;
+				translating_language_ = translating.language;
+				translation_->request( ++translating_ticket_, *translating.language, std::move( translating.text ) );
+			}
+			// Remembered from before: shown at once, and counted as a translation seen.
+			else if ( translating.from != nullptr && render.shown->translation && !render.shown->translation->text.empty() )
+			{
+				stats_.recordTranslation( translating.from->code(), utf8::length( render.shown->translation->source ), std::chrono::microseconds::zero() );
+			}
+			render_requests_.post( std::move( render ) );
+		}
+	}
+
+	void Daemon::nothingFound( std::uint64_t generation, bool hide )
+	{
+		latest_key_.store( 0 );
+		backend_->post( [this, generation, hide] {
+			if ( generation != generation_.load() )
+			{
+				return;
+			}
+			// Nothing to translate there: the sentence key can be pressed again at once.
+			sentence_asked_ = {};
+			// Nothing here: turns of the wheel waiting for a popup are not for the next one.
+			pending_wheel_ = 0;
+			if ( hide )
+			{
+				dismiss();
+			}
+		} );
+	}
+
+	std::string Daemon::translationSource( const CaptureRequest& request, const platform::CapturedText& captured, const lookup::LookupResult& result, const config::Config& cfg )
+	{
+		if ( !cfg.translation.enabled )
+		{
+			return {};
+		}
+		if ( request.sentence && !request.text )
+		{
+			// The text chosen with the wheel, else the sentence around the pointer. Not when that is one word the
+			// dictionary has: its entry says what it means, while a model makes up a sentence for a word on its own
+			// (ひらがな came out as "It's a mess").
+			if ( request.length > 0 )
+			{
+				return static_cast<std::size_t>( request.length ) <= result.matched_length ? std::string() : oneLine( utf8::prefix( captured.text, static_cast<std::size_t>( request.length ) ) );
+			}
+			if ( captured.sentence.empty() )
+			{
+				return bareLength( captured.text ) <= result.matched_length ? std::string() : oneLine( captured.text );
+			}
+			const auto [begin, end] = sentenceSpan( captured.sentence, captured.sentence_offset );
+			const auto sentence     = std::string_view( captured.sentence ).substr( begin, end - begin );
+			return begin == captured.sentence_offset && bareLength( sentence ) <= result.matched_length ? std::string() : oneLine( sentence );
+		}
+		if ( request.length > 0 )
+		{
+			return {};
+		}
+		if ( request.text && cfg.translation.selections )
+		{
+			// More than the longest entry found covers: more than a word.
+			std::string selection = oneLine( captured.text );
+			const auto  length    = utf8::length( selection );
+			if ( length >= 2 && length > result.matched_length )
+			{
+				return selection;
+			}
+		}
+		return {};
+	}
+
+	Daemon::Translating Daemon::translationFor( const CaptureRequest& request, const platform::CapturedText& captured, const lookup::LookupResult& result, const config::Config& cfg ) const
+	{
+		Translating out;
+		std::string source_text = translationSource( request, captured, result, cfg );
+		const auto* language    = source_text.empty() ? nullptr : lang::translationLanguage( source_text, lang::findLanguage( cfg.language ), lang::enabledLanguages( cfg.disabled_languages ) );
+		// Told apart among all the languages that are on, so text in one whose translation is off is not taken for another.
+		if ( language == nullptr || !cfg.translation.translates( language->code() ) )
+		{
+			return out;
+		}
+		out.from = language;
+		render::Translation shown{ .source = source_text, .text = {}, .problem = TranslationService::unavailable( *language ) };
+		if ( shown.problem.empty() )
+		{
+			if ( auto known = translation_->cached( *language, source_text ) )
+			{
+				shown.text = std::move( *known );
+			}
+			else
+			{
+				out.language = language;
+				out.text     = std::move( source_text );
+			}
+		}
+		out.shown = std::move( shown );
+		return out;
+	}
+
+	Daemon::Marks Daemon::marksFor( const CaptureState& state, const CaptureRequest& request, const platform::CapturedText& captured, std::size_t matched, bool translated )
+	{
+		Marks marks;
+		if ( !state.capture || request.text )
+		{
+			return marks;
+		}
+		// A length chosen with the wheel is marked as chosen; otherwise the match.
+		marks.highlight = state.capture->lineBounds( captured, request.length > 0 ? static_cast<std::size_t>( request.length ) : matched );
+		marks.chosen    = request.length > 0 || translated ? spanning( marks.highlight ) : std::nullopt;
+		// A whole sentence being translated: all of it chosen, and highlighted from its start line by line. A capture that
+		// has one rectangle only for text on several lines would cover what lies between them: the word stays marked then.
+		if ( translated && request.length == 0 && !captured.sentence.empty() && captured.sentence_offset <= captured.sentence.size() )
+		{
+			const auto [begin, end]      = sentenceSpan( captured.sentence, captured.sentence_offset );
+			platform::CapturedText whole = captured;
+			whole.rewound += utf8::length( std::string_view( captured.sentence ).substr( begin, captured.sentence_offset - begin ) );
+			whole.text = captured.sentence.substr( begin, end - begin );
+			auto lines = state.capture->lineBounds( whole, utf8::length( whole.text ) );
+			if ( const auto all = spanning( lines ) )
+			{
+				marks.chosen   = all;
+				const int word = marks.highlight.empty() ? captured.character.height : marks.highlight.front().height;
+				if ( lines.size() > 1 || ( word > 0 && all->height <= ( word * 8 ) / 5 ) )
+				{
+					marks.highlight = std::move( lines );
+				}
+			}
+		}
+		if ( translated && !marks.chosen )
+		{
+			marks.chosen = captured.character;
+		}
+		return marks;
+	}
+
+	void Daemon::translationDone( std::uint64_t ticket, Result<std::string> translation, std::chrono::microseconds took )
+	{
+		const std::scoped_lock lock( translating_mutex_ );
+		if ( ticket != translating_ticket_ || !translating_.has_value() )
+		{
+			return;
+		}
+		RenderRequest request = std::move( *translating_ );
+		translating_.reset();
+		if ( !request.shown || !current( request.generation, request.key ) )
+		{
+			return;
+		}
+		const std::optional<render::Translation>& waiting = request.shown->translation;
+		if ( !waiting.has_value() )
+		{
+			return;
+		}
+		render::Translation finished = *waiting;
+		if ( !translation )
+		{
+			finished.problem = std::format( "No translation: {}", translation.error().message );
+		}
+		else if ( translation->empty() )
+		{
+			finished.problem = "There is nothing to translate.";
+		}
+		else
+		{
+			finished.text = std::move( *translation );
+			stats_.recordTranslation( translating_language_ != nullptr ? translating_language_->code() : std::string_view(), utf8::length( finished.source ), took );
+		}
+		auto shown         = std::make_shared<Shown>( *request.shown );
+		shown->translation = std::move( finished );
+		request.shown      = std::move( shown );
+		render_requests_.post( std::move( request ) );
+	}
+
+	void Daemon::updateLoop( const std::stop_token& stop )
+	{
+		thread::setName( "lg-update" );
+		using namespace std::chrono_literals;
+		// Not while everything starts; then at most every six hours, when nobody has touched the keyboard or mouse for a
+		// few minutes (a game is not interrupted), or after a day of waiting for such a moment anyway.
+		constexpr auto first    = 10min;
+		constexpr auto interval = 6h;
+		constexpr auto idle     = 3min;
+		constexpr auto patience = 24h;
+		constexpr auto look     = 10min;
+
+		std::mutex                  mutex;
+		std::condition_variable_any sleeping;
+		const auto                  sleep = [&]( std::chrono::steady_clock::duration duration ) {
+			std::unique_lock lock( mutex );
+			return !sleeping.wait_for( lock, stop, duration, [] { return false; } ) && !stop.stop_requested();
+		};
+		auto last = std::chrono::steady_clock::now() - interval + first;
+		while ( sleep( look ) )
+		{
+			const auto now = std::chrono::steady_clock::now();
+			if ( now - last < interval )
+			{
+				continue;
+			}
+			const auto input = backend_ ? backend_->lastInput() : std::chrono::steady_clock::time_point{};
+			if ( now - input < idle && now - last < interval + patience )
+			{
+				continue;
+			}
+			last               = now;
+			const auto program = process::sibling( "lexiglance" );
+			if ( program.empty() )
+			{
+				log::debug( "update: no settings application beside the daemon to look for updates with" );
+				continue;
+			}
+			const std::array<std::string, 1> arguments{ "--background-update" };
+			log::info( "update: looking for a newer version ({})", program.string() );
+			if ( !process::startDetached( program, arguments ) )
+			{
+				log::warn( "update: cannot start {}", program.string() );
+			}
 		}
 	}
 
@@ -1066,7 +1600,7 @@ namespace lexiglance::daemon
 			std::shared_ptr<const render::PopupImage> image;
 			{
 				const BusyMark busy( render_busy_since_ );
-				image = renderer.render( request->shown->result, request->notes, visible );
+				image = renderer.render( request->shown->result, request->notes, visible, request->shown->translation ? &*request->shown->translation : nullptr );
 			}
 			log::debug( "render: {} terms in {} ms{}", request->shown->result.terms.size(), std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started ).count(), complete ? " (the rest)" : "" );
 			if ( !image )
@@ -1081,23 +1615,30 @@ namespace lexiglance::daemon
 			auto shown = request->shown;
 
 			const auto color = render::Color::parse( cfg->popup.highlight_color ).value_or( render::Color{ .r = 0.35, .g = 0.63, .b = 1.0, .a = 0.35 } );
-			backend_->post( [this, generation = request->generation, image = std::move( image ), shown = std::move( shown ), notes = request->notes, style, anchor = request->anchor, highlight = request->highlight, source = request->source, key = request->key, color, autoplay = cfg->audio.autoplay, whole] {
+			backend_->post( [this, generation = request->generation, image = std::move( image ), shown = std::move( shown ), notes = request->notes, style, anchor = request->anchor, highlight = request->highlight, source = request->source, key = request->key, chosen = request->chosen, keeps = request->keeps, color, autoplay = cfg->audio.autoplay, whole] {
 				if ( !current( generation, key ) )
 				{
 					return;
 				}
-				if ( highlight )
+				if ( !highlight.empty() )
 				{
-					backend_->showHighlight( *highlight, color );
+					backend_->showHighlight( highlight, color );
 				}
 				else
 				{
 					backend_->hideHighlight();
 				}
 				const bool first = shown_key_.load() != key;
+				// The sentence key has been answered: pressing it again asks afresh.
+				sentence_asked_ = {};
 				backend_->showPopup( { .image = image, .style = style, .anchor = anchor, .source = source } );
-				current_ = { .generation = generation, .shown = shown, .anchor = anchor, .highlight = highlight, .notes = notes, .source = source };
+				current_ = { .generation = generation, .shown = shown, .anchor = anchor, .highlight = highlight, .notes = notes, .source = source, .chosen = chosen, .keeps = keeps };
 				shown_key_.store( key );
+				// Turns of the wheel that came before the popup did.
+				if ( pending_wheel_ != 0 )
+				{
+					onAdjustLength( std::exchange( pending_wheel_, 0 ) );
+				}
 				// A popup of its own, not the fuller image of the one already up.
 				if ( first )
 				{
@@ -1450,6 +1991,43 @@ namespace lexiglance::daemon
 		} );
 
 		registerLookupHandlers();
+		registerTranslationHandlers();
+	}
+
+	void Daemon::registerTranslationHandlers()
+	{
+		ipc_.on( "translate", [this]( const json::Value& params ) -> Result<std::string> {
+			const std::string     text( params["text"].asString() );
+			const auto            cfg      = config();
+			const auto            code     = params["language"].asString();
+			const lang::Language* language = code.empty() ? lang::translationLanguage( text, lang::findLanguage( cfg->language ), lang::enabledLanguages( cfg->disabled_languages ) ) : lang::findLanguage( code );
+			if ( language == nullptr )
+			{
+				return code.empty() ? fail( "the text is in none of the languages that can be translated" ) : fail( "unknown language {}", code );
+			}
+			if ( code.empty() && !cfg->translation.translates( language->code() ) )
+			{
+				return fail( "translating {} is turned off (Translation page)", language->name() );
+			}
+			if ( auto problem = TranslationService::unavailable( *language ); !problem.empty() )
+			{
+				return fail( "{}", problem );
+			}
+			auto translated = translation_->translateNow( *language, text, std::chrono::seconds( 60 ) );
+			if ( !translated )
+			{
+				return std::unexpected( translated.error() );
+			}
+			json::Writer out;
+			out.beginObject().field( "language", language->code() ).field( "translation", *translated ).endObject();
+			return out.take();
+		} );
+
+		// Models downloaded or removed: loaded afresh when next needed.
+		ipc_.on( "translation.reload", [this]( const json::Value& ) -> Result<std::string> {
+			translation_->reload();
+			return std::string( "{}" );
+		} );
 	}
 
 	void Daemon::registerLookupHandlers()
@@ -1650,7 +2228,7 @@ namespace lexiglance::daemon
 			}
 			// Exactly what holding the trigger there does: capture, look up, highlight and show the popup.
 			const platform::Point point{ .x = static_cast<int>( params["x"].asInt() ), .y = static_cast<int>( params["y"].asInt() ) };
-			backend_->post( [this, point] { onScan( point, backend_->windowAt( point ) ); } );
+			backend_->post( [this, point] { onScan( point, backend_->windowAt( point ), false, false ); } );
 			return "{}";
 		} );
 

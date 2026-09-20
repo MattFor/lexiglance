@@ -25,15 +25,18 @@ add_executable(
     TestLanguageFiles.cpp
     TestOcr.cpp
     TestRussian.cpp
-    TestScripts.cpp)
+    TestScripts.cpp
+    TestTranslate.cpp
+    TestUninstall.cpp)
 add_dependencies(lexiglance_tests lexiglance_fixture)
 
 target_compile_definitions(
     lexiglance_tests PRIVATE LEXIGLANCE_TEST_DATA="${FIXTURE_DIR}"
                              LEXIGLANCE_TEST_ZIP="${FIXTURE_ZIP}")
 
-target_link_libraries(lexiglance_tests PRIVATE lexiglance::core lexiglance::ocr
-                                               lexiglance::options)
+target_link_libraries(
+    lexiglance_tests PRIVATE lexiglance::core lexiglance::ocr
+                             lexiglance::translate lexiglance::options)
 
 # Popup rendering and the daemon's Anki helpers, when the daemon is built.
 if(LEXIGLANCE_BUILD_DAEMON)
@@ -41,11 +44,15 @@ if(LEXIGLANCE_BUILD_DAEMON)
         lexiglance_tests
         PRIVATE TestRender.cpp
                 TestThemes.cpp
+                TestTranslationService.cpp
                 TestAnki.cpp
                 TestIpc.cpp
+                TestStatistics.cpp
                 ${PROJECT_SOURCE_DIR}/apps/daemon/Anki.cpp
                 ${PROJECT_SOURCE_DIR}/apps/daemon/Audio.cpp
-                ${PROJECT_SOURCE_DIR}/apps/daemon/IpcServer.cpp)
+                ${PROJECT_SOURCE_DIR}/apps/daemon/IpcServer.cpp
+                ${PROJECT_SOURCE_DIR}/apps/daemon/Stats.cpp
+                ${PROJECT_SOURCE_DIR}/apps/daemon/Translation.cpp)
     target_include_directories(lexiglance_tests
                                PRIVATE ${PROJECT_SOURCE_DIR}/apps/daemon)
     target_link_libraries(lexiglance_tests PRIVATE lexiglance::render

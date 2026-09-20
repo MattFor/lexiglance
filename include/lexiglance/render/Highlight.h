@@ -6,6 +6,7 @@
 #include <cairo.h>
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 // The mark over the text being looked up: its shapes, drawn the same way on screen, in window shapes and in previews.
@@ -56,6 +57,11 @@ namespace lexiglance::render
 	// The pixels the highlight covers in a width x height window, as an X bitmap (rows of bytes, least significant bit
 	// first): the window's shape where no compositor blends it.
 	[[nodiscard]] std::vector<std::uint8_t> highlightMask( int width, int height, const HighlightLook& look );
+
+	// A highlight in pieces, one for each line the text is on, in one window that spans them all: each piece is a box
+	// in the window, drawn as drawHighlight() draws a window of its size.
+	void                                    drawHighlight( cairo_t* cr, std::span<const Box> pieces, const HighlightLook& look, const Color& color );
+	[[nodiscard]] std::vector<std::uint8_t> highlightMask( int width, int height, std::span<const Box> pieces, const HighlightLook& look );
 
 	// Sample text with the highlight over its first word, on a light and on a dark background (for the settings), `width`
 	// device pixels wide (the popup's, so the two previews line up; 0: as wide as the text needs). `automatic` picks the

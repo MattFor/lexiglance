@@ -514,9 +514,10 @@ namespace lexiglance::render
 		class Builder
 		{
 		public:
-			Builder( const PopupRenderer::Impl& impl, const lookup::LookupResult& result, std::span<const NoteState> notes, int limit ) :
+			Builder( const PopupRenderer::Impl& impl, const lookup::LookupResult& result, std::span<const NoteState> notes, int limit, const Translation* translation ) :
 				impl_( &impl ),
 				notes_( notes ),
+				translation_( translation ),
 				style_( &impl.style ),
 				result_( &result ),
 				set_( result.dictionaries.get() ),
@@ -530,27 +531,40 @@ namespace lexiglance::render
 
 			std::shared_ptr<const PopupImage> build()
 			{
+				if ( translation_ != nullptr )
+				{
+					translated();
+				}
 				// A selection made with the wheel that no entry spans is shown as it is, so it can still be read and copied.
 				const bool selection = result_->selected > result_->matched_length;
 				if ( selection )
 				{
+					if ( translation_ != nullptr )
+					{
+						separator();
+					}
 					selected();
 				}
+				const bool above = selection || translation_ != nullptr;
 				// Regions include the separator above them, so every pixel between entries belongs to one.
 				for ( std::size_t i = 0; i < result_->terms.size() && y_ < limit_; ++i )
 				{
-					const int top = i == 0 && !selection ? 0 : static_cast<int>( y_ );
-					if ( i > 0 || selection )
+					const int top = i == 0 && !above ? 0 : static_cast<int>( y_ );
+					if ( i > 0 || above )
 					{
 						separator();
 					}
 					term( result_->terms[i], i );
 					regions_.push_back( { .top = top, .bottom = static_cast<int>( std::ceil( y_ ) ), .text = std::string( result_->terms[i].expression ) } );
 				}
-				if ( result_->terms.empty() && style_->show_kanji )
+				if ( result_->terms.empty() && style_->show_kanji && set_ != nullptr )
 				{
 					for ( const auto& entry : result_->kanji )
 					{
+						if ( &entry == &result_->kanji.front() && translation_ != nullptr )
+						{
+							separator();
+						}
 						const int top = static_cast<int>( y_ );
 						kanji( entry );
 						const auto& dictionary = *( *set_ )[entry.dictionary].dictionary;
@@ -571,6 +585,57 @@ namespace lexiglance::render
 				ops_.emplace_back( TextOp{ .layout = std::move( layout ), .x = x, .y = y, .color = color, .selectable = selectable } );
 			}
 
+			// Words with their furigana above, wrapped onto more lines as needed: a word with a reading stays whole, plain text
+			// breaks anywhere.
+			void rubyText( const std::vector<lang::RubySegment>& segments )
+			{
+				const int   ruby_height = PopupRenderer::Impl::size( impl_->layout( impl_->ruby.get(), "あ" ).get() ).second;
+				const Color ruby_color  = classic() ? theme().muted : theme().reading;
+				double      x           = padding_;
+				double      line        = y_;
+				int         height      = 0;
+				const auto  place       = [&]( const std::string& base_text, const std::string& reading_text ) {
+					auto base           = impl_->layout( impl_->headword.get(), base_text );
+					const auto [bw, bh] = PopupRenderer::Impl::size( base.get() );
+					LayoutPtr reading;
+					int       rw = 0;
+					if ( !reading_text.empty() )
+					{
+						reading = impl_->layout( impl_->ruby.get(), reading_text );
+						rw      = PopupRenderer::Impl::size( reading.get() ).first;
+					}
+					const int w = std::max( bw, rw );
+					// Closing punctuation never begins a line (、。」 stay with what they close).
+					const bool closing = std::string_view( "、。，．」』）)!?！？…‥" ).contains( base_text ) && reading_text.empty();
+					if ( x > padding_ && x + w > padding_ + content_width_ && !closing )
+					{
+						line += ruby_height + height;
+						x      = padding_;
+						height = 0;
+					}
+					if ( reading )
+					{
+						text( std::move( reading ), x + ( ( w - rw ) / 2.0 ), line, ruby_color, false );
+					}
+					text( std::move( base ), x + ( ( w - bw ) / 2.0 ), line + ruby_height, theme().text );
+					x += w;
+					height = std::max( height, bh );
+				};
+				for ( const lang::RubySegment& segment : segments )
+				{
+					if ( !segment.reading.empty() )
+					{
+						place( segment.text, segment.reading );
+						continue;
+					}
+					for ( const char32_t c : utf8::codepoints( segment.text ) )
+					{
+						place( utf8::fromUtf32( std::u32string( 1, c ) ), {} );
+					}
+				}
+				y_ = line + ruby_height + height;
+			}
+
 			void selected()
 			{
 				std::u32string characters;
@@ -584,15 +649,54 @@ namespace lexiglance::render
 				}
 				const std::string shown       = utf8::fromUtf32( characters );
 				const int         top         = 0;
-				auto              layout      = impl_->layout( impl_->headword.get(), shown, content_width_ );
-				const int         height      = PopupRenderer::Impl::size( layout.get() ).second;
 				auto              note        = impl_->layout( impl_->italic.get(), "No entry covers the whole selection", content_width_ );
 				const int         note_height = PopupRenderer::Impl::size( note.get() ).second;
-				text( std::move( layout ), padding_, y_, theme().text );
-				y_ += height;
+				const auto&       ruby        = result_->selected_ruby;
+				if ( style_->show_furigana && std::ranges::any_of( ruby, []( const lang::RubySegment& s ) { return !s.reading.empty(); } ) )
+				{
+					rubyText( ruby );
+				}
+				else
+				{
+					auto      layout = impl_->layout( impl_->headword.get(), shown, content_width_ );
+					const int height = PopupRenderer::Impl::size( layout.get() ).second;
+					text( std::move( layout ), padding_, y_, theme().text );
+					y_ += height;
+				}
 				text( std::move( note ), padding_, y_, theme().muted, false );
 				y_ += note_height;
-				regions_.push_back( { .top = top, .bottom = static_cast<int>( std::ceil( y_ ) ), .text = shown } );
+				regions_.push_back( { .top = top, .bottom = static_cast<int>( std::ceil( y_ ) ), .text = shown, .entry = false } );
+			}
+
+			// The translation, above the entries: a caption, then the translation (or that it is on its way, or why there is
+			// none). A click on it copies the translation.
+			void translated()
+			{
+				// First in the popup: its region takes the margin above it too, as the first entry's does.
+				const int         top     = 0;
+				const bool        pending = translation_->text.empty() && translation_->problem.empty();
+				const std::string caption = pending ? std::string( "Translating…" ) : std::string( "Translation" );
+				auto              label   = impl_->layout( impl_->italic.get(), caption, content_width_ );
+				const int         label_h = PopupRenderer::Impl::size( label.get() ).second;
+				text( std::move( label ), padding_, y_, theme().muted, false );
+				y_ += label_h + style_->px( 2 );
+				if ( !translation_->text.empty() )
+				{
+					auto      body   = impl_->layout( impl_->body.get(), translation_->text, content_width_ );
+					const int height = PopupRenderer::Impl::size( body.get() ).second;
+					text( std::move( body ), padding_, y_, theme().text );
+					y_ += height;
+				}
+				else
+				{
+					// The sentence itself meanwhile, so the popup already says what it is about.
+					const std::string& shown  = translation_->problem.empty() ? translation_->source : translation_->problem;
+					auto               body   = impl_->layout( impl_->body.get(), shown, content_width_ );
+					const int          height = PopupRenderer::Impl::size( body.get() ).second;
+					text( std::move( body ), padding_, y_, theme().muted, translation_->problem.empty() );
+					y_ += height;
+				}
+				regions_.push_back( { .top = top, .bottom = static_cast<int>( std::ceil( y_ ) ), .text = translation_->text.empty() ? translation_->source : translation_->text, .entry = false } );
 			}
 
 			[[nodiscard]] bool classic() const noexcept
@@ -1441,6 +1545,7 @@ namespace lexiglance::render
 
 			const PopupRenderer::Impl*      impl_;
 			std::span<const NoteState>      notes_;
+			const Translation*              translation_;
 			const PopupStyle*               style_;
 			const lookup::LookupResult*     result_;
 			const lookup::DictionarySet*    set_;
@@ -1476,13 +1581,14 @@ namespace lexiglance::render
 		return impl_->style;
 	}
 
-	std::shared_ptr<const PopupImage> PopupRenderer::render( const lookup::LookupResult& result, std::span<const NoteState> notes, int limit )
+	std::shared_ptr<const PopupImage> PopupRenderer::render( const lookup::LookupResult& result, std::span<const NoteState> notes, int limit, const Translation* translation )
 	{
-		if ( result.empty() || !result.dictionaries || ( result.terms.empty() && !impl_->style.show_kanji ) )
+		const bool entries = !result.empty() && result.dictionaries && ( !result.terms.empty() || impl_->style.show_kanji );
+		if ( !entries && translation == nullptr )
 		{
 			return nullptr;
 		}
-		Builder builder( *impl_, result, notes, limit );
+		Builder builder( *impl_, result, notes, limit, translation );
 		return builder.build();
 	}
 

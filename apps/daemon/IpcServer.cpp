@@ -169,6 +169,11 @@ namespace lexiglance::daemon
 		wake();
 	}
 
+	void IpcServer::flush()
+	{
+		deliver();
+	}
+
 	void IpcServer::wake() const
 	{
 #ifdef _WIN32

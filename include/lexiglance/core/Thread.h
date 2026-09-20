@@ -22,6 +22,8 @@ namespace lexiglance
 	namespace thread
 	{
 
+		// Names the calling thread in the log, and for the system (debuggers, top -H). The main thread keeps the process's
+		// own name on Linux and FreeBSD, where it is what ps, pgrep and process::othersNamed() go by.
 		void setName( std::string_view name ) noexcept;
 
 		// The name this thread was given, or empty when it has none. Every log line it writes carries it, so a log of

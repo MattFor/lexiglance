@@ -3,6 +3,8 @@
 
 #include "Common.h"
 #include "Downloader.h"
+#include "TranslationInstall.h"
+#include "UninstallOverlay.h"
 
 #include <lexiglance/core/Health.h>
 #include <lexiglance/core/Json.h>
@@ -17,6 +19,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <functional>
 #include <vector>
 
 namespace lexiglance::gui
@@ -36,6 +39,8 @@ namespace lexiglance::gui
 	private:
 		// Asks the daemon for its self-checks, or tells what can be told without it, and lists them. `interactive`: the
 		// user clicked for it.
+		// What the daemon reports while the page is open.
+		void                                            onDaemonEvent( std::string_view name, const json::Value& params );
 		void                                            checkHealth( bool interactive );
 		void                                            showChecks( const std::vector<health::Check>& checks );
 		[[nodiscard]] static std::vector<health::Check> localChecks();
@@ -44,6 +49,8 @@ namespace lexiglance::gui
 		void fixAll();
 		// Windows: Microsoft's runtime downloaded, installed, and the daemon started again on the new one.
 		void installRuntime();
+		// Downloads the translation models of the languages turned on, then runs `then`.
+		void downloadTranslation( std::function<void()> then );
 		void restart();
 		void finishRestart( bool ok, const QString& message );
 		void setTrigger( bool held );
@@ -65,10 +72,14 @@ namespace lexiglance::gui
 		QPushButton*  fix_all_;
 		QLabel*       health_summary_;
 		QProgressBar* health_progress_;
-		QCheckBox*    show_passed_;
-		QVBoxLayout*  health_rows_;
-		QLabel*       trigger_state_;
-		QLabel*       last_capture_;
+		// Created for the first translation download the health check asks for.
+		translation_install::Installer* translation_ = nullptr;
+		// The Uninstall card, made when it is first asked for.
+		UninstallOverlay* uninstall_ = nullptr;
+		QCheckBox*        show_passed_;
+		QVBoxLayout*      health_rows_;
+		QLabel*           trigger_state_;
+		QLabel*           last_capture_;
 		// The Health box and the area it scrolls in, so the capture tile can point the user at it.
 		QGroupBox*                 health_box_;
 		QScrollArea*               scroll_;

@@ -3,8 +3,10 @@
 #include "Common.h"
 #include "VcRedist.h"
 
+#include <lexiglance/core/Json.h>
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
+#include <lexiglance/core/Uninstall.h>
 #include <lexiglance/core/Version.h>
 
 #include <QApplication>
@@ -25,6 +27,7 @@
 #include <QVBoxLayout>
 
 #include <filesystem>
+#include <memory>
 #include <cstdint>
 #include <system_error>
 #include <utility>
@@ -60,7 +63,9 @@ namespace lexiglance::gui
 			{
 				return Kind::Deb;
 			}
-			return Kind::Other;
+			// Asked of rpm once.
+			static const bool rpm = uninstall::plan( uninstall::Places::current(), true ).kind == uninstall::Kind::Rpm;
+			return rpm ? Kind::Rpm : Kind::Other;
 #endif
 		}
 
@@ -77,6 +82,8 @@ namespace lexiglance::gui
 					return QStringLiteral( "lexiglance-x86_64.AppImage" );
 				case Kind::Deb:
 					return QStringLiteral( "lexiglance-amd64.deb" );
+				case Kind::Rpm:
+					return QStringLiteral( "lexiglance-x86_64.rpm" );
 				case Kind::Source:
 				case Kind::Other:
 					break;
@@ -96,6 +103,8 @@ namespace lexiglance::gui
 					return QStringLiteral( "The AppImage: an update replaces %1 and opens Lexiglance again." ).arg( qEnvironmentVariable( "APPIMAGE" ) );
 				case Kind::Deb:
 					return QStringLiteral( "Installed from the .deb package: an update installs the new package, which asks for your password." );
+				case Kind::Rpm:
+					return QStringLiteral( "Installed from the .rpm package: an update installs the new package, which asks for your password." );
 				case Kind::Source:
 					return QStringLiteral( "Built from source: update it with git pull and a rebuild." );
 				case Kind::Other:
@@ -104,7 +113,7 @@ namespace lexiglance::gui
 			return QStringLiteral( "This copy cannot replace itself: Download gets the newest build for this system." );
 		}
 
-		// Installing without asking: not the .deb, whose password prompt would come out of nowhere.
+		// Installing without asking: not the .deb or the .rpm, whose password prompt would come out of nowhere.
 		bool installsAutomatically( Kind kind )
 		{
 			return kind == Kind::WindowsSetup || kind == Kind::WindowsPortable || kind == Kind::AppImage;
@@ -149,7 +158,7 @@ namespace lexiglance::gui
 
 		// The portable update, run by Windows' PowerShell once this program has ended: this copy's programs end, the new
 		// .zip replaces its bin, lib and share (the old ones come back if that fails), and it starts again.
-		constexpr const char* portable_script = R"ps(param([string]$Zip, [string]$Target, [int]$Wait, [string]$Arguments)
+		constexpr const char* portable_script = R"ps(param([string]$Zip, [string]$Target, [int]$Wait, [string]$Program = 'lexiglance.exe', [string]$Arguments)
 $ErrorActionPreference = 'Stop'
 $log = Join-Path ([IO.Path]::GetTempPath()) 'lexiglance-update.log'
 $prefix = $Target.TrimEnd('\') + '\'
@@ -178,7 +187,7 @@ try {
 } catch {
     Add-Content -Path $log -Value "$(Get-Date): $_"
 }
-Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $Arguments
+if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -ArgumentList $Arguments } else { Start-Process -FilePath (Join-Path $Target "bin\$Program") }
 )ps";
 
 		void repolish( QWidget* widget )
@@ -189,14 +198,15 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 
 	} // namespace
 
-	UpdateGroup::UpdateGroup( QWidget* parent ) :
+	UpdateGroup::UpdateGroup( QWidget* parent, bool background ) :
 		QGroupBox( QStringLiteral( "Updates" ), parent ),
 		downloader_( new Downloader( this ) ),
 		status_( new QLabel() ),
 		note_( new QLabel() ),
 		update_( new QPushButton() ),
 		automatic_( new QCheckBox() ),
-		progress_( new QProgressBar() )
+		progress_( new QProgressBar() ),
+		background_( background )
 	{
 		const Kind kind   = installKind();
 		auto*      layout = new QVBoxLayout( this );
@@ -219,6 +229,21 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 		auto memory = applicationMemory();
 		automatic_->setChecked( memory.value( QStringLiteral( "update/automatic" ), true ).toBool() );
 		status_->setText( QStringLiteral( "This is Lexiglance %1." ).arg( qs( version ) ) );
+		if ( background_ )
+		{
+			// Only when updates are automatic, and only where they need no questions. What comes after an update (its
+			// message, Microsoft's runtime) waits for the window to open.
+			QTimer::singleShot( 0, this, [this] {
+				if ( !automatic_->isChecked() || !installsAutomatically( installKind() ) )
+				{
+					done();
+					return;
+				}
+				log::info( "update: looking for a newer version in the background" );
+				update( true );
+			} );
+			return;
+		}
 		// Started again by an update: it took.
 		if ( memory.value( QStringLiteral( "update/installing" ) ).toString() == qs( version ) )
 		{
@@ -263,35 +288,63 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 	void UpdateGroup::check( std::function<void()> then )
 	{
 		status_->setText( QStringLiteral( "Looking for a newer version..." ) );
-		downloader_->resolve( QUrl( qs( project_url ) + QStringLiteral( "/releases/latest" ) ), [this, then = std::move( then )]( const QUrl& url, const QString& error ) {
+		auto       found = std::make_shared<std::function<void()>>( std::move( then ) );
+		const auto take  = [this, found]( const QString& tag ) {
+			latest_  = tag.startsWith( 'v' ) ? tag.mid( 1 ) : tag;
+			checked_ = QTime::currentTime().toString( QStringLiteral( "HH:mm" ) );
+			showState();
+			if ( *found )
+			{
+				( *found )();
+			}
+		};
+		downloader_->resolve( QUrl( qs( project_url ) + QStringLiteral( "/releases/latest" ) ), [this, take]( const QUrl& url, const QString& error ) {
 			// It leads to the newest release's page, .../releases/tag/v1.0.2.
 			const QString path = url.path();
-			if ( !error.isEmpty() || !path.contains( QStringLiteral( "/releases/tag/" ) ) )
+			if ( error.isEmpty() && path.contains( QStringLiteral( "/releases/tag/" ) ) && !path.section( '/', -1 ).isEmpty() )
 			{
-				fail( QStringLiteral( "Cannot find the newest version: %1" ).arg( error.isEmpty() ? QStringLiteral( "no release is published" ) : error ) );
+				take( path.section( '/', -1 ) );
 				return;
 			}
-			const QString tag = path.section( '/', -1 );
-			latest_           = tag.startsWith( 'v' ) ? tag.mid( 1 ) : tag;
-			checked_          = QTime::currentTime().toString( QStringLiteral( "HH:mm" ) );
-			showState();
-			if ( then )
-			{
-				then();
-			}
+			// A proxy or a changed page in the way: GitHub's API says the same.
+			log::info( "update: the release page gave no version ({}); asking GitHub's API", ss( error.isEmpty() ? url.toString() : error ) );
+			const QString api = qs( project_url ).replace( QStringLiteral( "https://github.com/" ), QStringLiteral( "https://api.github.com/repos/" ) ) + QStringLiteral( "/releases/latest" );
+			downloader_->fetch( QUrl( api ), [this, take, error]( const QByteArray& answer, const QString& api_error ) {
+				auto          document = json::Document::parse( answer.toStdString() );
+				const QString tag      = document ? qs( document->root()["tag_name"].asString() ) : QString();
+				if ( !api_error.isEmpty() || tag.isEmpty() )
+				{
+					fail( QStringLiteral( "Cannot find the newest version: %1" ).arg( !error.isEmpty() ? error : !api_error.isEmpty() ? api_error
+					                                                                                                                  : QStringLiteral( "no release is published" ) ) );
+					return;
+				}
+				take( tag );
+			} );
 		} );
 	}
 
 	void UpdateGroup::update( bool automatic )
 	{
 		const Kind kind = installKind();
-		if ( kind == Kind::Other )
+		if ( kind == Kind::Other && !background_ )
 		{
 			QDesktopServices::openUrl( downloadPage() );
 			return;
 		}
 		if ( assetName( kind ).isEmpty() || busy_ )
 		{
+			done();
+			return;
+		}
+		// One update at a time, whichever copy of this program runs it (the window and a background one, say).
+		QDir().mkpath( updateDirectory() );
+		lock_ = std::make_unique<QLockFile>( updateDirectory() + QStringLiteral( "/update.lock" ) );
+		lock_->setStaleLockTime( 2 * 60 * 60 * 1000 );
+		if ( !lock_->tryLock( 0 ) )
+		{
+			lock_.reset();
+			status_->setText( QStringLiteral( "Another update is running already." ) );
+			done();
 			return;
 		}
 		setBusy( true );
@@ -304,8 +357,11 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 				if ( !olderVersion( qs( version ), latest_ ) || tried_before )
 				{
 					setBusy( false );
+					lock_.reset();
+					done();
 					return;
 				}
+				log::info( "update: installing Lexiglance {} over {}", ss( latest_ ), version );
 			}
 			download( kind );
 		} );
@@ -364,14 +420,22 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 		switch ( kind )
 		{
 			case Kind::WindowsSetup:
-				// The setup ends this program and its daemon, installs without a window and opens the new version.
-				if ( !QProcess::startDetached( file, { QStringLiteral( "/S" ), tray ? QStringLiteral( "/relaunch=tray" ) : QStringLiteral( "/relaunch=window" ) } ) )
+			{
+				// The setup ends this program and its daemon, installs without a window and opens the new version: as
+				// this one ran, or only the daemon after an update in the background.
+				QString relaunch = tray ? QStringLiteral( "/relaunch=tray" ) : QStringLiteral( "/relaunch=window" );
+				if ( background_ )
+				{
+					relaunch = QStringLiteral( "/relaunch=daemon" );
+				}
+				if ( !QProcess::startDetached( file, { QStringLiteral( "/S" ), relaunch } ) )
 				{
 					fail( QStringLiteral( "Update failed: cannot start %1" ).arg( file ) );
 					return;
 				}
 				QApplication::quit();
 				return;
+			}
 
 			case Kind::WindowsPortable:
 			{
@@ -385,7 +449,7 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 				out.close();
 				const QString powershell = qEnvironmentVariable( "SystemRoot", QStringLiteral( "C:\\Windows" ) ) + QStringLiteral( "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" );
 				const QString root       = QDir( QCoreApplication::applicationDirPath() + QStringLiteral( "/.." ) ).absolutePath();
-				if ( !QProcess::startDetached( powershell, { QStringLiteral( "-NoProfile" ), QStringLiteral( "-ExecutionPolicy" ), QStringLiteral( "Bypass" ), QStringLiteral( "-WindowStyle" ), QStringLiteral( "Hidden" ), QStringLiteral( "-File" ), QDir::toNativeSeparators( script ), QStringLiteral( "-Zip" ), QDir::toNativeSeparators( file ), QStringLiteral( "-Target" ), QDir::toNativeSeparators( root ), QStringLiteral( "-Wait" ), QString::number( QCoreApplication::applicationPid() ), QStringLiteral( "-Arguments" ), arguments.join( ' ' ) } ) )
+				if ( !QProcess::startDetached( powershell, { QStringLiteral( "-NoProfile" ), QStringLiteral( "-ExecutionPolicy" ), QStringLiteral( "Bypass" ), QStringLiteral( "-WindowStyle" ), QStringLiteral( "Hidden" ), QStringLiteral( "-File" ), QDir::toNativeSeparators( script ), QStringLiteral( "-Zip" ), QDir::toNativeSeparators( file ), QStringLiteral( "-Target" ), QDir::toNativeSeparators( root ), QStringLiteral( "-Wait" ), QString::number( QCoreApplication::applicationPid() ), QStringLiteral( "-Program" ), background_ ? QStringLiteral( "lexiglanced.exe" ) : QStringLiteral( "lexiglance.exe" ), QStringLiteral( "-Arguments" ), background_ ? QString() : arguments.join( ' ' ) } ) )
 				{
 					fail( QStringLiteral( "Update failed: cannot start PowerShell" ) );
 					return;
@@ -407,33 +471,40 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 					fail( QStringLiteral( "Update failed: cannot replace %1 (%2)" ).arg( appimage, qs( ec.message() ) ) );
 					return;
 				}
-				QProcess::startDetached( appimage, arguments );
+				// After an update in the background only the daemon, in place of the one still running from the old file.
+				QProcess::startDetached( appimage, background_ ? QStringList{ QStringLiteral( "--daemon" ), QStringLiteral( "--replace" ) } : arguments );
 				QApplication::quit();
 				return;
 			}
 
 			case Kind::Deb:
+			case Kind::Rpm:
 			{
+				const bool    deb    = kind == Kind::Deb;
+				const QString tool   = deb ? QStringLiteral( "apt-get" ) : QStringLiteral( "rpm" );
 				const QString pkexec = QStandardPaths::findExecutable( QStringLiteral( "pkexec" ) );
 				if ( pkexec.isEmpty() )
 				{
-					fail( QStringLiteral( "Update failed: installing needs pkexec. Install %1 with apt instead." ).arg( file ) );
+					fail( QStringLiteral( "Update failed: installing needs pkexec. Install %1 with %2 instead." ).arg( file, tool ) );
 					return;
 				}
-				auto* apt = new QProcess( this );
-				connect( apt, &QProcess::finished, this, [this, apt, arguments]( int code, QProcess::ExitStatus status ) {
-					apt->deleteLater();
+				auto* installer = new QProcess( this );
+				connect( installer, &QProcess::finished, this, [this, installer, arguments, tool]( int code, QProcess::ExitStatus status ) {
+					installer->deleteLater();
 					if ( status != QProcess::NormalExit || code != 0 )
 					{
 						// pkexec: 126 when the password dialog was dismissed, 127 when it was wrong.
-						const QString output = QString::fromLocal8Bit( apt->readAllStandardError() ).trimmed().section( '\n', -1 );
-						fail( code == 126 || code == 127 ? QStringLiteral( "Update cancelled: the password was not given." ) : QStringLiteral( "Update failed: apt-get: %1" ).arg( output ) );
+						const QString output = QString::fromLocal8Bit( installer->readAllStandardError() ).trimmed().section( '\n', -1 );
+						fail( code == 126 || code == 127 ? QStringLiteral( "Update cancelled: the password was not given." ) : QStringLiteral( "Update failed: %1: %2" ).arg( tool, output ) );
 						return;
 					}
 					QProcess::startDetached( QCoreApplication::applicationFilePath(), arguments );
 					QApplication::quit();
 				} );
-				apt->start( pkexec, { QStringLiteral( "apt-get" ), QStringLiteral( "install" ), QStringLiteral( "--reinstall" ), QStringLiteral( "--allow-downgrades" ), QStringLiteral( "-y" ), file } );
+				// The same version again, or an older one, goes in as well (Update installs the newest even when it is this).
+				const QStringList command = deb ? QStringList{ tool, QStringLiteral( "install" ), QStringLiteral( "--reinstall" ), QStringLiteral( "--allow-downgrades" ), QStringLiteral( "-y" ), file }
+				                                : QStringList{ tool, QStringLiteral( "--upgrade" ), QStringLiteral( "--replacepkgs" ), QStringLiteral( "--oldpackage" ), file };
+				installer->start( pkexec, command );
 				return;
 			}
 
@@ -499,9 +570,20 @@ Start-Process -FilePath (Join-Path $Target 'bin\lexiglance.exe') -ArgumentList $
 
 	void UpdateGroup::fail( const QString& message )
 	{
+		log::warn( "update: {}", ss( message ) );
 		status_->setText( message );
 		progress_->hide();
 		setBusy( false );
+		lock_.reset();
+		done();
+	}
+
+	void UpdateGroup::done() const
+	{
+		if ( background_ )
+		{
+			QApplication::quit();
+		}
 	}
 
 	void UpdateGroup::setBusy( bool busy )

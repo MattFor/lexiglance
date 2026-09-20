@@ -22,6 +22,8 @@ namespace lexiglance::platform
 		Rect        box;
 		int         line       = 0;
 		float       confidence = 0.0F;
+		// The first symbol of a word: in languages written with spaces, a space comes before it.
+		bool word = false;
 	};
 
 	// libtesseract, loaded at runtime through its C API: no build dependency, and OCR is simply unavailable when the

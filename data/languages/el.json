@@ -27,11 +27,18 @@
         "Ώ": "Ω"
     },
     "sample_text": "Ξεσκεπάζω την ψυχοφθόρα βδελυγμία",
+    "example_sentence": "Χθες διάβασα ένα βιβλίο με έναν φίλο στη βιβλιοθήκη.",
     "sample_words": ["σπίτι", "νερό"],
     "commons_prefix": "El",
     "ocr": {
         "paddle": "PP-OCRv5/rec/el_PP-OCRv5_rec_mobile.onnx",
         "tesseract": "ell"
+    },
+    "translation": {
+        "model": "Xenova/opus-mt-mul-en",
+        "revision": "72a05e47cee89c718a9db4dc70d02fef3bc39de8",
+        "size": 118351148,
+        "full_size": 448469370
     },
     "dictionaries": [
         {

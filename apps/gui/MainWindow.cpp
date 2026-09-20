@@ -9,7 +9,9 @@
 #include "SearchPage.h"
 #include "SetupWizard.h"
 #include "StatisticsPage.h"
+#include "TranslationPage.h"
 
+#include <lexiglance/config/Keys.h>
 #include <lexiglance/core/Version.h>
 
 #include <QEvent>
@@ -52,6 +54,9 @@ QPushButton:hover { border-color: %8; }
 QPushButton:pressed { background: %3; }
 QPushButton:disabled { color: %6; }
 QPushButton[primary="true"] { background: %8; border-color: %8; color: #ffffff; }
+QPushButton[primary="true"]:disabled { background: %4; border-color: %3; color: %6; }
+QPushButton[pill="true"] { border-radius: 10px; padding: 3px 12px; }
+QPushButton[pill="true"]:checked { background: %8; border-color: %8; color: #ffffff; }
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextBrowser, QTreeWidget, QTableWidget { background: %2; border: 1px solid %3; border-radius: 6px; padding: 3px 6px; selection-background-color: %8; }
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus { border-color: %8; }
 QHeaderView::section { background: %1; border: none; border-bottom: 1px solid %3; padding: 4px 6px; color: %6; }
@@ -190,6 +195,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		addPage( new OverviewPage( context ), QStringLiteral( "Overview" ), QStringLiteral( "dialog-information" ) );
 		addPage( new DictionariesPage( context ), QStringLiteral( "Dictionaries" ), QStringLiteral( "accessories-dictionary" ) );
 		addPage( new ScanningPage( context ), QStringLiteral( "Scanning" ), QStringLiteral( "input-keyboard" ) );
+		addPage( new TranslationPage( context ), QStringLiteral( "Translation" ), QStringLiteral( "preferences-desktop-locale" ) );
 		addPage( new AppearancePage( context ), QStringLiteral( "Appearance" ), QStringLiteral( "preferences-desktop-theme" ) );
 		addPage( new SearchPage( context ), QStringLiteral( "Search" ), QStringLiteral( "edit-find" ) );
 		addPage( new AnkiPage( context ), QStringLiteral( "Anki" ), QStringLiteral( "document-send" ) );
@@ -291,7 +297,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 			return;
 		}
 		// In the order they were added above, which is the order of the sidebar.
-		static const QStringList pages{ QStringLiteral( "overview" ), QStringLiteral( "dictionaries" ), QStringLiteral( "scanning" ), QStringLiteral( "appearance" ), QStringLiteral( "search" ), QStringLiteral( "anki" ), QStringLiteral( "statistics" ), QStringLiteral( "about" ) };
+		static const QStringList pages{ QStringLiteral( "overview" ), QStringLiteral( "dictionaries" ), QStringLiteral( "scanning" ), QStringLiteral( "translation" ), QStringLiteral( "appearance" ), QStringLiteral( "search" ), QStringLiteral( "anki" ), QStringLiteral( "statistics" ), QStringLiteral( "about" ) };
 		if ( const auto index = pages.indexOf( name.toLower() ); index >= 0 )
 		{
 			navigation_->setCurrentRow( static_cast<int>( index ) );
@@ -322,7 +328,8 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 					this
 			);
 		}
-		help_->open( chordText( settings_->config().scan.trigger ), first );
+		const auto& translation = settings_->config().translation;
+		help_->open( chordText( settings_->config().scan.trigger ), translation.enabled && !translation.sentence_key.empty() ? qs( config::displayName( translation.sentence_key ) ) : QString(), first );
 	}
 
 	void MainWindow::showSetup( int lock_seconds, bool reinstall, bool required )

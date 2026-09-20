@@ -22,6 +22,7 @@ namespace lexiglance::platform
 
 		// TessPageIteratorLevel and TessPageSegMode values from tesseract/capi.h.
 		constexpr int level_textline            = 2;
+		constexpr int level_word                = 3;
 		constexpr int level_symbol              = 4;
 		constexpr int psm_single_block          = 6;
 		constexpr int psm_single_block_vertical = 5;
@@ -226,7 +227,8 @@ namespace lexiglance::platform
 			{
 				++line;
 			}
-			char* text = f.iterator_text( iterator, level_symbol );
+			const bool word = f.page_at_beginning( page, level_word ) != 0;
+			char*      text = f.iterator_text( iterator, level_symbol );
 			if ( text == nullptr )
 			{
 				continue;
@@ -239,6 +241,7 @@ namespace lexiglance::platform
 						.box        = { .x = box[0], .y = box[1], .width = box[2] - box[0], .height = box[3] - box[1] },
 						.line       = std::max( line, 0 ),
 						.confidence = f.iterator_confidence( iterator, level_symbol ),
+						.word       = word,
 				} );
 			}
 			f.delete_text( text );
