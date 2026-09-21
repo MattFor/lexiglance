@@ -163,11 +163,15 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		setWindowIcon( QIcon::fromTheme( QStringLiteral( "lexiglance" ), own ) );
 		resize( 1080, 720 );
 
+		// Always, as it also brings in the bundled icons (the release AppImage is built with Qt 6.4, which cannot tell the
+		// desktop's colour scheme: light until the daemon says otherwise).
+		bool dark = false;
 #if QT_VERSION >= QT_VERSION_CHECK( 6, 5, 0 )
 		const auto scheme    = QGuiApplication::styleHints()->colorScheme();
 		palette_from_daemon_ = scheme == Qt::ColorScheme::Unknown;
-		applyPalette( scheme == Qt::ColorScheme::Dark );
+		dark                 = scheme == Qt::ColorScheme::Dark;
 #endif
+		applyPalette( dark );
 
 		navigation_->setObjectName( QStringLiteral( "navigation" ) );
 		navigation_->setIconSize( QSize( 20, 20 ) );
