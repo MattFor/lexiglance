@@ -47,13 +47,15 @@ namespace lexiglance::gui
 
 	} // namespace
 
-	HelpOverlay::HelpOverlay( std::function<void( const QString& )> show_page, std::function<void()> simulate_setup, QWidget* parent ) :
+	HelpOverlay::HelpOverlay( std::function<void( const QString& )> show_page, std::function<void()> simulate_setup, std::function<void()> simulate_update, QWidget* parent ) :
 		CardOverlay( 660, parent ),
 		show_page_( std::move( show_page ) ),
 		simulate_setup_( std::move( simulate_setup ) ),
+		simulate_update_( std::move( simulate_update ) ),
 		text_( new QLabel() ),
 		close_( new QPushButton( QStringLiteral( "Got it" ) ) ),
-		simulate_( new QPushButton( QStringLiteral( "Simulate first-run setup" ) ) )
+		simulate_( new QPushButton( QStringLiteral( "Simulate first-run setup" ) ) ),
+		simulate_update_button_( new QPushButton( QStringLiteral( "Simulate update" ) ) )
 	{
 		auto* layout = new QVBoxLayout( card() );
 		layout->setContentsMargins( 26, 20, 26, 18 );
@@ -72,6 +74,9 @@ namespace lexiglance::gui
 		simulate_->setToolTip( QStringLiteral( "Opens the Welcome setup wizard as on a first start (dev builds only)." ) );
 		simulate_->setVisible( lexiglance::channel != "stable" && static_cast<bool>( simulate_setup_ ) );
 		footer->addWidget( simulate_ );
+		simulate_update_button_->setToolTip( QStringLiteral( "Shows what changed in this version, as after an update (dev builds only)." ) );
+		simulate_update_button_->setVisible( lexiglance::channel != "stable" && static_cast<bool>( simulate_update_ ) );
+		footer->addWidget( simulate_update_button_ );
 		footer->addStretch( 1 );
 		close_->setProperty( "primary", true );
 		footer->addWidget( close_ );
@@ -83,6 +88,13 @@ namespace lexiglance::gui
 			if ( simulate_setup_ )
 			{
 				simulate_setup_();
+			}
+		} );
+		connect( simulate_update_button_, &QPushButton::clicked, this, [this] {
+			hide();
+			if ( simulate_update_ )
+			{
+				simulate_update_();
 			}
 		} );
 		connect( text_, &QLabel::linkActivated, this, [this]( const QString& page ) {

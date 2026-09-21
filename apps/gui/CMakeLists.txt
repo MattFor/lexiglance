@@ -7,6 +7,7 @@ add_executable(
     AnkiPage.cpp
     AppearancePage.cpp
     CardOverlay.cpp
+    ChangesOverlay.cpp
     Common.cpp
     DaemonClient.cpp
     DesktopEntry.cpp

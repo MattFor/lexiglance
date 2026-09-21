@@ -29,6 +29,13 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#ifdef _WIN32
+	#ifndef NOMINMAX
+		#define NOMINMAX
+	#endif
+	#include <windows.h>
+#endif
+
 namespace lexiglance::gui
 {
 
@@ -280,12 +287,57 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		navigation_->addItem( item );
 	}
 
+	namespace
+	{
+
+		// Windows gives the foreground only to the program last used: one the setup started (after an update, or on the
+		// first start after installing) would only flash in the taskbar. Sharing the input of the window in front for a
+		// moment lifts that.
+		void bringToFront( QWidget* window )
+		{
+#ifdef _WIN32
+			const auto  target = reinterpret_cast<HWND>( window->winId() );
+			const HWND  front  = GetForegroundWindow();
+			const DWORD theirs = front != nullptr ? GetWindowThreadProcessId( front, nullptr ) : 0;
+			const DWORD ours   = GetCurrentThreadId();
+			const bool  joined = theirs != 0 && theirs != ours && AttachThreadInput( theirs, ours, TRUE ) != 0;
+			BringWindowToTop( target );
+			SetForegroundWindow( target );
+			if ( joined )
+			{
+				AttachThreadInput( theirs, ours, FALSE );
+			}
+#else
+			( void )window;
+#endif
+		}
+
+	} // namespace
+
 	void MainWindow::present()
 	{
 		show();
 		setWindowState( ( windowState() & ~Qt::WindowMinimized ) | Qt::WindowActive );
 		raise();
 		activateWindow();
+		// Back from an update (UpdateGroup notes it): what changed, once, the first time the window is shown after it.
+		auto memory = applicationMemory();
+		if ( const QString updated = memory.value( QStringLiteral( "update/changes" ) ).toString(); !updated.isEmpty() )
+		{
+			memory.remove( QStringLiteral( "update/changes" ) );
+			bringToFront( this );
+			// After what opens with the window (the setup wizard after an update), so it is what is seen first.
+			QTimer::singleShot( 0, this, [this, updated] { showChanges( updated ); } );
+		}
+	}
+
+	void MainWindow::showChanges( const QString& version )
+	{
+		if ( changes_ == nullptr )
+		{
+			changes_ = new ChangesOverlay( this );
+		}
+		changes_->open( version );
 	}
 
 	void MainWindow::showPage( const QString& name )
@@ -325,6 +377,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 			help_ = new HelpOverlay(
 					[this]( const QString& page ) { showPage( page ); },
 					[this] { showSetup( 0, true ); },
+					[this] { showChanges( qs( version ) ); },
 					this
 			);
 		}
@@ -362,6 +415,8 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		if ( !setup_done || after_update )
 		{
 			showSetup( 5, false, !setup_done );
+			// Opened by the setup that just installed it: in front, not flashing in the taskbar.
+			bringToFront( this );
 			return;
 		}
 	}

@@ -69,6 +69,29 @@ namespace lexiglance::gui
 #endif
 		}
 
+		// Dev builds from a build tree can put the released build in their place, to try an update and what follows it.
+		bool devBuild( Kind kind )
+		{
+			return kind == Kind::Source && channel != "stable";
+		}
+
+		// What a dev build installs for Install release: the build a release makes for this system.
+		Kind releaseKind()
+		{
+#ifdef Q_OS_WIN
+			return Kind::WindowsSetup;
+#else
+			return QSysInfo::kernelType() == QStringLiteral( "linux" ) && QSysInfo::currentCpuArchitecture() == QStringLiteral( "x86_64" ) ? Kind::AppImage : Kind::Other;
+#endif
+		}
+
+		// The AppImage running, or where a dev build puts the one it installs.
+		QString appImagePath()
+		{
+			const QString running = qEnvironmentVariable( "APPIMAGE" );
+			return running.isEmpty() ? QStandardPaths::writableLocation( QStandardPaths::HomeLocation ) + QStringLiteral( "/Applications/lexiglance-x86_64.AppImage" ) : running;
+		}
+
 		// The release file this copy updates from; empty when it cannot replace itself.
 		QString assetName( Kind kind )
 		{
@@ -106,7 +129,8 @@ namespace lexiglance::gui
 				case Kind::Rpm:
 					return QStringLiteral( "Installed from the .rpm package: an update installs the new package, which asks for your password." );
 				case Kind::Source:
-					return QStringLiteral( "Built from source: update it with git pull and a rebuild." );
+					return channel != "stable" ? QStringLiteral( "Built from source: update it with git pull and a rebuild, or Install release puts the newest release in its place." )
+					                           : QStringLiteral( "Built from source: update it with git pull and a rebuild." );
 				case Kind::Other:
 					break;
 			}
@@ -252,6 +276,8 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 			status_->setText( QStringLiteral( "Updated to Lexiglance %1." ).arg( qs( version ) ) );
 			// Offer language / OCR setup again after an update (dictionaries already installed are skipped).
 			memory.setValue( QStringLiteral( "setup/after_update" ), true );
+			// And what changed, when the window is next shown.
+			memory.setValue( QStringLiteral( "update/changes" ), qs( version ) );
 			ensureVcRedist();
 		}
 		showState();
@@ -325,7 +351,12 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 
 	void UpdateGroup::update( bool automatic )
 	{
-		const Kind kind = installKind();
+		Kind kind = installKind();
+		// Only when asked: a dev build is never replaced in the background.
+		if ( devBuild( kind ) && !background_ )
+		{
+			kind = releaseKind();
+		}
 		if ( kind == Kind::Other && !background_ )
 		{
 			QDesktopServices::openUrl( downloadPage() );
@@ -372,7 +403,8 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 		const QString name = assetName( kind );
 		const QString base = qs( project_url ) + QStringLiteral( "/releases/download/v%1/" ).arg( latest_ );
 		// Next to the AppImage, to replace it in one step; elsewhere with the other downloads.
-		const QString target = kind == Kind::AppImage ? qEnvironmentVariable( "APPIMAGE" ) + QStringLiteral( ".update" ) : updateDirectory() + "/" + name;
+		const QString target = kind == Kind::AppImage ? appImagePath() + QStringLiteral( ".update" ) : updateDirectory() + "/" + name;
+		QDir().mkpath( QFileInfo( target ).absolutePath() );
 		status_->setText( QStringLiteral( "Downloading %1..." ).arg( name ) );
 		downloader_->fetch( QUrl( base + QStringLiteral( "SHA256SUMS" ) ), [this, kind, name, base, target]( const QByteArray& sums, const QString& error ) {
 			const QByteArray expected = listedChecksum( sums, name );
@@ -460,7 +492,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 
 			case Kind::AppImage:
 			{
-				const QString appimage = qEnvironmentVariable( "APPIMAGE" );
+				const QString appimage = appImagePath();
 				QFile::setPermissions( file, QFile::permissions( appimage ) | QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner );
 				// One step: the running AppImage keeps its old file until it ends.
 				std::error_code ec;
@@ -470,6 +502,11 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 					QFile::remove( file );
 					fail( QStringLiteral( "Update failed: cannot replace %1 (%2)" ).arg( appimage, qs( ec.message() ) ) );
 					return;
+				}
+				// A dev build's daemon gives way to the AppImage's as well.
+				if ( qEnvironmentVariableIsEmpty( "APPIMAGE" ) && !background_ )
+				{
+					QProcess::startDetached( appimage, { QStringLiteral( "--daemon" ), QStringLiteral( "--replace" ) } );
 				}
 				// After an update in the background only the daemon, in place of the one still running from the old file.
 				QProcess::startDetached( appimage, background_ ? QStringList{ QStringLiteral( "--daemon" ), QStringLiteral( "--replace" ) } : arguments );
@@ -537,7 +574,15 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 			}
 		}
 
-		update_->setVisible( kind != Kind::Source );
+		update_->setVisible( kind != Kind::Source || devBuild( kind ) );
+		if ( devBuild( kind ) )
+		{
+			update_->setText( latest_.isEmpty() ? QStringLiteral( "Install release" ) : QStringLiteral( "Install release %1" ).arg( latest_ ) );
+			update_->setToolTip( QStringLiteral( "Dev build: downloads the newest release for this system and installs it in place of this build" ) );
+			update_->setProperty( "primary", false );
+			repolish( update_ );
+			return;
+		}
 		if ( kind == Kind::Other )
 		{
 			update_->setText( QStringLiteral( "Download the latest" ) );

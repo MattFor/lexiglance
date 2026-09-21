@@ -259,7 +259,9 @@ namespace
 			{
 				window.search( requested.mid( 5 ) );
 			}
-			else
+			// A copy that only looked whether this window is open (--background-update, or --updated waiting for this
+			// one to end) sends nothing: that is not a request to come to the front.
+			else if ( !requested.isEmpty() )
 			{
 				window.showPage( requested.mid( 5 ).trimmed() );
 			}

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.2] - 10:50 CEST 2026-09-21
+
+Quick hotfix to resolve focus issues.
+
+- The settings window no longer jumps to the front every six hours when the update check runs.
+
 ## [1.3.1] - 10:15 CEST 2026-09-21
 
 - Manual colour picking no longer obscures text (Windows)

@@ -12,11 +12,11 @@ namespace lexiglance::gui
 {
 
 	// What can be done and where, on a rounded card over the window, which dims behind it. The pages it names are links
-	// to them. Escape, a click beside the card or its button closes it. Dev builds can open the first-run setup again.
+	// to them. Escape, a click beside the card or its button closes it. Dev builds can open the first-run setup, or what follows an update, again.
 	class HelpOverlay final : public CardOverlay
 	{
 	public:
-		HelpOverlay( std::function<void( const QString& )> show_page, std::function<void()> simulate_setup, QWidget* parent );
+		HelpOverlay( std::function<void( const QString& )> show_page, std::function<void()> simulate_setup, std::function<void()> simulate_update, QWidget* parent );
 
 		// Covers the parent; `trigger` is the trigger's keys as shown to the user, `sentence` the sentence key (empty when
 		// there is none), `first` the first start's showing.
@@ -25,9 +25,11 @@ namespace lexiglance::gui
 	private:
 		std::function<void( const QString& )> show_page_;
 		std::function<void()>                 simulate_setup_;
+		std::function<void()>                 simulate_update_;
 		QLabel*                               text_;
 		QPushButton*                          close_;
 		QPushButton*                          simulate_;
+		QPushButton*                          simulate_update_button_;
 	};
 
 } // namespace lexiglance::gui

@@ -8,5 +8,6 @@
         <file alias="down@2x.png">resources/down@2x.png</file>
         <file alias="lexiglance.svg">../../data/icons/lexiglance.svg</file>
         <file alias="lexiglance.png">../../data/windows/lexiglance.png</file>
+        <file alias="CHANGELOG.md">../../CHANGELOG.md</file>
     </qresource>
 </RCC>

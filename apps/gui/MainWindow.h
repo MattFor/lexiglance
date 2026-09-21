@@ -3,6 +3,7 @@
 
 #include "Common.h"
 #include "DaemonClient.h"
+#include "ChangesOverlay.h"
 #include "HelpOverlay.h"
 #include "Settings.h"
 #include "SetupWizard.h"
@@ -35,6 +36,9 @@ namespace lexiglance::gui
 		// What can be done and where, over the window; `first` on the first start.
 		void showHelp( bool first = false );
 
+		// What changed in `version`, over the window: once after an update, or from Help in dev builds.
+		void showChanges( const QString& version );
+
 		// First-run / post-update setup wizard. `lock_seconds` 0 when simulating from Help.
 		// `required`: first-run — the wizard cannot be skipped.
 		void showSetup( int lock_seconds = 5, bool reinstall = false, bool required = false );
@@ -60,6 +64,7 @@ namespace lexiglance::gui
 		int                       tray_tries_   = 0;
 		QAction*                  pause_action_ = nullptr;
 		HelpOverlay*              help_         = nullptr;
+		ChangesOverlay*           changes_      = nullptr;
 		SetupWizard*              setup_        = nullptr;
 		QLabel*                   connection_;
 		QLabel*                   summary_;
