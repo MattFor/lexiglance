@@ -51,6 +51,11 @@ namespace lexiglance::render
 	// The rows an underline takes below the text box; 0 for the shapes drawn around it.
 	[[nodiscard]] int highlightDepth( const HighlightLook& look ) noexcept;
 
+	// A colour chosen by hand, ready to draw the shape with. Lines and frames keep it as it is; a highlighter fills over
+	// the text, so a colour with no transparency left would hide the word and becomes a tint of it instead, the same
+	// strength autoHighlight() settles on when nothing else says how strong to be.
+	[[nodiscard]] Color highlightTint( const Color& color, HighlightShape shape ) noexcept;
+
 	// Paints the highlight into a context the size of its window: lines opaque in `color`, a fill with its alpha.
 	void drawHighlight( cairo_t* cr, int width, int height, const HighlightLook& look, const Color& color );
 

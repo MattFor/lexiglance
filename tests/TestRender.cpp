@@ -4,6 +4,7 @@
 #include <lexiglance/dictionary/Importer.h>
 #include <lexiglance/language/Language.h>
 #include <lexiglance/lookup/Translator.h>
+#include <lexiglance/render/Highlight.h>
 #include <lexiglance/render/PopupRenderer.h>
 #include <lexiglance/render/Theme.h>
 
@@ -42,6 +43,22 @@ namespace
 
 		// An opaque fill would hide the text, so it falls back to a tint.
 		test::expect( lg::render::autoHighlight( filled( 0xFFFFFF ), 1.0, true ).a < 0.5 );
+	} );
+
+	const test::Registrar chosen_highlight( "a highlight colour chosen by hand", [] {
+		using lg::render::HighlightShape;
+		const auto tint = []( std::string_view hex, HighlightShape shape ) { return lg::render::highlightTint( *lg::render::Color::parse( hex ), shape ).a; };
+
+		// A highlighter's alpha is its strength, so the colour picker's default (no transparency at all) would paint a
+		// solid block over the word. It becomes a tint, the same one the automatic colour settles on.
+		test::expectEqual( tint( "#aa0000ff", HighlightShape::Fill ), lg::render::fill_tint );
+		// A strength that was chosen is kept, whatever it is.
+		test::expectEqual( tint( "#5aa0ff59", HighlightShape::Fill ), lg::render::Color::parse( "#5aa0ff59" )->a );
+		test::expect( tint( "#5aa0ff01", HighlightShape::Fill ) < 0.02 );
+		// Lines and frames are drawn beside the text, not over it, and keep the colour as it is.
+		test::expectEqual( tint( "#aa0000ff", HighlightShape::Underline ), 1.0 );
+		test::expectEqual( tint( "#aa0000ff", HighlightShape::Outline ), 1.0 );
+		test::expectEqual( tint( "#aa0000ff", HighlightShape::Brackets ), 1.0 );
 	} );
 
 	lg::render::PopupImage::Glyph glyph( float x, float y, std::uint32_t begin, std::uint32_t end )

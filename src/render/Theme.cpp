@@ -499,7 +499,7 @@ namespace lexiglance::render
 		color.a = 1.0;
 		if ( fill )
 		{
-			color.a = opacity >= 0.95 ? 0.35 : opacity;
+			color.a = opacity >= opaque_fill ? fill_tint : opacity;
 		}
 		return color;
 	}

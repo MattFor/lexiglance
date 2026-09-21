@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.1] - 10:15 CEST 2026-09-21
+
+- Manual colour picking no longer obscures text (Windows)
+- The trigger mends itself within a second when a key release or the raw-input registration goes missing,
+  instead of staying stuck until a restart. (Windows)
+- OCR: a line the detector cuts in two on the same row (at a bracket, at a quotation mark) reads as one run of text
+  again, not just the piece before the cut.
+
 ## [1.3.0] - 01:00 CEST 2026-09-21
 
 - You are now able to translate sentences using scroll-wheel selection.

@@ -1614,7 +1614,11 @@ namespace lexiglance::daemon
 			}
 			auto shown = request->shown;
 
-			const auto color = render::Color::parse( cfg->popup.highlight_color ).value_or( render::Color{ .r = 0.35, .g = 0.63, .b = 1.0, .a = 0.35 } );
+			// The colour as the shape can use it: a highlighter left fully opaque would cover the word it marks.
+			const auto color = render::highlightTint(
+					render::Color::parse( cfg->popup.highlight_color ).value_or( render::Color{ .r = 0.35, .g = 0.63, .b = 1.0, .a = 0.35 } ),
+					platform::lookFor( cfg->popup ).shape
+			);
 			backend_->post( [this, generation = request->generation, image = std::move( image ), shown = std::move( shown ), notes = request->notes, style, anchor = request->anchor, highlight = request->highlight, source = request->source, key = request->key, chosen = request->chosen, keeps = request->keeps, color, autoplay = cfg->audio.autoplay, whole] {
 				if ( !current( generation, key ) )
 				{

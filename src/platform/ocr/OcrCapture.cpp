@@ -3052,15 +3052,21 @@ namespace lexiglance::platform
 					{
 						const char32_t before = utf8::last( sentence );
 						const char32_t after  = utf8::first( of.characters.front().text );
-						// A piece the detector cut off on the same row stands a gap away from what came before (the columns
-						// of a menu, a word beside its reading): it gets a space even in Japanese, which ends the sentence
-						// there. A piece on the next row is the same sentence going on, and gets none.
+						// A piece the detector cut off on the same row and a gap away from what came before is something
+						// else beside it (the columns of a menu, a word beside its reading): it gets a space even in
+						// Japanese, which ends the sentence there. A piece that carries straight on from where the last one
+						// stopped is the same run of text the detector happened to cut in two (at a bracket, at a quotation
+						// mark), and a space there would break the word it cut through. A piece on the next row is the same
+						// sentence going on, and gets none either.
 						const Rect first   = box_of( of, 0 );
 						const Rect end_box = handle->boxes.back();
 						const int  along   = of.vertical ? std::min( end_box.x + end_box.width, first.x + first.width ) - std::max( end_box.x, first.x )
 						                                 : std::min( end_box.y + end_box.height, first.y + first.height ) - std::max( end_box.y, first.y );
 						const int  across  = of.vertical ? std::min( end_box.width, first.width ) : std::min( end_box.height, first.height );
-						const bool beside  = along * 2 > across;
+						const int  between = of.vertical ? first.y - ( end_box.y + end_box.height ) : first.x - ( end_box.x + end_box.width );
+						// A character of a grid script fills about a square, so a gap of one counts as a break between two
+						// things; less than that is the detector's cut, not a space.
+						const bool beside = along * 2 > across && between >= across;
 						if ( ( beside || !( gridCharacter( before ) && gridCharacter( after ) ) ) && before != U'-' && before != U' ' )
 						{
 							const Rect& end = handle->boxes.back();

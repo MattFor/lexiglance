@@ -95,6 +95,12 @@ namespace lexiglance::render
 	// WCAG contrast ratio of two opaque colours (1 to 21); text wants at least 4.5.
 	[[nodiscard]] double contrast( const Color& a, const Color& b ) noexcept;
 
+	// A highlighter's fill goes over the text, so its colour's alpha is the strength of the tint. An alpha this high is
+	// no strength at all: such a fill would hide the very word it marks, so it stands for "as strong as looks right" and
+	// becomes `fill_tint` instead.
+	constexpr double opaque_fill = 0.95;
+	constexpr double fill_tint   = 0.35;
+
 	// A highlight colour that stands out on the background under the text (XRGB pixels): blue on light backgrounds,
 	// amber on dark ones, the opposite hue on coloured ones. Fills keep `opacity`; lines are opaque.
 	[[nodiscard]] Color autoHighlight( std::span<const std::uint32_t> pixels, double opacity, bool fill ) noexcept;

@@ -47,6 +47,9 @@ namespace lexiglance::platform
 		constexpr auto   settle_time  = std::chrono::milliseconds( 40 );
 		// How often the window the popup's text came from is checked (closed, minimised, on another virtual desktop).
 		constexpr auto source_interval = std::chrono::milliseconds( 250 );
+		// How often the input itself is checked: that raw input still reaches Lexiglance, and that the keys believed held
+		// are the ones the keyboard has. Both only go wrong after something out of the ordinary, so this is a slow tick.
+		constexpr auto input_interval = std::chrono::seconds( 1 );
 
 		constexpr wchar_t window_class[] = L"LexiglanceWindow";
 
@@ -458,6 +461,7 @@ namespace lexiglance::platform
 					{
 						until( source_checked_ + source_interval );
 					}
+					until( input_checked_ + input_interval );
 					( void )MsgWaitForMultipleObjectsEx( 1, &wake_event_, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE );
 
 					if ( scan_pending_ && Clock::now() >= scan_deadline_ )
@@ -472,6 +476,10 @@ namespace lexiglance::platform
 					if ( watching() && Clock::now() >= source_checked_ + source_interval )
 					{
 						checkSource();
+					}
+					if ( Clock::now() >= input_checked_ + input_interval )
+					{
+						checkInput();
 					}
 				}
 			}
@@ -1117,6 +1125,57 @@ namespace lexiglance::platform
 					const int code = virtualKeyOf( static_cast<config::Key>( key ) );
 					down_.set( static_cast<std::size_t>( key ), code != 0 && ( GetAsyncKeyState( code ) & 0x8000 ) != 0 );
 				}
+			}
+
+			// The same, acting on what it finds: a key counted as held that is not (or the other way round) means the
+			// trigger went down or came up without an event to say so.
+			void resyncKeyboard()
+			{
+				const auto believed = down_;
+				syncKeyboard();
+				if ( believed != down_ )
+				{
+					log::debug( "input: the keyboard was not as recorded, so the trigger is read afresh" );
+					updateTrigger();
+				}
+			}
+
+			// Two things can stop the trigger from being seen, and both used to last until Lexiglance was restarted or
+			// the health check put them right by hand. The registration for raw input can be lost, after which no key
+			// and no click arrives at all. And a release that happens while another desktop is in front (a UAC prompt,
+			// the lock screen, a full-screen game changing mode) never arrives, so the key counts as held: the trigger
+			// stays down, pressing it again does nothing (updateTrigger() only acts on a change) and checkSource() keeps
+			// a popup that is already up alive. Both are cheap to look for, so the idle loop does, once a second.
+			void checkInput()
+			{
+				input_checked_ = Clock::now();
+				if ( recording_ )
+				{
+					return;
+				}
+				if ( !rawInputRegistered() )
+				{
+					const DWORD error = registerRawInput() ? 0 : GetLastError();
+					// Said once, however long it takes to come back: a line a second would drown the log.
+					if ( !input_lost_ )
+					{
+						input_lost_ = true;
+						log::warn( "input: keyboard and mouse events stopped arriving, so the trigger could not be seen; Lexiglance asked for them again" );
+					}
+					if ( error != 0 )
+					{
+						log::debug( "input: asking for raw input again failed (error {})", error );
+						return;
+					}
+				}
+				else if ( input_lost_ )
+				{
+					input_lost_ = false;
+					log::info( "input: keyboard and mouse events arrive again" );
+				}
+				// Whatever happened while nothing was arriving is lost, and a release can go missing at any time: the
+				// keyboard itself has the last word.
+				resyncKeyboard();
 			}
 
 			[[nodiscard]] bool chordHeld() const
@@ -1911,9 +1970,13 @@ namespace lexiglance::platform
 			config::KeyGroup sentence_key_;
 			bool             sentence_held_ = false;
 			// The sentence key went down and the scan it asked for has not gone out yet.
-			bool                  sentence_pressed_ = false;
-			std::bitset<32>       down_;
-			bool                  trigger_active_ = false;
+			bool            sentence_pressed_ = false;
+			std::bitset<32> down_;
+			bool            trigger_active_ = false;
+			// When the raw input and the keys believed held were last checked against the keyboard itself, and whether
+			// the registration was found gone (so the log says so once, not once a second).
+			Clock::time_point     input_checked_;
+			bool                  input_lost_     = false;
 			int                   wheel_          = 0;
 			HHOOK                 wheel_hook_     = nullptr;
 			config::SelectionMode selection_mode_ = config::SelectionMode::Off;

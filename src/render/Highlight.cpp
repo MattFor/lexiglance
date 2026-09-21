@@ -68,6 +68,17 @@ namespace lexiglance::render
 		return 0;
 	}
 
+	Color highlightTint( const Color& color, HighlightShape shape ) noexcept
+	{
+		if ( shape != HighlightShape::Fill || color.a < opaque_fill )
+		{
+			return color;
+		}
+		Color tinted = color;
+		tinted.a     = fill_tint;
+		return tinted;
+	}
+
 	Box highlightArea( const Box& text, const HighlightLook& look ) noexcept
 	{
 		const int t = thickness( look );
@@ -294,7 +305,7 @@ namespace lexiglance::render
 				            .width  = static_cast<int>( pango_units_to_double( last.x + last.width - first.x ) ),
 				            .height = static_cast<int>( pango_units_to_double( first.height ) ) };
 			const Box area = highlightArea( word, scaled );
-			Color     mark = color;
+			Color     mark = highlightTint( color, look.shape );
 			if ( automatic )
 			{
 				const auto                       byte  = []( double v ) { return static_cast<std::uint32_t>( std::lround( std::clamp( v, 0.0, 1.0 ) * 255.0 ) ); };
