@@ -157,7 +157,7 @@ namespace lexiglance::gui
 		name_font.setBold( true );
 		name->setFont( name_font );
 		identity->addWidget( name );
-		auto* tagline = new QLabel( QStringLiteral( "A system-wide pop-up dictionary: point at a word in any application and read what it means." ) );
+		auto* tagline = new QLabel( QStringLiteral( "A system-wide pop-up dictionary. Simply point at a word in any application and read what it means." ) );
 		tagline->setWordWrap( true );
 		identity->addWidget( tagline );
 		auto* byline = new QLabel( QStringLiteral( "Version %1 · %2 · %3 · by %4 · free software under the MIT licence" ).arg( qs( version ), buildName(), platformName().toHtmlEscaped(), link( authorUrl(), QStringLiteral( "MattFor" ) ) ) );

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.3] - 14:00 CEST 2026-09-21
+
+Miscellanous fixes.
+
 ## [1.3.2_1] - 13:10 CEST 2026-09-21
 
 Quick hotfix to resolve icon issues.

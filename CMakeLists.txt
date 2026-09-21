@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.30)
 
 project(
     lexiglance
-    VERSION 1.3.1
+    VERSION 1.3.3
     DESCRIPTION
         "System-wide pop-up dictionary compatible with Yomitan dictionaries"
     HOMEPAGE_URL "https://github.com/MattFor/lexiglance"

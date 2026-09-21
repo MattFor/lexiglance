@@ -53,10 +53,6 @@ The [releases page](https://github.com/MattFor/lexiglance/releases) also has a p
 for Debian and Ubuntu, a `.rpm` for Fedora, and a `.tar.gz`. From then on Lexiglance keeps itself up to date
 (**Overview -> Updates**), in the background too while you are away from the computer.
 
-To remove it, click **Overview -> Uninstall Lexiglance** (on Windows also **Settings -> Apps**, on Linux also
-`lexiglancectl uninstall`). Your settings, dictionaries and downloaded models are deleted with it unless you untick
-that.
-
 ## Getting started
 
 1. Open **Dictionaries -> Get recommended dictionaries**, pick a language and install.
@@ -87,15 +83,6 @@ ctest --preset release
 
 Then run `build/release/apps/gui/lexiglance`. For Windows builds see [docs/porting.md](docs/porting.md).
 
-## Files
-
-Settings are in `~/.config/lexiglance`, dictionaries, OCR and translation models and language files in
-`~/.local/share/lexiglance`. On Windows they are in `%APPDATA%\Lexiglance\config` and
-`%LOCALAPPDATA%\Lexiglance\data`.
-
-`lexiglancectl` controls Lexiglance from scripts, for example `lexiglancectl pause`, `lexiglancectl lookup 食べた` or
-`lexiglancectl translate 図書館で本を読みました`.
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately, see [SECURITY.md](SECURITY.md).
@@ -106,7 +93,7 @@ Yes, this one was mostly written with the help of an LLM. I wanted to get the pr
 possible so that my friends and I could start using it in our language-learning journeys. Writing everything by hand
 would have taken a very, very long time!
 
-Of course, I still review the code and documentation myself. I don't want to get completely lost in the madness :D
+Of course, I still review the code and documentation myself. I don't want to get completely lost in the madness
 
 I hope Lexiglance can be a useful tool to others and help everyone on their own language-learning journey!
 
