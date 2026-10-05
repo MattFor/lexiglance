@@ -250,7 +250,7 @@ namespace lexiglance::daemon
 
 		const auto await = [&] {
 			arrived = false;
-			if ( ConnectNamedPipe( handleOf( server_ ), listening.restart() ) == FALSE )
+			for ( int tries = 1; ConnectNamedPipe( handleOf( server_ ), listening.restart() ) == FALSE; ++tries )
 			{
 				const DWORD error = GetLastError();
 				if ( error == ERROR_IO_PENDING )
@@ -258,11 +258,20 @@ namespace lexiglance::daemon
 					listening.busy = true;
 					return;
 				}
-				if ( error != ERROR_PIPE_CONNECTED )
+				if ( error == ERROR_PIPE_CONNECTED )
 				{
-					log::warn( "ipc: cannot wait for clients (error {})", error );
-					return;
+					break;
 				}
+				// A client came and went before this asked (one only looking whether the daemon answers, as a daemon
+				// making way for another does): the instance has to let go of it before it can wait for the next.
+				// Otherwise nothing would be accepted again, and every client would wait for good.
+				if ( error == ERROR_NO_DATA && tries < 100 )
+				{
+					DisconnectNamedPipe( handleOf( server_ ) );
+					continue;
+				}
+				log::warn( "ipc: cannot wait for clients (error {})", error );
+				return;
 			}
 			arrived = true;
 			SetEvent( listening.event );

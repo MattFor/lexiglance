@@ -25,7 +25,7 @@
 namespace lexiglance::gui
 {
 
-	// First-run (and post-update) setup: welcome, languages, then dictionaries and OCR downloaded without further clicks
+	// First-run setup: welcome, languages, then dictionaries and OCR downloaded without further clicks
 	// (the keys explained meanwhile), and a sentence to try the popup on. For the first five seconds Escape and clicks
 	// beside the card do nothing, so the welcome is not dismissed by accident. First-run setup cannot be skipped at all.
 	// Dev builds can open it again from Help; that path reinstalls dictionaries and OCR.

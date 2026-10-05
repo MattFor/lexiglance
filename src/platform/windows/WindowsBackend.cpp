@@ -209,6 +209,32 @@ namespace lexiglance::platform
 			return win32::narrow( std::filesystem::path( path ).stem().wstring() );
 		}
 
+		// Whether a process runs as administrator (elevated). One that does keeps its token from one that does not, so a
+		// token that cannot be read at all counts as well.
+		bool elevated( DWORD pid )
+		{
+			HANDLE process = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid );
+			if ( process == nullptr )
+			{
+				return GetLastError() == ERROR_ACCESS_DENIED;
+			}
+			HANDLE token  = nullptr;
+			bool   answer = false;
+			if ( OpenProcessToken( process, TOKEN_QUERY, &token ) == FALSE )
+			{
+				answer = GetLastError() == ERROR_ACCESS_DENIED;
+			}
+			else
+			{
+				TOKEN_ELEVATION elevation{};
+				DWORD           size = 0;
+				answer               = GetTokenInformation( token, TokenElevation, &elevation, sizeof( elevation ), &size ) != FALSE && elevation.TokenIsElevated != 0;
+				CloseHandle( token );
+			}
+			CloseHandle( process );
+			return answer;
+		}
+
 		std::string classOf( HWND window )
 		{
 			std::array<wchar_t, 256> name{};
@@ -409,6 +435,7 @@ namespace lexiglance::platform
 				}
 				screen_ = createGdiScreen().value_or( nullptr );
 				loadDesktopSettings();
+				self_elevated_ = elevated( GetCurrentProcessId() );
 				return {};
 			}
 
@@ -622,6 +649,11 @@ namespace lexiglance::platform
 				return popup_shown_;
 			}
 
+			[[nodiscard]] bool pointerOnPopup() override
+			{
+				return popup_shown_ && popup_rect_.contains( pointer() );
+			}
+
 			void showHighlight( std::span<const Rect> rects, const render::Color& color ) override
 			{
 				if ( rects.empty() || std::ranges::all_of( rects, &Rect::empty ) )
@@ -802,6 +834,31 @@ namespace lexiglance::platform
 					}
 				}
 				out.push_back( std::move( input ) );
+
+				if ( !elevated_seen_.empty() )
+				{
+					std::string programs;
+					for ( const std::string& program : elevated_seen_ )
+					{
+						programs.append( programs.empty() ? "" : ", " ).append( program );
+					}
+					const bool one = elevated_seen_.size() == 1;
+					out.push_back(
+							{ .id     = "elevated",
+					          .title  = "Programs run as administrator",
+					          .status = health::Severity::Warning,
+					          .detail = std::format(
+									  "{} ran as administrator, and Lexiglance does not: while {} in front, Windows keeps its keys and clicks from "
+									  "Lexiglance, so the trigger does nothing over {}. Turn on Run as administrator (Overview, Startup; Windows asks "
+									  "once), or start {} without administrator rights.",
+									  programs,
+									  one ? "it is" : "one is",
+									  one ? "it" : "them",
+									  one ? "it" : "them"
+							  ),
+					          .fix = "run-as-administrator" }
+					);
+				}
 
 				out.push_back(
 						{ .id     = "desktop",
@@ -1176,6 +1233,44 @@ namespace lexiglance::platform
 				// Whatever happened while nothing was arriving is lost, and a release can go missing at any time: the
 				// keyboard itself has the last word.
 				resyncKeyboard();
+				checkElevation();
+			}
+
+			// Windows passes the keys and clicks of a program running as administrator only on to programs that run so too:
+			// while one is in front, the trigger never reaches Lexiglance, and lookups work again only once another window
+			// was clicked (as reported: "it only works if Lexiglance is the active window"). Said once for each program, in
+			// the log and by Health.
+			void checkElevation()
+			{
+				if ( self_elevated_ )
+				{
+					return;
+				}
+				DWORD pid = 0;
+				if ( const HWND front = GetForegroundWindow(); front != nullptr )
+				{
+					GetWindowThreadProcessId( front, &pid );
+				}
+				if ( pid == 0 || pid == front_process_ || pid == GetCurrentProcessId() )
+				{
+					return;
+				}
+				front_process_ = pid;
+				if ( !elevated( pid ) )
+				{
+					return;
+				}
+				std::string program = programOf( pid );
+				if ( program.empty() )
+				{
+					program = std::format( "process {}", pid );
+				}
+				if ( std::ranges::contains( elevated_seen_, program ) )
+				{
+					return;
+				}
+				elevated_seen_.push_back( program );
+				log::warn( "input: {} (in front) runs as administrator and Lexiglance does not, so Windows keeps its keys and clicks from Lexiglance: the trigger does nothing while it is in front", program );
 			}
 
 			[[nodiscard]] bool chordHeld() const
@@ -1975,11 +2070,16 @@ namespace lexiglance::platform
 			bool            trigger_active_ = false;
 			// When the raw input and the keys believed held were last checked against the keyboard itself, and whether
 			// the registration was found gone (so the log says so once, not once a second).
-			Clock::time_point     input_checked_;
-			bool                  input_lost_     = false;
-			int                   wheel_          = 0;
-			HHOOK                 wheel_hook_     = nullptr;
-			config::SelectionMode selection_mode_ = config::SelectionMode::Off;
+			Clock::time_point input_checked_;
+			bool              input_lost_ = false;
+			// Programs seen in front running as administrator while this one does not (checkElevation()), and the process
+			// last looked at, so each one is looked at once.
+			bool                     self_elevated_ = false;
+			DWORD                    front_process_ = 0;
+			std::vector<std::string> elevated_seen_;
+			int                      wheel_          = 0;
+			HHOOK                    wheel_hook_     = nullptr;
+			config::SelectionMode    selection_mode_ = config::SelectionMode::Off;
 
 			std::chrono::milliseconds delay_{ 20 };
 			int                       move_threshold_ = 3;

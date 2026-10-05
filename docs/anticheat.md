@@ -17,7 +17,7 @@ touch a game's process, its memory or its input stream. Lexiglance does none of 
 ## What it does
 
 | Need                               | Mechanism                                                                               | Why it is safe                                                                                                                                                                |
-|------------------------------------|-----------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ---------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Know when the trigger is held      | XInput2 raw events on the root window                                                   | Passive observation. Every key still reaches the focused application.                                                                                                         |
 | Pointer position                   | `XQueryPointer`, only while the trigger is held                                         | A standard, read-only query.                                                                                                                                                  |
 | Text under the pointer             | AT-SPI (desktop accessibility bus)                                                      | The application exports its text itself; games expose nothing.                                                                                                                |
@@ -32,7 +32,7 @@ The same rules, with Windows' own means. Nothing is grabbed unless you ask for i
 observed, so the window under the pointer still scrolls while it changes the looked-up length.
 
 | Need                                             | Mechanism                                                                       | Why it is safe                                                                                                                           |
-|--------------------------------------------------|---------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| ------------------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Know when the trigger is held                    | Raw Input with `RIDEV_INPUTSINK`                                                | Passive observation: no hook (`SetWindowsHookEx`) and no `RIDEV_NOLEGACY`, so every key and click still reaches the focused application. |
 | Keyboard state after a lock screen or UAC prompt | `GetAsyncKeyState`                                                              | A read-only query.                                                                                                                       |
 | Pointer position                                 | `GetCursorPos`                                                                  | A read-only query.                                                                                                                       |
@@ -40,6 +40,14 @@ observed, so the window under the pointer still scrolls while it changes the loo
 | Text in games, images and video                  | `BitBlt` of the screen                                                          | What every screenshot tool does, through the desktop compositor rather than the game.                                                    |
 | Show the popup                                   | Layered windows with `WS_EX_NOACTIVATE`, the highlight also `WS_EX_TRANSPARENT` | They never take the focus, and the highlight lets every click through.                                                                   |
 | Copied text (optional)                           | `AddClipboardFormatListener`                                                    | The clipboard's own change notification.                                                                                                 |
+
+### Run as administrator
+
+A game that runs as administrator keeps its keys and clicks from programs that do not, so Lexiglance never sees the
+trigger over it. **Overview -> Run as administrator** (off unless you turn it on) runs the daemon as administrator
+too ([how](autostart.md#run-as-administrator-windows)). It does nothing more with those rights: the same passive means
+as in the table above, no process opened, no hook and no input made. They only let Windows pass it the keys it already
+sees over every other window.
 
 ### Keeping the wheel from the window underneath
 

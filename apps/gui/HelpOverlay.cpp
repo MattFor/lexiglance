@@ -27,7 +27,8 @@ namespace lexiglance::gui
 				  sentence.isEmpty() ? QStringLiteral( "Choose a sentence key on " ) + page( "translation", "Translation" )
 				                     : QStringLiteral( "Hold <b>%1</b> as well: the sentence, or the characters you selected, in English. It stays when you let go; press it again to put it away · Models: " ).arg( sentence.toHtmlEscaped() ) +
 				                               page( "translation", "Translation" ) },
-				{ QStringLiteral( "In the popup" ), QStringLiteral( "Scroll wheel: more entries · Left‑click an entry: copy it · Middle‑click: hear it · Right‑click: select text" ) },
+				{ QStringLiteral( "In the popup" ),
+				  QStringLiteral( "It goes when you let go of the keys, unless the pointer is on it: move onto it first. Then scroll wheel: more entries · Left‑click an entry: copy it · Middle‑click: hear it · Right‑click: select text" ) },
 				{ QStringLiteral( "Games, videos, images" ), page( "scanning", "Scanning" ) + QStringLiteral( " → Download PaddleOCR" ) },
 				{ QStringLiteral( "Other trigger keys" ), page( "scanning", "Scanning" ) + QStringLiteral( " → Trigger" ) },
 				{ QStringLiteral( "The popup's look" ), page( "appearance", "Appearance" ) },

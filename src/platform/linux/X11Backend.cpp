@@ -476,6 +476,11 @@ namespace lexiglance::platform
 				return popup_mapped_;
 			}
 
+			[[nodiscard]] bool pointerOnPopup() override
+			{
+				return popup_mapped_ && popup_rect_.contains( pointer() );
+			}
+
 			void showHighlight( std::span<const Rect> rects, const render::Color& color ) override
 			{
 				if ( rects.empty() || std::ranges::all_of( rects, &Rect::empty ) )

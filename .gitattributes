@@ -3,3 +3,4 @@
 *.svg text
 *.onnx binary
 *.zip binary
+*.bmp binary

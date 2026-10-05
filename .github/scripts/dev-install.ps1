@@ -3,8 +3,8 @@
 # first and started again afterwards, exactly as the installer does.
 #   pwsh .github/scripts/dev-install.ps1 [-Preset release] [-Prefix <dir>] [-SkipBuild] [-NoRestart]
 # Without -Prefix it goes where Lexiglance is started from at login (the Run entry), else where the installer put it
-# (HKCU\Software\Lexiglance, else %LOCALAPPDATA%\Programs\Lexiglance), which keeps the Start menu shortcut and the
-# autostart entries pointing at the copy that actually runs.
+# (HKCU\Software\Lexiglance, else %LOCALAPPDATA%\Programs\Lexiglance). The Start menu shortcut and the autostart entries
+# start the copy installed from then on, also when a build tree had taken them before.
 [CmdletBinding()]
 param(
     [string]$Preset = 'release',
@@ -68,6 +68,12 @@ try {
 
     Write-Host "installing into $Prefix..."
     Invoke-Checked cmake '--install' $build '--prefix' $Prefix
+
+    # The Run entries and the Start menu shortcut start this copy (lexiglance.exe is a windowed program: waited for).
+    $claim = Start-Process (Join-Path $Prefix 'bin\lexiglance.exe') -ArgumentList '--claim-entries' -NoNewWindow -Wait -PassThru
+    if ($claim.ExitCode -ne 0) {
+        Write-Warning 'the autostart and the Start menu shortcut could not be pointed at this copy'
+    }
 
     if ($NoRestart) {
         Write-Host 'not restarting (-NoRestart).'

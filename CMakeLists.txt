@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.30)
 
 project(
     lexiglance
-    VERSION 1.3.3
+    VERSION 1.3.4
     DESCRIPTION
         "System-wide pop-up dictionary compatible with Yomitan dictionaries"
     HOMEPAGE_URL "https://github.com/MattFor/lexiglance"
@@ -190,7 +190,8 @@ endif()
 install(FILES LICENSE README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Packages (cpack): .tar.gz and .deb on Linux (.rpm with cpack -G RPM on Fedora), .zip on Windows and macOS
+# Packages (cpack): .tar.gz and .deb on Linux (.rpm with cpack -G RPM on
+# Fedora), .zip on Windows and macOS
 # ---------------------------------------------------------------------------------------------------------------------
 set(CPACK_PACKAGE_NAME lexiglance)
 set(CPACK_PACKAGE_VENDOR MattFor)

@@ -64,7 +64,7 @@ namespace
 		std::println( "  ocr <image.ppm>                                   read the text in an image with PaddleOCR" );
 		std::println( "  translate <text> [--language <code>]              translate <text> into English offline" );
 		std::println( "" );
-		std::println( "  status | pause | resume | reload | hide           control the running daemon" );
+		std::println( "  status | pause | resume | reload | hide | quit    control the running daemon" );
 		std::println( "  show <text>                                       show a popup at the pointer" );
 		std::println( "  health                                            check that everything works (exit 1 on problems)" );
 		std::println( "  stats [reset]                                     what has been looked up so far, or forget it" );
@@ -140,10 +140,11 @@ namespace
 		return errors > 0 ? 1 : 0;
 	}
 
-	// Sends one request to the running daemon and prints the result's fields.
-	int call( std::string_view method, const std::string& params = "{}" )
+	// Sends one request to the running daemon and prints the result's fields. `timeout` bounds the connection and the
+	// answer (zero: no bound).
+	int call( std::string_view method, const std::string& params = "{}", std::chrono::milliseconds timeout = std::chrono::milliseconds( 0 ) )
 	{
-		auto client = lg::ipc::Client::connect( lg::paths::ipcEndpoint() );
+		auto client = lg::ipc::Client::connect( lg::paths::ipcEndpoint(), timeout );
 		if ( !client )
 		{
 			std::println( stderr, "error: the daemon is not running ({})", client.error().message );
@@ -680,6 +681,13 @@ namespace
 		if ( command == "hide" )
 		{
 			return call( "popup.hide" );
+		}
+		// Asked over its pipe, the daemon ends also where it could not be ended from here (on Windows one running as
+		// administrator, which the setup stops this way before replacing it). Bounded, so that a daemon that does not
+		// answer keeps no setup waiting.
+		if ( command == "quit" )
+		{
+			return call( "shutdown", "{}", std::chrono::seconds( 5 ) );
 		}
 		if ( command == "show" && !args.empty() )
 		{

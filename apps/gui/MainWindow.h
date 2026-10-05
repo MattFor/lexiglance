@@ -39,12 +39,15 @@ namespace lexiglance::gui
 		// What changed in `version`, over the window: once after an update, or from Help in dev builds.
 		void showChanges( const QString& version );
 
-		// First-run / post-update setup wizard. `lock_seconds` 0 when simulating from Help.
+		// First-run setup wizard (also from Help). `lock_seconds` 0 when simulating from Help.
 		// `required`: first-run — the wizard cannot be skipped.
 		void showSetup( int lock_seconds = 5, bool reinstall = false, bool required = false );
 
-		// Setup on the first start and after an automatic update; otherwise the short help once for older installs.
+		// The setup on the first start (installs from before it, which saw the short help, skip it).
 		void welcome();
+
+		// This is the installed copy (see DesktopEntry.h): a daemon of another copy is replaced by this one's.
+		void replaceOtherDaemon();
 
 	protected:
 		void closeEvent( QCloseEvent* event ) override;
@@ -73,6 +76,7 @@ namespace lexiglance::gui
 		bool                      dark_                = false;
 		bool                      tried_start_         = false;
 		bool                      replaced_daemon_     = false;
+		bool                      replace_other_       = false;
 	};
 
 } // namespace lexiglance::gui

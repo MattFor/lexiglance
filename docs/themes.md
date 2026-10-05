@@ -19,27 +19,27 @@ file...** copies one in. They are easy to write by hand:
 
 ```json
 {
-  "name": "Evening paper",
-  "lexiglance_theme": 1,
-  "popup": {
-    "design": "friendly",
-    "scheme": "paper",
-    "accent_color": "#e39a64",
-    "colors": {
-      "muted": "#a89a86",
-      "tag_name": "#d46a8c"
-    },
-    "corner_radius": 12,
-    "border_width": 0,
-    "padding": 14,
-    "opacity": 95,
-    "furigana_size": 18,
-    "highlight_style": "fill",
-    "highlight_color": "#e39a6455",
-    "highlight_radius": 4,
-    "highlight_padding_x": 2,
-    "highlight_padding_y": 2
-  }
+    "name": "Evening paper",
+    "lexiglance_theme": 1,
+    "popup": {
+        "design": "friendly",
+        "scheme": "paper",
+        "accent_color": "#e39a64",
+        "colors": {
+            "muted": "#a89a86",
+            "tag_name": "#d46a8c"
+        },
+        "corner_radius": 12,
+        "border_width": 0,
+        "padding": 14,
+        "opacity": 95,
+        "furigana_size": 18,
+        "highlight_style": "fill",
+        "highlight_color": "#e39a6455",
+        "highlight_radius": 4,
+        "highlight_padding_x": 2,
+        "highlight_padding_y": 2
+    }
 }
 ```
 
@@ -47,7 +47,7 @@ Settings a theme leaves out take their defaults, so a theme looks the same whate
 those of the `popup` section of `config.json`.
 
 | Setting                                                          | Values                                                                                                                                                 |
-|------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `design`                                                         | `friendly`, `classic`, `compact`                                                                                                                       |
 | `scheme`                                                         | `default`, `paper`, `nord`, `sakura`, `matcha`, `midnight`, `contrast`; each has a dark and a light variant, chosen by **Appearance -> Dark or light** |
 | `background_color`, `text_color`, `accent_color`, `border_color` | `#rrggbb`; muted text, lines, buttons and chips follow from the first three                                                                            |

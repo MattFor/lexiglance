@@ -44,7 +44,8 @@ same dictionary format as [Yomitan](https://yomitan.wiki/).
 - **Windows 10 (1809 or later) and 11:** download
   [lexiglance-windows-setup.exe](https://github.com/MattFor/lexiglance/releases/latest/download/lexiglance-windows-setup.exe)
   and run it. Administrator permissions are not needed, it may also warn about an unknown publisher: choose **More
-  info -> Run anyway**. Running a newer one updates in place.
+  info -> Run anyway**. Running a newer one updates in place. For games that run as administrator, turn on
+  **Overview -> Run as administrator**.
 - **Linux:** download
   [lexiglance-x86_64.AppImage](https://github.com/MattFor/lexiglance/releases/latest/download/lexiglance-x86_64.AppImage),
   make it executable (`chmod +x lexiglance-x86_64.AppImage`) and run it.
@@ -57,8 +58,8 @@ for Debian and Ubuntu, a `.rpm` for Fedora, and a `.tar.gz`. From then on Lexigl
 
 1. Open **Dictionaries -> Get recommended dictionaries**, pick a language and install.
 2. Hold **Super + Left Alt** (on Windows **Win + Left Alt**) and point at a word.
-3. Keep holding the keys and use the scroll wheel to select more characters (or fewer). Left-click an entry to copy it.
-   Right-click and select text within a pop up box to copy it instead.
+3. Keep holding the keys and use the scroll wheel to select more characters (or fewer). The popup goes when you let go;
+   to use it, move onto it first. Left-click an entry to copy it, or right-click and select text within it instead.
 4. Hold **Left Shift** as well to see the sentence in English, or only the characters you selected. The **Translation**
    page downloads the models (compact or full precision, per language) and sets the key.
 

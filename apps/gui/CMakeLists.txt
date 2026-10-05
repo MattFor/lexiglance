@@ -18,6 +18,7 @@ add_executable(
     OcrGroup.cpp
     OcrInstall.cpp
     OverviewPage.cpp
+    RunAsAdministrator.cpp
     ScanningPage.cpp
     SearchPage.cpp
     Settings.cpp
@@ -52,19 +53,16 @@ qt_add_resources(
 # and the PaddleOCR download (VcRedist.cpp); lexiglance::translate for what a
 # translation model consists of.
 target_link_libraries(
-    lexiglance
-    PRIVATE lexiglance::core
-            lexiglance::ocr
-            lexiglance::translate
-            lexiglance::options
-            Qt6::Widgets
-            Qt6::Network)
+    lexiglance PRIVATE lexiglance::core lexiglance::ocr lexiglance::translate
+                       lexiglance::options Qt6::Widgets Qt6::Network)
 
 install(TARGETS lexiglance RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(WIN32)
-    # A windowed program: no console opens with it.
+    # A windowed program: no console opens with it. Run as administrator starts
+    # the daemon's program with Windows' prompt (ShellExecuteEx).
     set_target_properties(lexiglance PROPERTIES WIN32_EXECUTABLE ON)
+    target_link_libraries(lexiglance PRIVATE shell32 advapi32)
     # Qt's plugins (the Windows platform, styles, image formats, TLS) next to
     # the installed program.
     qt_generate_deploy_app_script(

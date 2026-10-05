@@ -3,6 +3,7 @@
 #include "AboutPage.h"
 #include "AnkiPage.h"
 #include "AppearancePage.h"
+#include "DesktopEntry.h"
 #include "DictionariesPage.h"
 #include "OverviewPage.h"
 #include "ScanningPage.h"
@@ -12,6 +13,7 @@
 #include "TranslationPage.h"
 
 #include <lexiglance/config/Keys.h>
+#include <lexiglance/core/Log.h>
 #include <lexiglance/core/Version.h>
 
 #include <QEvent>
@@ -165,11 +167,12 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 
 		// Always, as it also brings in the bundled icons (the release AppImage is built with Qt 6.4, which cannot tell the
 		// desktop's colour scheme: light until the daemon says otherwise).
-		bool dark = false;
 #if QT_VERSION >= QT_VERSION_CHECK( 6, 5, 0 )
 		const auto scheme    = QGuiApplication::styleHints()->colorScheme();
 		palette_from_daemon_ = scheme == Qt::ColorScheme::Unknown;
-		dark                 = scheme == Qt::ColorScheme::Dark;
+		const bool dark      = scheme == Qt::ColorScheme::Dark;
+#else
+		const bool dark = false;
 #endif
 		applyPalette( dark );
 
@@ -294,13 +297,13 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 	namespace
 	{
 
-		// Windows gives the foreground only to the program last used: one the setup started (after an update, or on the
-		// first start after installing) would only flash in the taskbar. Sharing the input of the window in front for a
-		// moment lifts that.
+		// Windows gives the foreground only to the program last used: one the setup started (after installing or an
+		// update), or one a second start of Lexiglance asked to show itself, would only flash in the taskbar. Sharing the
+		// input of the window in front for a moment lifts that.
 		void bringToFront( QWidget* window )
 		{
 #ifdef _WIN32
-			const auto  target = reinterpret_cast<HWND>( window->winId() );
+			auto* const target = reinterpret_cast<HWND>( window->winId() );
 			const HWND  front  = GetForegroundWindow();
 			const DWORD theirs = front != nullptr ? GetWindowThreadProcessId( front, nullptr ) : 0;
 			const DWORD ours   = GetCurrentThreadId();
@@ -324,14 +327,20 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		setWindowState( ( windowState() & ~Qt::WindowMinimized ) | Qt::WindowActive );
 		raise();
 		activateWindow();
+		// Asked for, so in front, also when another program started this one.
+		bringToFront( this );
 		// Back from an update (UpdateGroup notes it): what changed, once, the first time the window is shown after it.
 		auto memory = applicationMemory();
 		if ( const QString updated = memory.value( QStringLiteral( "update/changes" ) ).toString(); !updated.isEmpty() )
 		{
 			memory.remove( QStringLiteral( "update/changes" ) );
-			bringToFront( this );
-			// After what opens with the window (the setup wizard after an update), so it is what is seen first.
-			QTimer::singleShot( 0, this, [this, updated] { showChanges( updated ); } );
+			// Not over the first-run setup (welcome()), which an update before it was done still has to open.
+			const bool setup_pending = !memory.value( QStringLiteral( "setup/completed" ) ).toBool() && !memory.value( QStringLiteral( "help/shown" ) ).toBool();
+			if ( !setup_pending )
+			{
+				// After whatever else opens with the window, so it is on top.
+				QTimer::singleShot( 0, this, [this, updated] { showChanges( updated ); } );
+			}
 		}
 	}
 
@@ -402,27 +411,27 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 
 	void MainWindow::welcome()
 	{
-		auto       memory       = applicationMemory();
-		const bool setup_done   = memory.value( QStringLiteral( "setup/completed" ) ).toBool();
-		const bool after_update = memory.value( QStringLiteral( "setup/after_update" ) ).toBool();
-		if ( after_update )
-		{
-			memory.setValue( QStringLiteral( "setup/after_update" ), false );
-		}
+		auto       memory     = applicationMemory();
+		const bool setup_done = memory.value( QStringLiteral( "setup/completed" ) ).toBool();
+		// Updates before 1.3.4 opened the setup again under what changed; an update shows only what changed now.
+		memory.remove( QStringLiteral( "setup/after_update" ) );
 		// Installs that already saw the old help card: do not force the new wizard once.
-		if ( !setup_done && memory.value( QStringLiteral( "help/shown" ) ).toBool() && !after_update )
+		if ( !setup_done && memory.value( QStringLiteral( "help/shown" ) ).toBool() )
 		{
 			memory.setValue( QStringLiteral( "setup/completed" ), true );
 			return;
 		}
-		// First start, or back from an automatic update: the frictionless language / OCR / dictionary setup.
-		if ( !setup_done || after_update )
+		// First start: the frictionless language / OCR / dictionary setup.
+		if ( !setup_done )
 		{
-			showSetup( 5, false, !setup_done );
-			// Opened by the setup that just installed it: in front, not flashing in the taskbar.
-			bringToFront( this );
-			return;
+			// In front (present()), not flashing in the taskbar, when the setup that just installed it opened it.
+			showSetup( 5, false, true );
 		}
+	}
+
+	void MainWindow::replaceOtherDaemon()
+	{
+		replace_other_ = true;
 	}
 
 	void MainWindow::setupTray()
@@ -516,9 +525,16 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 	{
 		connection_->setText( statusLine( status, client_->bytesSent(), client_->bytesReceived() ) );
 		client_->setDaemonPid( status["pid"].asInt() );
-		// After an update the daemon still running can be the older version: this one's replaces it, once.
-		if ( !replaced_daemon_ && olderVersion( qs( status["version"].asString() ), qs( version ) ) )
+		// After an update the daemon still running can be the older version: this one's replaces it, once. So does another
+		// copy's daemon when this is the installed copy (the release just put in place of a build, say).
+		const QString program = qs( status["program"].asString() );
+		const bool    other   = replace_other_ && !program.isEmpty() && !desktop::sameCopy( program, desktop::thisCopy() );
+		if ( !replaced_daemon_ && ( other || olderVersion( qs( status["version"].asString() ), qs( version ) ) ) )
 		{
+			if ( other )
+			{
+				log::info( "the daemon running is another copy's ({}): this copy's replaces it", ss( program ) );
+			}
 			replaced_daemon_ = true;
 			client_->startDaemon( true );
 		}
@@ -561,6 +577,9 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 			QIcon::setThemeName( desktop_theme );
 			QIcon::setFallbackThemeName( bundled );
 		}
+		// Every icon is looked up again: Qt before 6.5 (the AppImage's 6.4) keeps what it found in the fallback theme before,
+		// so the Statistics icon, which only the bundled theme has, stayed the light theme's dark one on a dark window.
+		QIcon::setThemeSearchPaths( QIcon::themeSearchPaths() );
 		QPalette palette;
 		if ( dark )
 		{

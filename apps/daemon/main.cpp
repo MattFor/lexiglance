@@ -20,6 +20,8 @@
 #include <thread>
 
 #ifdef _WIN32
+	#include "Elevation.h"
+
 	#ifndef NOMINMAX
 		#define NOMINMAX
 	#endif
@@ -44,6 +46,11 @@ namespace
 		std::println( "  --replace    stop a running daemon (ending it if it hangs) and take over" );
 		std::println( "  --verbose    debug logging" );
 		std::println( "  --version    print the version and exit" );
+#ifdef _WIN32
+		std::println( "  --run-as-administrator on|off|status" );
+		std::println( "               set up (run as administrator), remove or show the scheduled task that starts" );
+		std::println( "               Lexiglance as administrator, for programs that run so (Overview -> Startup)" );
+#endif
 	}
 
 	template <typename Predicate>
@@ -133,12 +140,88 @@ namespace
 			( void )freopen_s( &stream, "CONOUT$", "w", stderr );
 		}
 	}
+
+	// lexiglanced --run-as-administrator on|off|status [<account>]: what Overview -> Startup -> Run as administrator does
+	// (Elevation.h). "on" runs as administrator; <account> (a SID) is the user it is for, since Windows may have given
+	// the rights to another account (an administrator's password typed in for a standard user). Exit code 0 once done,
+	// 3 when the rights went to another account.
+	int runAsAdministrator( std::string_view request, std::string_view account )
+	{
+		namespace elevation = lg::daemon::elevation;
+		if ( request == "status" )
+		{
+			const auto program = elevation::taskProgram();
+			if ( !program )
+			{
+				std::println( stderr, "{}", program.error().message );
+				return 1;
+			}
+			std::println( "{}", program->empty() ? std::string( "off" ) : std::format( "on: {}", program->string() ) );
+			return 0;
+		}
+		if ( request == "off" )
+		{
+			if ( const auto removed = elevation::remove(); !removed )
+			{
+				std::println( stderr, "{}", removed.error().message );
+				return 1;
+			}
+			return 0;
+		}
+		if ( request == "on" )
+		{
+			if ( !account.empty() && account != elevation::userSid() )
+			{
+				std::println( stderr, "administrator rights were given to another account ({}), not to {}", elevation::userSid(), account );
+				return 3;
+			}
+			if ( !elevation::elevated() )
+			{
+				std::println( stderr, "setting it up takes administrator rights: run this as administrator" );
+				return 1;
+			}
+			if ( const auto installed = elevation::install( lg::process::executable() ); !installed )
+			{
+				std::println( stderr, "{}", installed.error().message );
+				return 1;
+			}
+			return 0;
+		}
+		usage();
+		return 2;
+	}
+
+	// Run as administrator is set up for this program and this daemon runs without those rights (started at login, by
+	// the settings application or a --replace): it starts the scheduled task and makes way for the daemon that starts.
+	// True once that one runs; otherwise `problem` says why it did not, and this daemon runs as it is.
+	bool handOver( lg::process::InstanceLock& lock, std::string& problem )
+	{
+		// The daemon the task starts takes the lock.
+		lock               = lg::process::InstanceLock();
+		const auto started = lg::daemon::elevation::start();
+		// Quick as a rule; at login the Task Scheduler can take its time.
+		if ( started && waitUntil( [] { return socketAnswers(); }, std::chrono::seconds( 20 ) ) )
+		{
+			return true;
+		}
+		problem = started ? std::string( "the scheduled task did not start it within 20 seconds" ) : started.error().message;
+		lock    = lg::process::InstanceLock( lg::paths::runtimeDir() / "daemon.lock" );
+		// Taken meanwhile: the daemon the task started is still getting ready.
+		return !lock.held();
+	}
 #endif
 
 	int run( std::span<char*> argv )
 	{
 #ifdef _WIN32
 		attachConsole();
+		// lexiglanced --run-as-administrator on|off|status [<account>] does only that.
+		if ( argv.size() >= 3 && std::string_view( argv[1] ) == "--run-as-administrator" )
+		{
+			return runAsAdministrator( argv[2], argv.size() >= 4 ? std::string_view( argv[3] ) : std::string_view() );
+		}
+		// Started by Run as administrator's scheduled task, which does not start it again whatever it runs as.
+		bool from_task = false;
 #endif
 		bool verbose = false;
 		bool replace = false;
@@ -157,6 +240,12 @@ namespace
 				std::println( "{}", lg::version );
 				return 0;
 			}
+#ifdef _WIN32
+			else if ( arg == "--from-task" )
+			{
+				from_task = true;
+			}
+#endif
 			else
 			{
 				usage();
@@ -201,6 +290,19 @@ namespace
 			lg::log::error( "Lexiglance is already running (pid {}); `lexiglanced --replace` restarts it", lock.holder() );
 			return 1;
 		}
+#ifdef _WIN32
+		// Run as administrator, set up for this program (Elevation.h): a daemon without those rights makes way for one
+		// with them.
+		const bool      elevated = lg::daemon::elevation::elevated();
+		const auto      task     = lg::daemon::elevation::taskProgram();
+		std::error_code same_error;
+		const bool      task_here = task && !task->empty() && std::filesystem::equivalent( *task, lg::process::executable(), same_error );
+		std::string     elevation_problem;
+		if ( task_here && !elevated && !from_task && handOver( lock, elevation_problem ) )
+		{
+			return 0;
+		}
+#endif
 		// Only the daemon that runs writes the log (and rotates it when it has grown too large).
 		lg::log::setFile( log_file );
 		lg::log::info( "---- lexiglanced {} ({} build{}) ----", lg::version, lg::channel, lg::commit.empty() ? std::string() : std::format( " {}", lg::commit ) );
@@ -209,6 +311,24 @@ namespace
 		{
 			lg::log::error( "{} (using defaults)", config_problem );
 		}
+#ifdef _WIN32
+		if ( elevated )
+		{
+			lg::log::info( "running as administrator{}", from_task ? " (started by the scheduled task of Run as administrator)" : "" );
+		}
+		else if ( from_task )
+		{
+			elevation_problem = "the scheduled task started it without administrator rights, which this account does not have";
+		}
+		if ( !elevation_problem.empty() )
+		{
+			lg::log::warn( "run as administrator: {}; running without administrator rights", elevation_problem );
+		}
+		else if ( task && !task->empty() && !task_here )
+		{
+			lg::log::info( "run as administrator is set up for another copy ({}); this one runs without administrator rights", task->string() );
+		}
+#endif
 
 #ifndef _WIN32
 		// Signals are received by one dedicated thread instead of interrupting arbitrary ones.
@@ -234,6 +354,15 @@ namespace
 		{
 			daemon.noteStartupProblem( std::format( "The settings file could not be read ({}), so the defaults are used. Fix or delete it.", config_problem ) );
 		}
+#ifdef _WIN32
+		daemon.setAdministrator( elevated, task_here );
+		if ( !elevation_problem.empty() )
+		{
+			daemon.noteStartupProblem( std::format( "Run as administrator is on, but Lexiglance could not start as administrator ({}), so the trigger does nothing over programs that run as administrator. Turn "
+			                                        "Run as administrator off and on again (Overview, Startup).",
+			                                        elevation_problem ) );
+		}
+#endif
 		if ( !backend_problem.empty() )
 		{
 			daemon.noteStartupProblem( std::format( "No desktop integration: {}.", backend_problem ) );

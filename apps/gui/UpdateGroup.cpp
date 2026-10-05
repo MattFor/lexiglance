@@ -192,6 +192,12 @@ try {
     if (Test-Path $unpacked) { Remove-Item $unpacked -Recurse -Force }
     Expand-Archive -LiteralPath $Zip -DestinationPath $unpacked -Force
     $from = if (Test-Path (Join-Path $unpacked 'bin')) { $unpacked } else { (Get-ChildItem $unpacked -Directory | Select-Object -First 1).FullName }
+    # The daemon asked to quit first: one running as administrator cannot be ended from here (nor its path read).
+    $ctl = Join-Path $Target 'bin\lexiglancectl.exe'
+    if (Test-Path $ctl) {
+        Start-Process -FilePath $ctl -ArgumentList 'quit' -WindowStyle Hidden -PassThru | Wait-Process -Timeout 8 -ErrorAction SilentlyContinue
+        Get-Process lexiglanced -ErrorAction SilentlyContinue | Wait-Process -Timeout 6 -ErrorAction SilentlyContinue
+    }
     Get-Process lexiglance, lexiglanced, lexiglancectl -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -and $_.Path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force
     Start-Sleep -Milliseconds 500
@@ -274,9 +280,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 			memory.remove( QStringLiteral( "update/installing" ) );
 			QDir( updateDirectory() ).removeRecursively();
 			status_->setText( QStringLiteral( "Updated to Lexiglance %1." ).arg( qs( version ) ) );
-			// Offer language / OCR setup again after an update (dictionaries already installed are skipped).
-			memory.setValue( QStringLiteral( "setup/after_update" ), true );
-			// And what changed, when the window is next shown.
+			// What changed, when the window is next shown.
 			memory.setValue( QStringLiteral( "update/changes" ), qs( version ) );
 			ensureVcRedist();
 		}

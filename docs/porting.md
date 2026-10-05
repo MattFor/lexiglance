@@ -22,7 +22,7 @@ reads the screen through a `ScreenReader` each of them provides (`XGetImage` on 
 backend only brings its screenshot call.
 
 | Piece               | X11 (done)                     | Windows (done)                                     | macOS                                                                            | Wayland                                            |
-|---------------------|--------------------------------|----------------------------------------------------|----------------------------------------------------------------------------------|----------------------------------------------------|
+| ------------------- | ------------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------- |
 | Trigger keys        | XInput2 raw events             | Raw Input with `RIDEV_INPUTSINK` (no hooks)        | `CGEventTap` (listen-only)                                                       | GlobalShortcuts portal                             |
 | Text under pointer  | AT-SPI                         | UI Automation `TextPattern.RangeFromPoint`         | `AXUIElementCopyElementAtPosition` + `kAXRangeForPositionParameterizedAttribute` | AT-SPI (the pointer position needs the compositor) |
 | Screen pixels (OCR) | `XGetImage` of the root window | `BitBlt` of the virtual screen                     | `CGWindowListCreateImage`                                                        | Screenshot portal                                  |

@@ -2,6 +2,7 @@
 
 #include "DaemonClient.h"
 #include "DesktopEntry.h"
+#include "RunAsAdministrator.h"
 #include "Settings.h"
 #include "TranslationInstall.h"
 #include "UpdateGroup.h"
@@ -22,7 +23,6 @@
 #include <QHBoxLayout>
 #include <QLocale>
 #include <QMessageBox>
-#include <QRegularExpression>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -36,163 +36,6 @@ namespace lexiglance::gui
 
 	namespace
 	{
-
-#ifdef Q_OS_WIN
-		QSettings runKey()
-		{
-			return { QStringLiteral( "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" ), QSettings::NativeFormat };
-		}
-#else
-		// The desktop's autostart entry: XDG autostart, or a LaunchAgent on macOS.
-		QString autostartFile()
-		{
-	#ifdef Q_OS_MACOS
-			return QDir::homePath() + "/Library/LaunchAgents/io.github.mattfor.lexiglance.daemon.plist";
-	#else
-			return QStandardPaths::writableLocation( QStandardPaths::GenericConfigLocation ) + "/autostart/lexiglance-daemon.desktop";
-	#endif
-		}
-#endif
-
-		bool autostartEnabled()
-		{
-#ifdef Q_OS_WIN
-			return runKey().contains( QStringLiteral( "Lexiglance" ) );
-#else
-			return QFile::exists( autostartFile() );
-#endif
-		}
-
-		bool setAutostart( bool enabled )
-		{
-#ifdef Q_OS_WIN
-			auto run = runKey();
-			if ( enabled )
-			{
-				run.setValue( QStringLiteral( "Lexiglance" ), QStringLiteral( "\"%1\"" ).arg( QDir::toNativeSeparators( daemonExecutable() ) ) );
-			}
-			else
-			{
-				run.remove( QStringLiteral( "Lexiglance" ) );
-			}
-			run.sync();
-			return run.status() == QSettings::NoError;
-#else
-			if ( !enabled )
-			{
-				return QFile::remove( autostartFile() ) || !QFile::exists( autostartFile() );
-			}
-			QDir().mkpath( QFileInfo( autostartFile() ).absolutePath() );
-			QFile file( autostartFile() );
-			if ( !file.open( QIODevice::WriteOnly | QIODevice::Truncate ) )
-			{
-				return false;
-			}
-	#ifdef Q_OS_MACOS
-			const QString entry = QStringLiteral(
-										  "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-										  "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
-										  "<plist version=\"1.0\"><dict><key>Label</key><string>io.github.mattfor.lexiglance.daemon</string>"
-										  "<key>ProgramArguments</key><array><string>%1</string></array><key>RunAtLoad</key><true/></dict></plist>\n"
-			)
-			                              .arg( daemonExecutable().toHtmlEscaped() );
-	#else
-			// From an AppImage, the AppImage file with --daemon: the daemon inside it lives in a mount that is gone
-			// once it ends, so its own path would start nothing at the next login.
-			const QString appimage = qEnvironmentVariable( "APPIMAGE" );
-			const QString exec     = appimage.isEmpty() ? QStringLiteral( "\"%1\"" ).arg( daemonExecutable() ) : QStringLiteral( "\"%1\" --daemon" ).arg( appimage );
-			const QString entry    = QStringLiteral(
-											 "[Desktop Entry]\nType=Application\nName=Lexiglance\nComment=System-wide pop-up dictionary\nExec=%1\n"
-											 "Icon=lexiglance\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n"
-			)
-			                                 .arg( exec );
-	#endif
-			return file.write( entry.toUtf8() ) > 0;
-#endif
-		}
-
-#if !defined( Q_OS_WIN ) && !defined( Q_OS_MACOS )
-		// An entry that starts nothing any more is written again for this copy: the program it names is gone, or it is
-		// inside the mount of an AppImage (which earlier versions wrote, and which disappears when the AppImage ends).
-		// An entry that works is left alone, whichever copy it starts.
-		void repairAutostart()
-		{
-			QFile file( autostartFile() );
-			if ( !file.open( QIODevice::ReadOnly ) )
-			{
-				return;
-			}
-			// Exec="/a path/lexiglanced" or Exec=/path/lexiglanced, with arguments or without.
-			static const QRegularExpression exec( QStringLiteral( "^Exec=(?:\"([^\"\n]+)\"|([^\\s]+))" ), QRegularExpression::MultilineOption );
-			const auto                      match   = exec.match( QString::fromUtf8( file.readAll() ) );
-			const QString                   program = match.hasMatch() ? ( match.captured( 1 ).isEmpty() ? match.captured( 2 ) : match.captured( 1 ) ) : QString();
-			if ( !program.isEmpty() && QFile::exists( program ) && !program.contains( QStringLiteral( "/.mount_" ) ) )
-			{
-				return;
-			}
-			file.close();
-			log::info( "autostart: the entry started {}, which is gone; it starts {} now", ss( program ), ss( qEnvironmentVariable( "APPIMAGE", daemonExecutable() ) ) );
-			( void )setAutostart( true );
-		}
-#endif
-
-#ifndef Q_OS_MACOS
-		// The settings application at login as well, in the tray: a second entry beside the daemon's.
-	#ifdef Q_OS_WIN
-		constexpr auto tray_value = "Lexiglance tray";
-	#else
-		QString trayAutostartFile()
-		{
-			return QStandardPaths::writableLocation( QStandardPaths::GenericConfigLocation ) + "/autostart/lexiglance-tray.desktop";
-		}
-	#endif
-
-		bool trayAutostartEnabled()
-		{
-	#ifdef Q_OS_WIN
-			return runKey().contains( QLatin1String( tray_value ) );
-	#else
-			return QFile::exists( trayAutostartFile() );
-	#endif
-		}
-
-		bool setTrayAutostart( bool enabled )
-		{
-	#ifdef Q_OS_WIN
-			auto run = runKey();
-			if ( enabled )
-			{
-				run.setValue( tray_value, QStringLiteral( "\"%1\" --tray" ).arg( QDir::toNativeSeparators( QCoreApplication::applicationFilePath() ) ) );
-			}
-			else
-			{
-				run.remove( tray_value );
-			}
-			run.sync();
-			return run.status() == QSettings::NoError;
-	#else
-			if ( !enabled )
-			{
-				return QFile::remove( trayAutostartFile() ) || !QFile::exists( trayAutostartFile() );
-			}
-			// The AppImage file itself rather than its mount, which changes every run.
-			const QString appimage = qEnvironmentVariable( "APPIMAGE" );
-			const QString program  = appimage.isEmpty() ? QCoreApplication::applicationFilePath() : appimage;
-			QDir().mkpath( QFileInfo( trayAutostartFile() ).absolutePath() );
-			QFile file( trayAutostartFile() );
-			if ( !file.open( QIODevice::WriteOnly | QIODevice::Truncate ) )
-			{
-				return false;
-			}
-			const QString entry = QStringLiteral(
-										  "[Desktop Entry]\nType=Application\nName=Lexiglance (tray)\nComment=The Lexiglance settings application, in the tray\n"
-										  "Exec=\"%1\" --tray\nIcon=lexiglance\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n"
-			)
-			                              .arg( program );
-			return file.write( entry.toUtf8() ) > 0;
-	#endif
-		}
-#endif
 
 		// A figure with its caption, for the status overview.
 		QFrame* tile( QLabel* value, const QString& caption )
@@ -290,14 +133,37 @@ namespace lexiglance::gui
 			{
 				return QStringLiteral( "Open Anki" );
 			}
+			if ( action == QStringLiteral( "run-as-administrator" ) )
+			{
+				return QStringLiteral( "Run as administrator" );
+			}
 			return QStringLiteral( "Fix" );
 		}
 
 		// Whether Fix issues can carry the action out on its own. Opening a page is a hand-off to the user, who still
-		// has to choose a dictionary or a deck there, so it is not one of these.
+		// has to choose a dictionary or a deck there, so it is not one of these; nor is running as administrator, which
+		// Windows asks the user about.
 		bool automatic( const QString& action )
 		{
-			return !action.isEmpty() && !action.startsWith( QStringLiteral( "open-" ) );
+			return !action.isEmpty() && !action.startsWith( QStringLiteral( "open-" ) ) && action != QStringLiteral( "run-as-administrator" );
+		}
+
+		// The line under Run as administrator, from what the daemon says.
+		QString administratorNote( bool set_up, bool elevated )
+		{
+			if ( set_up && elevated )
+			{
+				return QStringLiteral( "Lexiglance runs as administrator." );
+			}
+			if ( set_up )
+			{
+				return QStringLiteral( "<span style=\"color:#d19a1f\">It is set up, but Lexiglance does not run as administrator: see Health.</span>" );
+			}
+			if ( elevated )
+			{
+				return QStringLiteral( "Lexiglance runs as administrator now, as it was started so." );
+			}
+			return QStringLiteral( "Only needed for games and programs that run as administrator. Windows asks once, when it is turned on." );
 		}
 
 		// The capture summary for its tile: what reads the screen on one line, what it is made of ("(PaddleOCR:
@@ -429,8 +295,8 @@ namespace lexiglance::gui
 
 		auto* test_box    = new QGroupBox( QStringLiteral( "Try it" ) );
 		auto* test_layout = new QVBoxLayout( test_box );
-		auto* hint        = new QLabel( QStringLiteral( "Hold the trigger keys and point at a word in any application. Scroll the popup with the wheel and click an entry to copy the word. "
-		                                                "Or show a popup for this text:" ) );
+		auto* hint        = new QLabel( QStringLiteral( "Hold the trigger keys and point at a word in any application; the popup goes when you let go. To scroll it with the wheel or click an "
+		                                                "entry to copy the word, move onto it before letting go. Or show a popup for this text:" ) );
 		hint->setWordWrap( true );
 		test_layout->addWidget( hint );
 		auto* test_row  = new QHBoxLayout();
@@ -445,13 +311,7 @@ namespace lexiglance::gui
 
 		auto* startup_box    = new QGroupBox( QStringLiteral( "Startup" ) );
 		auto* startup_layout = new QVBoxLayout( startup_box );
-#if !defined( Q_OS_WIN ) && !defined( Q_OS_MACOS )
-		if ( autostartEnabled() )
-		{
-			repairAutostart();
-		}
-#endif
-		autostart_->setChecked( autostartEnabled() );
+		autostart_->setChecked( desktop::autostartEnabled() );
 		startup_layout->addWidget( autostart_ );
 		// Under the option it belongs to.
 		auto* tray_row = new QHBoxLayout();
@@ -462,14 +322,31 @@ namespace lexiglance::gui
 		autostart_tray_->hide();
 #else
 		// Without the daemon's autostart this window's would start the daemon anyway, so it goes too.
-		if ( !autostart_->isChecked() && trayAutostartEnabled() )
+		if ( !autostart_->isChecked() && desktop::trayAutostartEnabled() )
 		{
-			setTrayAutostart( false );
+			desktop::setTrayAutostart( false );
 		}
-		autostart_tray_->setChecked( autostart_->isChecked() && trayAutostartEnabled() );
+		autostart_tray_->setChecked( autostart_->isChecked() && desktop::trayAutostartEnabled() );
 		autostart_tray_->setEnabled( autostart_->isChecked() );
 		autostart_tray_->setToolTip( QStringLiteral( "At login this window starts as a tray icon: click the icon to open it, right-click it to pause scanning." ) );
 #endif
+		if ( administrator::available() )
+		{
+			administrator_      = new QCheckBox( QStringLiteral( "Run as administrator" ) );
+			administrator_note_ = new QLabel( administratorNote( false, false ) );
+			administrator_->setToolTip( QStringLiteral( "While a program that runs as administrator is in front (many games and their launchers do), Windows keeps its keys and clicks from "
+			                                            "programs that do not, so the trigger does nothing over it. With this on, Lexiglance runs as administrator too." ) );
+			// Until the daemon says how it runs.
+			administrator_->setEnabled( false );
+			administrator_note_->setWordWrap( true );
+			administrator_note_->setEnabled( false );
+			startup_layout->addWidget( administrator_ );
+			auto* note_row = new QHBoxLayout();
+			note_row->addSpacing( 24 );
+			note_row->addWidget( administrator_note_, 1 );
+			startup_layout->addLayout( note_row );
+			connect( administrator_, &QCheckBox::toggled, this, [this]( bool on ) { setRunAsAdministrator( on ); } );
+		}
 #if !defined( Q_OS_WIN ) && !defined( Q_OS_MACOS )
 		auto* menu_entry = new QCheckBox( QStringLiteral( "Show Lexiglance in the applications menu" ) );
 		menu_entry->setChecked( desktop::menuEntryShown() );
@@ -552,7 +429,7 @@ namespace lexiglance::gui
 		connect( fix_all_, &QPushButton::clicked, this, [this] { fixAll(); } );
 		connect( show_passed_, &QCheckBox::toggled, this, [this] { showChecks( checks_ ); } );
 		connect( autostart_, &QCheckBox::toggled, this, [this]( bool enabled ) {
-			setAutostart( enabled );
+			desktop::setAutostart( enabled );
 			autostart_tray_->setEnabled( enabled );
 			if ( !enabled )
 			{
@@ -560,7 +437,7 @@ namespace lexiglance::gui
 			}
 		} );
 #ifndef Q_OS_MACOS
-		connect( autostart_tray_, &QCheckBox::toggled, this, []( bool enabled ) { setTrayAutostart( enabled ); } );
+		connect( autostart_tray_, &QCheckBox::toggled, this, []( bool enabled ) { desktop::setTrayAutostart( enabled ); } );
 #endif
 
 		restart_timer_->setInterval( 300 );
@@ -706,11 +583,46 @@ namespace lexiglance::gui
 		const QString capture = captureLines( qs( status["capture"].asString( "unavailable" ) ) );
 		const bool    ailing  = !status["capture_problem"].asString().empty();
 		capture_value_->setText( ailing ? capture + QStringLiteral( "<br><a href=\"health\">see Health</a>" ) : capture );
-		details_->setText( QStringLiteral( "Daemon %1 (pid %2) · %3 desktop · scale %4×" )
+		const bool elevated = status["administrator"].asBool();
+		details_->setText( QStringLiteral( "Daemon %1 (pid %2%3) · %4 desktop · scale %5×" )
 		                           .arg( qs( status["version"].asString() ) )
 		                           .arg( status["pid"].asInt() )
+		                           .arg( elevated ? QStringLiteral( ", as administrator" ) : QString() )
 		                           .arg( qs( status["backend"].asString() ) )
 		                           .arg( status["scale"].asDouble(), 0, 'g', 3 ) );
+		// Daemons before 1.3.4 do not say.
+		if ( administrator_ != nullptr && !administrator_busy_ && status["run_as_administrator"].isBool() )
+		{
+			const QSignalBlocker blocker( administrator_ );
+			administrator_->setChecked( status["run_as_administrator"].asBool() );
+			administrator_->setEnabled( true );
+			administrator_note_->setText( administratorNote( administrator_->isChecked(), elevated ) );
+		}
+	}
+
+	void OverviewPage::setRunAsAdministrator( bool on )
+	{
+		if ( administrator_busy_ )
+		{
+			return;
+		}
+		administrator_busy_ = true;
+		administrator_->setEnabled( false );
+		administrator_note_->setText( on ? QStringLiteral( "Windows asks for permission..." ) : QStringLiteral( "Turning it off..." ) );
+		administrator::set( this, on, [this, on]( const QString& error ) {
+			administrator_busy_ = false;
+			administrator_->setEnabled( true );
+			if ( !error.isEmpty() )
+			{
+				const QSignalBlocker blocker( administrator_ );
+				administrator_->setChecked( !on );
+				administrator_note_->setText( QStringLiteral( "<span style=\"color:#e0605a\">%1</span>" ).arg( error.toHtmlEscaped() ) );
+				return;
+			}
+			// The daemon keeps the rights it started with: the one that takes over from it starts as now set up.
+			administrator_note_->setText( on ? QStringLiteral( "Set up. Lexiglance starts again as administrator..." ) : QStringLiteral( "Turned off. Lexiglance starts again without administrator rights..." ) );
+			restart();
+		} );
 	}
 
 	// What the daemon says while the page is open: the trigger going down, a lookup made, how far the health check has
@@ -979,6 +891,19 @@ namespace lexiglance::gui
 		else if ( action == QStringLiteral( "download-translation" ) )
 		{
 			downloadTranslation( recheck );
+		}
+		else if ( action == QStringLiteral( "run-as-administrator" ) && administrator_ != nullptr )
+		{
+			scroll_->ensureWidgetVisible( administrator_ );
+			// Set up already, but not running so: set up again.
+			if ( administrator_->isChecked() )
+			{
+				setRunAsAdministrator( true );
+			}
+			else
+			{
+				administrator_->setChecked( true );
+			}
 		}
 		else if ( action.startsWith( QStringLiteral( "open-" ) ) )
 		{

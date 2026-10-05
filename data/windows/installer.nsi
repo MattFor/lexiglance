@@ -1,5 +1,5 @@
 ; The Windows installer: for the current user, without administrator rights, into %LOCALAPPDATA%\Programs\Lexiglance.
-; One window with a progress bar, then Lexiglance opens. Running a newer one updates in place; settings and dictionaries
+; A welcome page, a progress bar, then Lexiglance opens. Running a newer one updates in place; settings and dictionaries
 ; live elsewhere and stay. An update that fails part way puts the version before back. The uninstaller asks whether to
 ; delete settings, dictionaries and downloaded models too (yes unless unticked; /KEEPDATA keeps them when silent).
 ; Built from an install prefix by .github/scripts/windows-installer.ps1:
@@ -45,8 +45,18 @@ VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "FileDescription" "Lexiglance installer"
 VIAddVersionKey "LegalCopyright" "MattFor, MIT license"
 
+; What the welcome page says: a first install, or one over the version there is.
+Var WelcomeText
+
 !define MUI_ICON "lexiglance.ico"
 !define MUI_UNICON "lexiglance.ico"
+; First a welcome, so nothing is installed before it is asked for; silent installs (updates) skip it.
+!define MUI_WELCOMEFINISHPAGE_BITMAP "welcome.bmp"
+!define MUI_WELCOMEPAGE_TITLE "Welcome to Lexiglance"
+!define MUI_WELCOMEPAGE_TEXT "$WelcomeText"
+!define MUI_PAGE_CUSTOMFUNCTION_PRE WelcomePre
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomeShow
+!insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
 UninstPage custom un.ChoosePage un.ChooseLeave
 !insertmacro MUI_UNPAGE_INSTFILES
@@ -56,10 +66,31 @@ UninstPage custom un.ChoosePage un.ChooseLeave
 Var KeepData
 Var KeepBox
 
+Function WelcomePre
+    ReadRegStr $0 HKCU "${UNINSTALL_KEY}" "DisplayVersion"
+    ${If} $0 == ""
+        StrCpy $WelcomeText "Lexiglance is a pop-up dictionary for everything on your screen: hold a key over a word in any program, a game included, and see what it means.$\r$\n$\r$\nIt is installed for you alone, into $INSTDIR, and needs no administrator rights. When it is done, Lexiglance opens.$\r$\n$\r$\nReady to start? Click Install."
+    ${Else}
+        StrCpy $WelcomeText "This replaces Lexiglance $0 in $INSTDIR with version ${VERSION}. Your settings, dictionaries and downloaded models stay as they are.$\r$\n$\r$\nLexiglance is closed while it is replaced, and opens again when it is done.$\r$\n$\r$\nReady to start? Click Install."
+    ${EndIf}
+FunctionEnd
+
+; The button that starts it says what it does.
+Function WelcomeShow
+    GetDlgItem $0 $HWNDPARENT 1
+    SendMessage $0 ${WM_SETTEXT} 0 "STR:Install"
+FunctionEnd
+
 ; The programs cannot be replaced or removed while they run: ended, and waited for (up to ten seconds) until Windows
 ; has let go of their files.
 !macro STOP_RUNNING prefix
     Function ${prefix}StopRunning
+        ; The daemon asked over its pipe first: one running as administrator (Run as administrator) cannot be ended
+        ; from here. Versions before 1.3.4 do not know the command, and are ended below as before.
+        ${If} ${FileExists} "$INSTDIR\bin\lexiglancectl.exe"
+            nsExec::Exec '"$INSTDIR\bin\lexiglancectl.exe" quit'
+            Pop $0
+        ${EndIf}
         nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM lexiglance.exe'
         Pop $0
         nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM lexiglanced.exe'
@@ -208,6 +239,8 @@ Function .onInstSuccess
     RMDir /r "$INSTDIR\bin.old"
     RMDir /r "$INSTDIR\lib.old"
     RMDir /r "$INSTDIR\share.old"
+    ; The setup is what was used last; without this, Windows lets the window it opens only flash in the taskbar.
+    System::Call "user32::AllowSetForegroundWindow(i -1)"
     ${GetParameters} $0
     ClearErrors
     ${GetOptions} $0 "/relaunch=" $1
@@ -259,7 +292,7 @@ Function un.ChoosePage
     ${If} $0 == error
         Abort
     ${EndIf}
-    ${NSD_CreateLabel} 0 0 100% 36u "Lexiglance will be removed from $INSTDIR, with its Start menu entry and its autostart."
+    ${NSD_CreateLabel} 0 0 100% 36u "Lexiglance will be removed from $INSTDIR, with its Start menu entry, its autostart and Run as administrator."
     Pop $0
     ${NSD_CreateCheckbox} 0 44u 100% 12u "Also delete my settings, dictionaries and downloaded models"
     Pop $KeepBox
@@ -284,6 +317,12 @@ FunctionEnd
 
 Section "Uninstall"
     Call un.StopRunning
+    ; Run as administrator's scheduled task goes too, not left starting a program that is gone. Its user may delete it,
+    ; so this needs no administrator rights either.
+    ${If} ${FileExists} "$INSTDIR\bin\lexiglanced.exe"
+        nsExec::Exec '"$INSTDIR\bin\lexiglanced.exe" --run-as-administrator off'
+        Pop $0
+    ${EndIf}
     SetShellVarContext current
     Delete "$SMPROGRAMS\Lexiglance.lnk"
     DeleteRegValue HKCU "${RUN_KEY}" "Lexiglance"

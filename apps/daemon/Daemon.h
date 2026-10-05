@@ -53,6 +53,12 @@ namespace lexiglance::daemon
 		// Something that went wrong before the daemon ran (e.g. an unreadable configuration), for the health report.
 		void noteStartupProblem( std::string problem );
 
+#ifdef _WIN32
+		// Whether this daemon runs as administrator, and whether Run as administrator is set up for its program
+		// (Elevation.h), for the status. Before run().
+		void setAdministrator( bool elevated, bool run_as_administrator );
+#endif
+
 	private:
 		struct CaptureRequest
 		{
@@ -285,11 +291,15 @@ namespace lexiglance::daemon
 		// stuck in a call to a hung application shows in the health report.
 		std::atomic<std::chrono::steady_clock::rep> capture_busy_since_{ 0 };
 		std::atomic<std::chrono::steady_clock::rep> render_busy_since_{ 0 };
-		mutable std::mutex                          problems_mutex_;
-		std::vector<std::string>                    startup_problems_;
-		std::vector<std::string>                    load_errors_;
-		std::string                                 last_capture_;
-		std::chrono::steady_clock::time_point       last_capture_time_;
+#ifdef _WIN32
+		bool elevated_             = false;
+		bool run_as_administrator_ = false;
+#endif
+		mutable std::mutex                    problems_mutex_;
+		std::vector<std::string>              startup_problems_;
+		std::vector<std::string>              load_errors_;
+		std::string                           last_capture_;
+		std::chrono::steady_clock::time_point last_capture_time_;
 
 		Mailbox<CaptureRequest> capture_requests_;
 		Mailbox<RenderRequest>  render_requests_;

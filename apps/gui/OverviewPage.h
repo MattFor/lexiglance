@@ -54,6 +54,8 @@ namespace lexiglance::gui
 		void restart();
 		void finishRestart( bool ok, const QString& message );
 		void setTrigger( bool held );
+		// Windows: Run as administrator set up (Windows asks) or removed, and the daemon started again to match.
+		void setRunAsAdministrator( bool on );
 
 		QLabel*       state_;
 		QLabel*       details_;
@@ -96,6 +98,11 @@ namespace lexiglance::gui
 		bool                       health_stale_    = false;
 		// A lookup seen while this window was open; until then the health report says when the last one was.
 		bool saw_lookup_ = false;
+		// Run as administrator and the line under it, where there is such an option (Windows); busy while it is being
+		// set up or removed.
+		QCheckBox* administrator_      = nullptr;
+		QLabel*    administrator_note_ = nullptr;
+		bool       administrator_busy_ = false;
 	};
 
 } // namespace lexiglance::gui

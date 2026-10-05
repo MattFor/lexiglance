@@ -15,7 +15,8 @@
 		#define NOMINMAX
 	#endif
 	#include <windows.h>
-	// After windows.h, which it needs.
+	// After windows.h, which they need.
+	#include <aclapi.h>
 	#include <sddl.h>
 
 	#include <vector>
@@ -139,6 +140,42 @@ namespace lexiglance::ipc
 			return static_cast<std::size_t>( done );
 		}
 
+		// This process's user, as its token names it (a TOKEN_USER); empty when it cannot be read.
+		std::vector<unsigned char> tokenUser()
+		{
+			HANDLE token = nullptr;
+			if ( OpenProcessToken( GetCurrentProcess(), TOKEN_QUERY, &token ) == FALSE )
+			{
+				return {};
+			}
+			DWORD size = 0;
+			GetTokenInformation( token, TokenUser, nullptr, 0, &size );
+			std::vector<unsigned char> buffer( size );
+			if ( size == 0 || GetTokenInformation( token, TokenUser, buffer.data(), size, &size ) == FALSE )
+			{
+				buffer.clear();
+			}
+			CloseHandle( token );
+			return buffer;
+		}
+
+		// Whether this user owns the pipe. The daemon makes its user the owner (pipeSecurity()), which another account
+		// cannot; that tells this user's daemon apart when it runs as administrator, whose token an unelevated program
+		// may not read (so process::sameUser() cannot tell).
+		bool ownedByThisUser( HANDLE pipe )
+		{
+			const std::vector<unsigned char> user       = tokenUser();
+			PSID                             owner      = nullptr;
+			PSECURITY_DESCRIPTOR             descriptor = nullptr;
+			if ( user.empty() || GetSecurityInfo( pipe, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &descriptor ) != ERROR_SUCCESS )
+			{
+				return false;
+			}
+			const bool same = owner != nullptr && EqualSid( owner, reinterpret_cast<const TOKEN_USER*>( user.data() )->User.Sid ) != FALSE;
+			LocalFree( descriptor );
+			return same;
+		}
+
 	} // namespace
 
 	void Socket::close() noexcept
@@ -192,7 +229,7 @@ namespace lexiglance::ipc
 				Socket socket( descriptorOf( pipe ) );
 				// The daemon runs as this user; a pipe of that name another account made first is not it.
 				ULONG server = 0;
-				if ( GetNamedPipeServerProcessId( pipe, &server ) == FALSE || !process::sameUser( static_cast<int>( server ) ) )
+				if ( GetNamedPipeServerProcessId( pipe, &server ) == FALSE || ( !process::sameUser( static_cast<int>( server ) ) && !ownedByThisUser( pipe ) ) )
 				{
 					return fail( "{} is not served by this user's daemon", endpoint );
 				}
@@ -225,26 +262,19 @@ namespace lexiglance::ipc
 	namespace
 	{
 
-		// Only this user (and the system) may open the pipe: "D:P(A;;GA;;;SY)(A;;GA;;;<user>)". A pipe's default
-		// security would let every account read it.
+		// Only this user (and the system) may open the pipe: "O:<user>D:P(A;;GA;;;SY)(A;;GA;;;<user>)". A pipe's default
+		// security would let every account read it. The user owns it as well, also when the daemon runs as administrator
+		// (whose objects the Administrators group would own), so that clients know it (ownedByThisUser()).
 		std::wstring pipeSecurity()
 		{
-			HANDLE token = nullptr;
-			if ( OpenProcessToken( GetCurrentProcess(), TOKEN_QUERY, &token ) == FALSE )
+			const std::vector<unsigned char> user = tokenUser();
+			std::wstring                     descriptor;
+			LPWSTR                           sid = nullptr;
+			if ( !user.empty() && ConvertSidToStringSidW( reinterpret_cast<const TOKEN_USER*>( user.data() )->User.Sid, &sid ) != FALSE )
 			{
-				return {};
-			}
-			DWORD size = 0;
-			GetTokenInformation( token, TokenUser, nullptr, 0, &size );
-			std::vector<unsigned char> buffer( size );
-			std::wstring               descriptor;
-			LPWSTR                     sid = nullptr;
-			if ( size > 0 && GetTokenInformation( token, TokenUser, buffer.data(), size, &size ) != FALSE && ConvertSidToStringSidW( reinterpret_cast<const TOKEN_USER*>( buffer.data() )->User.Sid, &sid ) != FALSE )
-			{
-				descriptor = std::wstring( L"D:P(A;;GA;;;SY)(A;;GA;;;" ) + sid + L")";
+				descriptor = std::wstring( L"O:" ) + sid + L"D:P(A;;GA;;;SY)(A;;GA;;;" + sid + L")";
 				LocalFree( sid );
 			}
-			CloseHandle( token );
 			return descriptor;
 		}
 

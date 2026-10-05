@@ -83,7 +83,8 @@ target_link_libraries(
     PRIVATE lexiglance::options ${CMAKE_DL_LIBS})
 
 # Offline translation (OPUS-MT through the same ONNX Runtime).
-add_library(lexiglance_translate STATIC translate/Model.cpp translate/Tokenizer.cpp)
+add_library(lexiglance_translate STATIC translate/Model.cpp
+                                        translate/Tokenizer.cpp)
 add_library(lexiglance::translate ALIAS lexiglance_translate)
 target_link_libraries(
     lexiglance_translate

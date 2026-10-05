@@ -15,6 +15,26 @@ XDG desktop starts it with the session. The same file ships as `services/xdg/lex
 **Also start this window, hidden in the tray**, below it, adds `~/.config/autostart/lexiglance-tray.desktop` (on
 Windows the `Lexiglance tray` value of the same key), which starts the settings application with `--tray`.
 
+Both, and the applications menu entry, start the copy of Lexiglance that was installed last. A release (the AppImage,
+a package, the Windows setup or portable folder, an installed prefix) points them at itself when it starts, and stops
+another copy's settings window and daemon, so the one just installed is the one that runs. A copy run from its build
+tree leaves them alone, unless they start a program that is gone; `.github/scripts/dev-install.sh` (or `.ps1`) puts
+them back on the build it installs with `lexiglance --claim-entries`. Whether each one is on stays as you chose.
+
+## Run as administrator (Windows)
+
+While a program that runs as administrator is in front (many games and their launchers do), Windows keeps its keys
+and clicks from programs that do not, so the trigger does nothing over it; Health names such programs. **Overview ->
+Run as administrator** makes the daemon run as administrator too. Windows asks once, when it is turned on: that sets
+up a scheduled task, `Lexiglance as administrator (<user>)`, which starts `lexiglanced.exe --from-task` with the
+highest privileges. From then on a daemon started without them (by the autostart above, the settings application or
+`lexiglanced --replace`) starts that task and makes way for the daemon it starts, with no prompt. The settings
+application itself runs as before.
+
+The task starts on demand only, as you, in your session. You may start and delete it, but changing what it starts
+takes an administrator. Turning the option off, uninstalling, or `lexiglanced --run-as-administrator off` deletes it;
+`lexiglanced --run-as-administrator status` shows what it starts.
+
 ## systemd (user service)
 
 ```sh

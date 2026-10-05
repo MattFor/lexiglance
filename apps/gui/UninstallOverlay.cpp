@@ -2,6 +2,7 @@
 
 #include "Common.h"
 #include "DaemonClient.h"
+#include "RunAsAdministrator.h"
 
 #include <lexiglance/core/Log.h>
 
@@ -165,6 +166,8 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 		status_->setText( QStringLiteral( "Uninstalling..." ) );
 		status_->show();
 		place();
+		// Run as administrator's scheduled task (Windows), while its program is still there to remove it.
+		administrator::removeNow();
 
 		if ( plan.kind == uninstall::Kind::WindowsSetup )
 		{

@@ -42,11 +42,28 @@ pwsh .github/scripts/dev-install.ps1             # release preset, into what the
 pwsh .github/scripts/dev-install.ps1 -Preset debug -SkipBuild
 ```
 
-It also points out other copies earlier on `PATH`, which the terminal or the applications menu would run instead.
+The autostart entries, the applications menu entry (Start menu shortcut) and the links in `~/.local/bin` start the
+copy it installed from then on, also when a release took them over in between (**Install release**, or an AppImage
+started since): with the autostart on such a release, the build tree the script put in place last is rebuilt and put
+back. It also points out other copies earlier on `PATH`, which the terminal or the applications menu would run instead.
 
 On Windows the daemon and the settings application are stopped first, because Windows cannot overwrite a running
 program; on Linux the daemon's supervisor is asked to stop and start it. Settings and dictionaries live outside the
 install directory and are left alone either way.
+
+## Releasing
+
+The version in `CMakeLists.txt` (`project(... VERSION x.y.z)`) is the one the in-app updater, About and the release
+workflow go by, so it goes up with every release, and the release tag is exactly `v<that version>`. A pre-push hook
+warns when a push to the default branch keeps the version the remote already has, or a tag does not match; turn it on
+once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+At a terminal it asks whether to push anyway; elsewhere (an IDE) the push stops, and `git push --no-verify` pushes
+anyway.
 
 ## Building the Windows installer
 

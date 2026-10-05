@@ -123,6 +123,42 @@ namespace
 #endif
 	}
 
+	// Another start of Lexiglance reaching this window: it is told which copy this is, and may then ask it to come to the
+	// front on a page, to search, or to make way for its own window.
+	void serveRequests( QLocalServer& server, lexiglance::gui::MainWindow& window )
+	{
+		while ( QLocalSocket* connection = server.nextPendingConnection() )
+		{
+			connection->write( QStringLiteral( "copy %1\n" ).arg( lexiglance::gui::desktop::thisCopy() ).toUtf8() );
+			QObject::connect( connection, &QLocalSocket::disconnected, connection, &QObject::deleteLater );
+			// A copy that only looks whether this window is open (--background-update, or --updated waiting for this one
+			// to end) sends nothing: that is not a request to come to the front.
+			const auto answer = [connection, &window] {
+				if ( !connection->canReadLine() )
+				{
+					return;
+				}
+				const QString requested = QString::fromUtf8( connection->readLine() ).trimmed();
+				connection->disconnectFromServer();
+				if ( requested == QStringLiteral( "quit" ) )
+				{
+					lexiglance::log::info( "another copy's settings window takes the place of this one" );
+					QApplication::quit();
+				}
+				else if ( requested.startsWith( QStringLiteral( "find " ) ) )
+				{
+					window.search( requested.mid( 5 ) );
+				}
+				else if ( requested.startsWith( QStringLiteral( "show" ) ) )
+				{
+					window.showPage( requested.mid( 5 ).trimmed() );
+				}
+			};
+			QObject::connect( connection, &QLocalSocket::readyRead, &window, answer );
+			answer();
+		}
+	}
+
 	int run( int argc, char** argv )
 	{
 		for ( int i = 1; i < argc; ++i )
@@ -141,6 +177,19 @@ namespace
 			( void )freopen_s( &stream, "CONOUT$", "w", stderr );
 		}
 #endif
+		// lexiglance --claim-entries: the autostart and the menu entry start this copy from now on, as for the build
+		// .github/scripts/dev-install puts in place (see DesktopEntry.h). Needs no display.
+		for ( int i = 1; i < argc; ++i )
+		{
+			if ( std::string_view( argv[i] ) == "--claim-entries" )
+			{
+				const QCoreApplication app( argc, argv );
+				startLogging( QCoreApplication::arguments() );
+				lexiglance::gui::desktop::claim();
+				std::println( "Lexiglance's autostart and menu entry start {}", lexiglance::gui::desktop::thisCopy().toStdString() );
+				return 0;
+			}
+		}
 		// Qt reports two harmless things on every start: a second portal registration, and an AT-SPI method it does not
 		// implement that accessibility clients (such as the daemon) ask for.
 		if ( qEnvironmentVariableIsEmpty( "QT_LOGGING_RULES" ) )
@@ -197,7 +246,9 @@ namespace
 		const QString query       = search_flag >= 0 && search_flag + 1 < arguments.size() ? arguments[search_flag + 1] : QString();
 
 		// A second launch brings the running window to the front instead. One started by an update (--updated) waits
-		// for the version it replaces to end.
+		// for the version it replaces to end, and so does a release copy started while another copy's window is open
+		// (a build tree's, another AppImage's): it asks that one to make way, as starting it makes it the copy that runs
+		// (DesktopEntry.h). A window says which copy it is as soon as it is reached, then reads one request.
 		const QString instance = QStringLiteral( "lexiglance-gui-%1" ).arg( userKey() );
 
 		// lexiglance --background-update: started by the daemon now and then, so a copy updates itself even when this
@@ -215,7 +266,9 @@ namespace
 			const lexiglance::gui::UpdateGroup updater( nullptr, true );
 			return QApplication::exec();
 		}
-		const bool updated = arguments.contains( QStringLiteral( "--updated" ) );
+		const bool updated    = arguments.contains( QStringLiteral( "--updated" ) );
+		const bool replaces   = !lexiglance::gui::desktop::inBuildTree() && qEnvironmentVariableIsEmpty( "LEXIGLANCE_HOME" ) && QGuiApplication::platformName() != QStringLiteral( "offscreen" );
+		bool       making_way = false;
 		for ( int waited = 0;; ++waited )
 		{
 			QLocalSocket existing;
@@ -224,10 +277,27 @@ namespace
 			{
 				break;
 			}
-			if ( !updated || waited >= 40 )
+			// Windows before 1.3.4 say nothing, and give up on a request that takes 200 ms to come.
+			if ( replaces && !making_way && existing.waitForReadyRead( 150 ) && existing.canReadLine() )
+			{
+				const QString theirs = QString::fromUtf8( existing.readLine() ).trimmed();
+				if ( theirs.startsWith( QStringLiteral( "copy " ) ) && !lexiglance::gui::desktop::sameCopy( theirs.mid( 5 ), lexiglance::gui::desktop::thisCopy() ) )
+				{
+					lexiglance::log::info( "the settings window open is another copy's ({}): asked it to make way for this one", theirs.mid( 5 ).toStdString() );
+					existing.write( "quit\n" );
+					existing.waitForBytesWritten( 250 );
+					making_way = true;
+				}
+			}
+			if ( !( updated || making_way ) || waited >= 40 )
 			{
 				const QString request = query.isEmpty() ? QStringLiteral( "show %1\n" ).arg( page ) : QStringLiteral( "find %1\n" ).arg( query );
 				lexiglance::log::info( "another settings window is open: asked it to {}", request.trimmed().toStdString() );
+#ifdef _WIN32
+				// This start is what the user just did: the window asked to come forward may, rather than flash in the
+				// taskbar.
+				AllowSetForegroundWindow( ASFW_ANY );
+#endif
 				existing.write( request.toUtf8() );
 				existing.waitForBytesWritten( 250 );
 				return 0;
@@ -240,32 +310,12 @@ namespace
 		server.listen( instance );
 
 		lexiglance::gui::MainWindow window;
-		// In the applications menu from the first start on, also when run from a build tree or an AppImage.
-		if ( QGuiApplication::platformName() != QStringLiteral( "offscreen" ) )
+		// The autostart and the menu entry (DesktopEntry.h); not for the offscreen runs of checks and tests.
+		if ( QGuiApplication::platformName() != QStringLiteral( "offscreen" ) && lexiglance::gui::desktop::maintain() )
 		{
-			lexiglance::gui::desktop::maintainMenuEntry();
+			window.replaceOtherDaemon();
 		}
-		QObject::connect( &server, &QLocalServer::newConnection, &window, [&server, &window] {
-			QString requested;
-			if ( QLocalSocket* connection = server.nextPendingConnection() )
-			{
-				if ( connection->waitForReadyRead( 200 ) )
-				{
-					requested = QString::fromUtf8( connection->readAll() ).trimmed();
-				}
-				connection->deleteLater();
-			}
-			if ( requested.startsWith( QStringLiteral( "find " ) ) )
-			{
-				window.search( requested.mid( 5 ) );
-			}
-			// A copy that only looked whether this window is open (--background-update, or --updated waiting for this
-			// one to end) sends nothing: that is not a request to come to the front.
-			else if ( !requested.isEmpty() )
-			{
-				window.showPage( requested.mid( 5 ).trimmed() );
-			}
-		} );
+		QObject::connect( &server, &QLocalServer::newConnection, &window, [&server, &window] { serveRequests( server, window ); } );
 
 		if ( !arguments.contains( QStringLiteral( "--tray" ) ) )
 		{

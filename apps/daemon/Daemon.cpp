@@ -14,17 +14,36 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <format>
 #include <functional>
 #include <map>
+#include <span>
 
 #include <unistd.h>
+
+#ifdef _WIN32
+	#include "Elevation.h"
+#endif
 
 namespace lexiglance::daemon
 {
 
 	namespace
 	{
+
+		// Starts the settings application's update check. A daemon running as administrator starts it without those
+		// rights (it downloads a setup and runs it), unless that cannot be done.
+		bool startUpdateCheck( const std::filesystem::path& program, std::span<const std::string> arguments, [[maybe_unused]] bool elevated )
+		{
+#ifdef _WIN32
+			if ( elevated && elevation::startUnelevated( program, arguments ) )
+			{
+				return true;
+			}
+#endif
+			return process::startDetached( program, arguments );
+		}
 
 		std::string base64( std::string_view data )
 		{
@@ -393,6 +412,14 @@ namespace lexiglance::daemon
 		startup_problems_.push_back( std::move( problem ) );
 	}
 
+#ifdef _WIN32
+	void Daemon::setAdministrator( bool elevated, bool run_as_administrator )
+	{
+		elevated_             = elevated;
+		run_as_administrator_ = run_as_administrator;
+	}
+#endif
+
 	void Daemon::requestQuit()
 	{
 		if ( backend_ )
@@ -445,11 +472,18 @@ namespace lexiglance::daemon
 		events.scan          = [this]( platform::Point point, const platform::WindowInfo& window, bool sentence, bool pressed ) { onScan( point, window, sentence, pressed ); };
 		events.click_outside = [this]( platform::Point ) { onClickOutside(); };
 		events.selection     = [this]( std::string text, platform::Point point ) { onSelection( std::move( text ), point ); };
-		// Turns of the wheel kept for a popup that never came go with the trigger.
+		// Turns of the wheel kept for a popup that never came go with the trigger, and so does the popup, with any lookup
+		// still on its way to one: unless the pointer was taken onto it to use it (an entry to copy, a word to hear or
+		// send to Anki), which a click elsewhere closes as before.
 		events.trigger_released = [this] {
 			pending_wheel_   = 0;
 			translation_off_ = false;
 			sentence_asked_  = {};
+			if ( !backend_->pointerOnPopup() )
+			{
+				++generation_;
+				dismiss();
+			}
 		};
 		// The settings application shows whether the trigger is seen (Overview, Health).
 		events.trigger_changed = [this]( bool held ) {
@@ -1556,7 +1590,12 @@ namespace lexiglance::daemon
 			}
 			const std::array<std::string, 1> arguments{ "--background-update" };
 			log::info( "update: looking for a newer version ({})", program.string() );
-			if ( !process::startDetached( program, arguments ) )
+#ifdef _WIN32
+			const bool elevated = elevated_;
+#else
+			const bool elevated = false;
+#endif
+			if ( !startUpdateCheck( program, arguments, elevated ) )
 			{
 				log::warn( "update: cannot start {}", program.string() );
 			}
@@ -1803,8 +1842,17 @@ namespace lexiglance::daemon
 		out.field( "version", version );
 		out.field( "protocol", protocol_version );
 		out.field( "pid", static_cast<std::int64_t>( ::getpid() ) );
+		// Which copy of Lexiglance this is (the AppImage it came from, else this executable), for the settings application
+		// of the installed copy to replace another copy's daemon with its own.
+		const char* appimage = std::getenv( "APPIMAGE" );
+		out.field( "program", appimage != nullptr && *appimage != '\0' ? std::string( appimage ) : process::executable().string() );
 		out.field( "uptime", std::chrono::duration_cast<std::chrono::seconds>( std::chrono::steady_clock::now() - started_ ).count() );
 		out.field( "backend", backend_ ? backend_->name() : std::string_view( "none" ) );
+#ifdef _WIN32
+		// Run as administrator (Overview -> Startup): whether this daemon has those rights, and whether it is set up.
+		out.field( "administrator", elevated_ );
+		out.field( "run_as_administrator", run_as_administrator_ );
+#endif
 		{
 			const std::scoped_lock lock( capture_status_mutex_ );
 			out.field( "capture", capture_status_ );

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.4] - 21:00 CEST 2026-10-05
+
+Adjustments so you can run as administrator in order to get words from higher elevation programs.
+
+- Windows: **Overview -> Run as administrator**, for games that run as administrator (Windows keeps their keys from
+  Lexiglance otherwise). Windows asks once; Health points to it when such a program is in front.
+- Windows: the installer starts with a welcome page, and Lexiglance comes to the front afterwards instead of flashing in
+  the taskbar.
+- The popup goes when you let go of the trigger, unless the pointer is on it (move onto it first to click an entry).
+- Windows: the daemon no longer stops answering when something checked on it at the wrong moment.
+- The autostart and menu entry follow the copy installed last; after an update only what changed is shown.
+
 ## [1.3.3] - 14:00 CEST 2026-09-21
 
 Miscellanous fixes.

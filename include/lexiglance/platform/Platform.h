@@ -195,6 +195,8 @@ namespace lexiglance::platform
 		virtual void               showPopup( PopupContent content )         = 0;
 		virtual void               hidePopup()                               = 0;
 		[[nodiscard]] virtual bool popupVisible() const                      = 0;
+		// Whether the pointer is on the popup itself (not on the highlight under it).
+		[[nodiscard]] virtual bool pointerOnPopup() = 0;
 		// Marks text on screen: a rectangle for each line of it.
 		virtual void showHighlight( std::span<const Rect> rects, const render::Color& color ) = 0;
 		virtual void hideHighlight()                                                          = 0;

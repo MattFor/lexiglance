@@ -1,13 +1,13 @@
 # Cross-compiling for Windows with MinGW-w64 (the portable part: core,
 # lexiglancectl, tests), for example:
 #
-#   cmake -S . -B build/windows -G Ninja \
-#         --toolchain cmake/toolchains/mingw-w64.cmake \
-#         -DLEXIGLANCE_BUILD_DAEMON=OFF -DLEXIGLANCE_BUILD_GUI=OFF
+# cmake -S . -B build/windows -G Ninja \ --toolchain
+# cmake/toolchains/mingw-w64.cmake \ -DLEXIGLANCE_BUILD_DAEMON=OFF
+# -DLEXIGLANCE_BUILD_GUI=OFF
 #
-# A static zlib for MinGW is needed (Fedora: mingw64-zlib-static; elsewhere
-# pass -DZLIB_INCLUDE_DIR and -DZLIB_LIBRARY). The executables are linked
-# statically, and ctest runs the Windows test binary through wine.
+# A static zlib for MinGW is needed (Fedora: mingw64-zlib-static; elsewhere pass
+# -DZLIB_INCLUDE_DIR and -DZLIB_LIBRARY). The executables are linked statically,
+# and ctest runs the Windows test binary through wine.
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
