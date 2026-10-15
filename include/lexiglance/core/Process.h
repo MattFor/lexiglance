@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -63,8 +64,15 @@ namespace lexiglance::process
 	// The executable of this process.
 	[[nodiscard]] std::filesystem::path executable();
 
-	// Whether the executable file was replaced (rebuilt or updated) after this process started.
+	// The file this copy of Lexiglance runs from: the AppImage it came in ($APPIMAGE), else the executable.
+	[[nodiscard]] std::filesystem::path programFile();
+
+	// Whether programFile() was replaced (rebuilt or updated) after this process started.
 	[[nodiscard]] bool executableReplaced();
+
+	// For a look now and then: true once a newer copy put in place of programFile() is whole, that is executable and
+	// last written at `seen`, what the look before found (not a download, copy or link still being written). Sets `seen`.
+	[[nodiscard]] bool replacementReady( std::optional<std::filesystem::file_time_type>& seen );
 
 	// Starts `program` with `arguments` on its own: it is not waited for and outlives this process (no zombie is left
 	// behind either). False when it cannot be started.

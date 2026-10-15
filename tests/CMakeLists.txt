@@ -27,7 +27,8 @@ add_executable(
     TestRussian.cpp
     TestScripts.cpp
     TestTranslate.cpp
-    TestUninstall.cpp)
+    TestUninstall.cpp
+    TestUpdate.cpp)
 add_dependencies(lexiglance_tests lexiglance_fixture)
 
 target_compile_definitions(

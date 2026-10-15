@@ -3,6 +3,7 @@
 #include "Common.h"
 
 #include <lexiglance/core/Log.h>
+#include <lexiglance/core/Paths.h>
 
 #include <QCoreApplication>
 #include <QDir>
@@ -89,6 +90,30 @@ namespace lexiglance::gui::desktop
 
 		void mend();
 
+		// The AppImage alone in a folder of its own (~/Applications, as an earlier update made it) while the user keeps
+		// AppImages in another (~/applications): it moves there, the empty folder goes, and the entries follow it (claim).
+		void moveAppImage()
+		{
+			const QString appimage = qEnvironmentVariable( "APPIMAGE" );
+			if ( appimage.isEmpty() )
+			{
+				return;
+			}
+			const QString target = qs( paths::appImageDestination( ss( appimage ), ss( QDir::homePath() ) ).string() );
+			// The running AppImage keeps its open file, so it can be moved while it runs.
+			if ( target.isEmpty() || !QFile::rename( appimage, target ) )
+			{
+				if ( !target.isEmpty() )
+				{
+					log::warn( "entries: cannot move {} to {}", ss( appimage ), ss( target ) );
+				}
+				return;
+			}
+			( void )QDir().rmdir( QFileInfo( appimage ).absolutePath() );
+			qputenv( "APPIMAGE", QFile::encodeName( target ) );
+			log::info( "entries: moved {} to {}, beside the other AppImages", ss( appimage ), ss( target ) );
+		}
+
 	} // namespace
 
 	QString thisCopy()
@@ -120,6 +145,7 @@ namespace lexiglance::gui::desktop
 			mend();
 			return false;
 		}
+		moveAppImage();
 		claim();
 		return true;
 	}
@@ -417,11 +443,14 @@ namespace lexiglance::gui::desktop
 		// The icon, from the program's resources, where the menu can find it.
 		QString installIcon()
 		{
-			const QString path = QStandardPaths::writableLocation( QStandardPaths::GenericDataLocation ) + "/icons/hicolor/scalable/apps/lexiglance.svg";
-			if ( !QFile::exists( path ) )
+			const QString path     = QStandardPaths::writableLocation( QStandardPaths::GenericDataLocation ) + "/icons/hicolor/scalable/apps/lexiglance.svg";
+			const QString resource = QStringLiteral( ":/lexiglance/lexiglance.svg" );
+			// Written again when it is an earlier version's logo.
+			if ( read( path ) != read( resource ) )
 			{
 				QDir().mkpath( QFileInfo( path ).absolutePath() );
-				QFile::copy( QStringLiteral( ":/lexiglance/lexiglance.svg" ), path );
+				QFile::remove( path );
+				QFile::copy( resource, path );
 				QFile::setPermissions( path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther );
 			}
 			return QFile::exists( path ) ? path : QStringLiteral( "accessories-dictionary" );

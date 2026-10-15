@@ -77,6 +77,7 @@ namespace lexiglance::gui
 		bool                      tried_start_         = false;
 		bool                      replaced_daemon_     = false;
 		bool                      replace_other_       = false;
+		bool                      restarting_          = false;
 	};
 
 } // namespace lexiglance::gui

@@ -11,7 +11,7 @@ permissions:
 env:
     APT_PACKAGES: >-
         ninja-build zlib1g-dev libcairo2-dev libpango1.0-dev libx11-dev libxi-dev libxfixes-dev libxrandr-dev
-        libxext-dev libatspi2.0-dev libcurl4-openssl-dev libgl-dev libxkbcommon-dev qt6-base-dev dpkg-dev file
+        libxext-dev libatspi2.0-dev libcurl4-openssl-dev libgl-dev libxkbcommon-dev
 
 jobs:
     linux:
@@ -22,7 +22,7 @@ jobs:
             - name: Install dependencies
               run: |
                   sudo apt-get update
-                  sudo apt-get install -y $APT_PACKAGES g++-14 libfuse2
+                  sudo apt-get install -y $APT_PACKAGES qt6-base-dev dpkg-dev file g++-14
             - name: Configure
               # x86-64-v2 runs on every x86-64 CPU since about 2009; build with -DLEXIGLANCE_NATIVE=ON for your own CPU.
               run: >-
@@ -36,23 +36,61 @@ jobs:
               run: |
                   cd build && cpack
                   mkdir -p ../dist && mv lexiglance-*.tar.gz lexiglance_*.deb ../dist/
+            - uses: actions/upload-artifact@v7
+              with:
+                  name: package-linux
+                  path: dist/*
+
+    appimage:
+        name: AppImage
+        # The Linux download that needs no installing, so no release goes out without it. Built on the oldest Ubuntu LTS
+        # still supported (glibc 2.35), so it runs there and on everything newer; the AppImage catalog tests it on 22.04.
+        # 22.04's own GCC and Qt are too old: GCC 14 comes from the toolchain PPA, Qt from Qt's own build, and the checkrt
+        # plugin bundles GCC's libstdc++, used only where the system's is older. Its exec.so stays out: it would give the
+        # programs Lexiglance starts from its own mount (the daemon, the updater) the environment without that libstdc++.
+        runs-on: ubuntu-22.04
+        env:
+            QT_VERSION: "6.8.3"
+        steps:
+            - uses: actions/checkout@v7
+            - name: Install dependencies
+              run: |
+                  sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+                  sudo apt-get update
+                  # The libraries Qt's xcb plugin needs, for linuxdeploy to bundle.
+                  sudo apt-get install -y $APT_PACKAGES g++-14 libfontconfig1-dev libegl1 libxkbcommon-x11-0 libxcb-cursor0 \
+                    libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+                  pip install aqtinstall
+                  python3 -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O "$RUNNER_TEMP/Qt"
+                  echo "QT_DIR=$RUNNER_TEMP/Qt/$QT_VERSION/gcc_64" >> "$GITHUB_ENV"
+            - name: Configure
+              run: >-
+                  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-14
+                  -DCMAKE_INSTALL_PREFIX=/usr -DLEXIGLANCE_ARCH=x86-64-v2 -DCMAKE_PREFIX_PATH="$QT_DIR"
+            - name: Build
+              run: cmake --build build
+            - name: Test
+              run: ctest --test-dir build --output-on-failure
             - name: AppImage
-              # The Linux download that needs no installing, so no release goes out without it.
               env:
                   APPIMAGE_EXTRACT_AND_RUN: "1"
               run: |
                   DESTDIR="$PWD/AppDir" cmake --install build
                   wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
                   wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-                  chmod +x linuxdeploy*.AppImage
-                  export QMAKE=/usr/lib/qt6/bin/qmake LDAI_OUTPUT="dist/lexiglance-${GITHUB_REF_NAME#v}-x86_64.AppImage"
-                  ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage \
+                  wget -q https://github.com/darealshinji/linuxdeploy-plugin-checkrt/releases/download/r4/linuxdeploy-plugin-checkrt.sh
+                  chmod +x linuxdeploy*
+                  export QMAKE="$QT_DIR/bin/qmake" LD_LIBRARY_PATH="$QT_DIR/lib"
+                  ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --plugin checkrt \
                     --desktop-file AppDir/usr/share/applications/io.github.mattfor.lexiglance.desktop \
                     --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/lexiglance.svg \
                     --executable AppDir/usr/bin/lexiglanced --executable AppDir/usr/bin/lexiglancectl
+                  rm AppDir/checkrt/exec.so
+                  mkdir -p dist
+                  LDAI_OUTPUT="dist/lexiglance-${GITHUB_REF_NAME#v}-x86_64.AppImage" ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
             - uses: actions/upload-artifact@v7
               with:
-                  name: package-linux
+                  name: package-appimage
                   path: dist/*
 
     fedora:
@@ -132,7 +170,7 @@ jobs:
 
     publish:
         name: Publish
-        needs: [linux, fedora, windows]
+        needs: [linux, appimage, fedora, windows]
         # A manual run builds and tests the packages without publishing them.
         if: startsWith(github.ref, 'refs/tags/v')
         runs-on: ubuntu-24.04

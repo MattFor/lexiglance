@@ -17,3 +17,7 @@ compile_commands.json
 *.zip
 *.lgd
 !tests/data/regressions/*
+
+# Other assets
+brag-output/
+docs/brand/

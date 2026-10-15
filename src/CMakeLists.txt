@@ -1,6 +1,10 @@
 configure_file(core/Version.h.in
                ${PROJECT_BINARY_DIR}/generated/lexiglance/core/Version.h @ONLY)
 
+# The settings application links these into code Qt has built with -fPIC: with link-time optimisation a library built
+# as PIE makes the whole program PIE, and Qt built with -reduce-relocations (Qt's own binaries) crashes on start.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # The language files in data/languages, built into the program.
 file(GLOB LEXIGLANCE_LANGUAGE_FILES CONFIGURE_DEPENDS
      ${PROJECT_SOURCE_DIR}/data/languages/*.json)

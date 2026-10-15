@@ -2,6 +2,9 @@
 
 #include <lexiglance/core/Hash.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <format>
@@ -139,6 +142,63 @@ namespace lexiglance::paths
 		}
 		return socket.string();
 #endif
+	}
+
+	namespace
+	{
+
+		std::string lowerName( const fs::path& path )
+		{
+			std::string name = path.filename().string();
+			std::ranges::transform( name, name.begin(), []( unsigned char c ) { return static_cast<char>( std::tolower( c ) ); } );
+			return name;
+		}
+
+		bool appImageFolderName( const fs::path& folder )
+		{
+			const auto name = lowerName( folder );
+			return name == "applications" || name == "appimages";
+		}
+
+		// What a folder holds besides Lexiglance's own files (the AppImage, an update downloading beside it).
+		std::ptrdiff_t othersIn( const fs::path& folder )
+		{
+			std::error_code ec;
+			return std::ranges::count_if( fs::directory_iterator( folder, ec ), []( const fs::directory_entry& entry ) { return !lowerName( entry.path() ).starts_with( "lexiglance" ); } );
+		}
+
+	} // namespace
+
+	fs::path appImageFolder( const fs::path& home )
+	{
+		fs::path        best = home / "Applications";
+		std::ptrdiff_t  most = -1;
+		std::error_code ec;
+		for ( const auto& entry : fs::directory_iterator( home, ec ) )
+		{
+			if ( !entry.is_directory( ec ) || !appImageFolderName( entry.path() ) )
+			{
+				continue;
+			}
+			if ( const auto others = othersIn( entry.path() ); others > most )
+			{
+				most = others;
+				best = entry.path();
+			}
+		}
+		return best;
+	}
+
+	fs::path appImageDestination( const fs::path& appimage, const fs::path& home )
+	{
+		std::error_code ec;
+		const fs::path  from   = appimage.parent_path();
+		const fs::path  folder = appImageFolder( home );
+		if ( fs::weakly_canonical( from.parent_path(), ec ) != fs::weakly_canonical( home, ec ) || !appImageFolderName( from ) || othersIn( from ) > 0 || othersIn( folder ) == 0 || fs::exists( folder / appimage.filename(), ec ) )
+		{
+			return {};
+		}
+		return folder / appimage.filename();
 	}
 
 	Result<> ensureDirectory( const fs::path& dir, bool owner_only )

@@ -89,7 +89,7 @@ namespace lexiglance::gui
 		QString appImagePath()
 		{
 			const QString running = qEnvironmentVariable( "APPIMAGE" );
-			return running.isEmpty() ? QStandardPaths::writableLocation( QStandardPaths::HomeLocation ) + QStringLiteral( "/Applications/lexiglance-x86_64.AppImage" ) : running;
+			return running.isEmpty() ? qs( ( paths::appImageFolder( ss( QDir::homePath() ) ) / "lexiglance-x86_64.AppImage" ).string() ) : running;
 		}
 
 		// The release file this copy updates from; empty when it cannot replace itself.

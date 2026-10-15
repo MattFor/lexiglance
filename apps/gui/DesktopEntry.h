@@ -45,7 +45,8 @@ namespace lexiglance::gui::desktop
 
 	// On start: a release copy claims the entries, and is the installed copy from then on (true); a build tree only mends
 	// the ones that start nothing any more, and adds the menu entry the first time. A copy with a home of its own
-	// (LEXIGLANCE_HOME, as tests use) leaves the desktop's entries alone.
+	// (LEXIGLANCE_HOME, as tests use) leaves the desktop's entries alone. An AppImage alone in a folder that only it is
+	// in, beside the user's own folder for AppImages, first moves there (and the entries follow it).
 	bool maintain();
 
 } // namespace lexiglance::gui::desktop

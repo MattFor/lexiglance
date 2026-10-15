@@ -1560,7 +1560,7 @@ namespace lexiglance::daemon
 		constexpr auto interval = 6h;
 		constexpr auto idle     = 3min;
 		constexpr auto patience = 24h;
-		constexpr auto look     = 10min;
+		constexpr auto look     = 1min;
 
 		std::mutex                  mutex;
 		std::condition_variable_any sleeping;
@@ -1569,8 +1569,27 @@ namespace lexiglance::daemon
 			return !sleeping.wait_for( lock, stop, duration, [] { return false; } ) && !stop.stop_requested();
 		};
 		auto last = std::chrono::steady_clock::now() - interval + first;
+#ifdef __linux__
+		std::optional<std::filesystem::file_time_type> replaced;
+#endif
 		while ( sleep( look ) )
 		{
+#ifdef __linux__
+			// This copy replaced by a newer one (an update, a package installed over it, a download put in place of the
+			// AppImage, a rebuild): its daemon takes over. Otherwise this one would run the old version until the next
+			// login, and find the version already installed as an update.
+			if ( process::replacementReady( replaced ) )
+			{
+				const auto program  = process::programFile();
+				const bool appimage = program != process::executable();
+				log::info( "update: {} was replaced; its daemon takes over", program.string() );
+				if ( !process::startDetached( program, appimage ? std::vector<std::string>{ "--daemon", "--replace" } : std::vector<std::string>{ "--replace" } ) )
+				{
+					log::warn( "update: cannot start {}", program.string() );
+				}
+				return;
+			}
+#endif
 			const auto now = std::chrono::steady_clock::now();
 			if ( now - last < interval )
 			{

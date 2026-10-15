@@ -526,9 +526,11 @@ namespace lexiglance::process
 
 	bool executableReplaced()
 	{
+		// From an AppImage the executable is in its mount, which never changes: the AppImage file is what gets replaced.
+		const fs::path  program = programFile();
 		std::error_code ec;
 		// A new file written in place of the old one leaves the running image unlinked.
-		if ( fs::read_symlink( "/proc/self/exe", ec ).string().ends_with( " (deleted)" ) )
+		if ( program == executable() && fs::read_symlink( "/proc/self/exe", ec ).string().ends_with( " (deleted)" ) )
 		{
 			return true;
 		}
@@ -551,11 +553,12 @@ namespace lexiglance::process
 		const auto      ticks   = parseInt<long long>( fields[19] );
 		const long long started = boot_time + ( ticks / std::max( 1L, ::sysconf( _SC_CLK_TCK ) ) );
 		struct stat     info{};
-		if ( ::stat( executable().c_str(), &info ) != 0 )
+		if ( ::stat( program.c_str(), &info ) != 0 )
 		{
 			return false;
 		}
-		return info.st_mtim.tv_sec > started + 1;
+		// And its change time: a file moved into place keeps when it was written, not when it was moved.
+		return std::max( info.st_mtim.tv_sec, info.st_ctim.tv_sec ) > started + 1;
 	}
 
 #endif
@@ -752,6 +755,28 @@ namespace lexiglance::process
 		return WIFEXITED( status ) && WEXITSTATUS( status ) == 0 && ::access( path.c_str(), X_OK ) == 0;
 	}
 #endif
+
+	fs::path programFile()
+	{
+		const char* appimage = std::getenv( "APPIMAGE" );
+		return appimage != nullptr && *appimage != '\0' ? fs::path( appimage ) : executable();
+	}
+
+	bool replacementReady( std::optional<fs::file_time_type>& seen )
+	{
+		if ( !executableReplaced() )
+		{
+			seen.reset();
+			return false;
+		}
+		std::error_code ec;
+		const fs::path  program    = programFile();
+		const auto      written    = fs::last_write_time( program, ec );
+		const bool      executable = !ec && ( fs::status( program, ec ).permissions() & fs::perms::owner_exec ) != fs::perms::none;
+		const bool      settled    = seen == written;
+		seen                       = written;
+		return settled && executable && !ec;
+	}
 
 	fs::path sibling( std::string_view name )
 	{

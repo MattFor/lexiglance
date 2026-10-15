@@ -19,7 +19,10 @@ Both, and the applications menu entry, start the copy of Lexiglance that was ins
 a package, the Windows setup or portable folder, an installed prefix) points them at itself when it starts, and stops
 another copy's settings window and daemon, so the one just installed is the one that runs. A copy run from its build
 tree leaves them alone, unless they start a program that is gone; `.github/scripts/dev-install.sh` (or `.ps1`) puts
-them back on the build it installs with `lexiglance --claim-entries`. Whether each one is on stays as you chose.
+them back on the build it installs with `lexiglance --claim-entries`. Whether each one is on stays as you chose. An
+AppImage alone in a folder of its own beside the one you keep AppImages in (`~/Applications` next to `~/applications`,
+say) moves there first. On Linux, a copy replaced while it runs (the AppImage file, a package or `.tar.gz` installed
+over it, a rebuild) switches to the new version by itself: the daemon within two minutes, the window right after.
 
 ## Run as administrator (Windows)
 

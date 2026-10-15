@@ -25,6 +25,7 @@
 #include <QHBoxLayout>
 #include <QMenu>
 #include <QPalette>
+#include <QProcess>
 #include <QScrollBar>
 #include <QStatusBar>
 #include <QStyleHints>
@@ -537,6 +538,16 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 			}
 			replaced_daemon_ = true;
 			client_->startDaemon( true );
+		}
+		// This copy was updated under this window (its AppImage replaced, whose daemon took over): the window follows.
+		if ( !restarting_ && desktop::sameCopy( program, desktop::thisCopy() ) && olderVersion( qs( version ), qs( status["version"].asString() ) ) )
+		{
+			log::info( "the daemon runs Lexiglance {}, newer than this window: it opens again in that version", status["version"].asString() );
+			restarting_            = true;
+			const QString appimage = qEnvironmentVariable( "APPIMAGE" );
+			QProcess::startDetached( appimage.isEmpty() ? QCoreApplication::applicationFilePath() : appimage, isVisible() ? QStringList{ QStringLiteral( "--updated" ) } : QStringList{ QStringLiteral( "--tray" ), QStringLiteral( "--updated" ) } );
+			QApplication::quit();
+			return;
 		}
 		const bool paused = status["paused"].asBool();
 		if ( pause_action_ != nullptr )

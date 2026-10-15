@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.5] - 14:00 CEST 2026-10-15
+
+General improvements to auto-replacement on update + better branding.
+
+- Daemon now gets properly replaced when an update happens.
+- Look interval reduced from 10 min -> 1 min for faster update/replacement detection.
+- GUI automatically restarts on update.
+- Updated the icons
+
 ## [1.3.4] - 21:00 CEST 2026-10-05
 
 Adjustments so you can run as administrator in order to get words from higher elevation programs.
