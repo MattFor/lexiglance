@@ -1,6 +1,17 @@
 # Changelog
 
-## [1.3.5] - 14:00 CEST 2026-10-15
+## [Unreleased]
+
+### Fixed
+
+- A disk that fills up while the settings or statistics are saved no longer leaves them empty: the saved ones stay.
+- Without `XDG_RUNTIME_DIR`, the daemon no longer uses a `/tmp` folder (or a link) that belongs to another user, which
+  could have had it write its lock file over one of yours.
+- Updating or uninstalling no longer stays busy for good when `pkexec` cannot start.
+- Pronunciation audio and Anki answers stop at 64 MB however much a compressed answer would grow (the AppImage's older
+  libcurl only checked the size a server announced).
+
+## [1.3.5] - 14:00 CEST 15-10-2026
 
 General improvements to auto-replacement on update + better branding.
 
@@ -9,7 +20,7 @@ General improvements to auto-replacement on update + better branding.
 - GUI automatically restarts on update.
 - Updated the icons
 
-## [1.3.4] - 21:00 CEST 2026-10-05
+## [1.3.4] - 21:00 CEST 05-10-2026
 
 Adjustments so you can run as administrator in order to get words from higher elevation programs.
 
@@ -21,21 +32,21 @@ Adjustments so you can run as administrator in order to get words from higher el
 - Windows: the daemon no longer stops answering when something checked on it at the wrong moment.
 - The autostart and menu entry follow the copy installed last; after an update only what changed is shown.
 
-## [1.3.3] - 14:00 CEST 2026-09-21
+## [1.3.3] - 14:00 CEST 21-09-2026
 
 Miscellanous fixes.
 
-## [1.3.2_1] - 13:10 CEST 2026-09-21
+## [1.3.2_1] - 13:10 CEST 21-09-2026
 
 Quick hotfix to resolve icon issues.
 
-## [1.3.2] - 10:50 CEST 2026-09-21
+## [1.3.2] - 10:50 CEST 21-09-2026
 
 Quick hotfix to resolve focus issues.
 
 - The settings window no longer jumps to the front every six hours when the update check runs.
 
-## [1.3.1] - 10:15 CEST 2026-09-21
+## [1.3.1] - 10:15 CEST 21-09-2026
 
 - Manual colour picking no longer obscures text (Windows)
 - The trigger mends itself within a second when a key release or the raw-input registration goes missing,
@@ -43,7 +54,7 @@ Quick hotfix to resolve focus issues.
 - OCR: a line the detector cuts in two on the same row (at a bracket, at a quotation mark) reads as one run of text
   again, not just the piece before the cut.
 
-## [1.3.0] - 01:00 CEST 2026-09-21
+## [1.3.0] - 01:00 CEST 21-09-2026
 
 - You are now able to translate sentences using scroll-wheel selection.
 - Russian, Ukrainian, Korean and Greek: pointing anywhere in a word looks up the whole word (книгу, not игу).
@@ -59,7 +70,7 @@ Quick hotfix to resolve focus issues.
   missed them); a dismissed popup could come back; clicking an entry under a wheel selection acted on the one below it;
   the AppImage's autostart ran the daemon from its temporary mount.
 
-## [1.2.0] - 18:00 CEST 2026-09-18
+## [1.2.0] - 18:00 CEST 18-09-2026
 
 Updates and bugfixes reported from: https://github.com/MattFor/lexiglance/issues/7
 
@@ -82,7 +93,7 @@ Updates and bugfixes reported from: https://github.com/MattFor/lexiglance/issues
   ignored, and layered popups are shown again with `ShowWindow` after hide.
 - The settings window is brought to the front when first-run or post-update setup opens.
 
-## [1.1.0] - 22:20 CEST 2026-09-16
+## [1.1.0] - 22:20 CEST 16-09-2026
 
 - Statistics page: lookups, languages, sources and recent days, kept locally (optional).
 - Middle-click in the popup plays the pronunciation under the pointer. Speaker and Anki buttons are larger by default;
@@ -103,7 +114,7 @@ Updates and bugfixes reported from: https://github.com/MattFor/lexiglance/issues
   by default; see docs/anticheat.md).
 - Health and About turn download addresses into links; capture failures are logged as warnings under Recent problems.
 
-## [1.0.1] - 23:15 CEST 2026-09-14
+## [1.0.1] - 23:15 CEST 14-09-2026
 
 - Windows: PaddleOCR no longer fails after **Download PaddleOCR** with "Unsupported model IR version: 10, max
   supported IR version: 9". Lexiglance used the older ONNX Runtime that Windows keeps for itself; it now uses only the
@@ -121,7 +132,7 @@ Updates and bugfixes reported from: https://github.com/MattFor/lexiglance/issues
   setup, the portable .zip, the AppImage or the .deb (which asks for your password), checked against the release's
   SHA256SUMS, then Lexiglance opens again.
 
-## [1.0.0] - 20:00 CEST 2026-09-14
+## [1.0.0] - 20:00 CEST 14-09-2026
 
 First public release.
 
@@ -139,3 +150,15 @@ First public release.
 - Popup designs, colour schemes, themes and highlight styles.
 - A health check that finds problems and offers fixes.
 - `lexiglancectl` for scripts, and service files for systemd, runit, OpenRC, dinit, s6 and XDG autostart.
+
+[1.3.5]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.5
+[1.3.4]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.4
+[1.3.3]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.3
+[1.3.2_1]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.2_1
+[1.3.2]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.2
+[1.3.1]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.1
+[1.3.0]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.0
+[1.2.0]: https://github.com/MattFor/lexiglance/releases/tag/v1.2.0
+[1.1.0]: https://github.com/MattFor/lexiglance/releases/tag/v1.1.0
+[1.0.1]: https://github.com/MattFor/lexiglance/releases/tag/v1.0.1
+[1.0.0]: https://github.com/MattFor/lexiglance/releases/tag/v1.0.0

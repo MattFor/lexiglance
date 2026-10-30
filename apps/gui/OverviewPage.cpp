@@ -694,18 +694,18 @@ namespace lexiglance::gui
 					{
 						checks.push_back(
 								{ .id     = "setup",
-				                  .title  = "First-run setup",
-				                  .status = health::Severity::Info,
-				                  .detail = "The welcome setup has not been finished yet. Open Help to run it again, or skip it if you already installed dictionaries and OCR yourself." }
+								  .title  = "First-run setup",
+								  .status = health::Severity::Info,
+								  .detail = "The welcome setup has not been finished yet. Open Help to run it again, or skip it if you already installed dictionaries and OCR yourself." }
 						);
 					}
 					if ( !QFileInfo( qs( paths::stateDir().string() ) ).isWritable() )
 					{
 						checks.push_back(
 								{ .id     = "application-log",
-				                  .title  = "Application log",
-				                  .status = health::Severity::Warning,
-				                  .detail = ss( QStringLiteral( "The settings application cannot write logs under %1." ).arg( qs( paths::stateDir().string() ) ) ) }
+								  .title  = "Application log",
+								  .status = health::Severity::Warning,
+								  .detail = ss( QStringLiteral( "The settings application cannot write logs under %1." ).arg( qs( paths::stateDir().string() ) ) ) }
 						);
 					}
 					showChecks( checks );
@@ -722,9 +722,9 @@ namespace lexiglance::gui
 		{
 			checks.push_back(
 					{ .id     = "program",
-			          .title  = "Daemon program",
-			          .status = health::Severity::Error,
-			          .detail = ss( QStringLiteral( "lexiglanced was not found next to the settings application or on PATH (%1)." ).arg( program ) ) }
+					  .title  = "Daemon program",
+					  .status = health::Severity::Error,
+					  .detail = ss( QStringLiteral( "lexiglanced was not found next to the settings application or on PATH (%1)." ).arg( program ) ) }
 			);
 		}
 		const auto running = process::othersNamed( "lexiglanced" );
@@ -741,10 +741,10 @@ namespace lexiglance::gui
 			}
 			checks.push_back(
 					{ .id     = "daemon",
-			          .title  = "Lexiglance daemon",
-			          .status = health::Severity::Error,
-			          .detail = ss( QStringLiteral( "Lexiglance is running (process %1) but does not answer. Restarting ends it and starts a new one." ).arg( pids.join( QStringLiteral( ", " ) ) ) ),
-			          .fix    = "restart" }
+					  .title  = "Lexiglance daemon",
+					  .status = health::Severity::Error,
+					  .detail = ss( QStringLiteral( "Lexiglance is running (process %1) but does not answer. Restarting ends it and starts a new one." ).arg( pids.join( QStringLiteral( ", " ) ) ) ),
+					  .fix    = "restart" }
 			);
 		}
 		const QStringList problems = logProblems( 3 );
@@ -756,18 +756,18 @@ namespace lexiglance::gui
 		{
 			checks.push_back(
 					{ .id     = "setup",
-			          .title  = "First-run setup",
-			          .status = health::Severity::Info,
-			          .detail = "The welcome setup has not been finished yet. Open Help to run it again." }
+					  .title  = "First-run setup",
+					  .status = health::Severity::Info,
+					  .detail = "The welcome setup has not been finished yet. Open Help to run it again." }
 			);
 		}
 		if ( !QDir( qs( paths::cacheDir().string() ) ).mkpath( QStringLiteral( "." ) ) || !QFileInfo( qs( paths::cacheDir().string() ) ).isWritable() )
 		{
 			checks.push_back(
 					{ .id     = "cache",
-			          .title  = "Download cache",
-			          .status = health::Severity::Warning,
-			          .detail = ss( QStringLiteral( "Cannot write downloads under %1." ).arg( qs( paths::cacheDir().string() ) ) ) }
+					  .title  = "Download cache",
+					  .status = health::Severity::Warning,
+					  .detail = ss( QStringLiteral( "Cannot write downloads under %1." ).arg( qs( paths::cacheDir().string() ) ) ) }
 			);
 		}
 		return checks;

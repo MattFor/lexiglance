@@ -153,6 +153,25 @@ namespace
 		test::expect( parsed->dictionary( "Jiten" ) != nullptr && !parsed->dictionary( "Jiten" )->enabled );
 	} );
 
+#ifdef __linux__
+	// /dev/full fails the write as a full disk does.
+	const test::Registrar config_full_disk( "config: a save the disk cannot hold leaves the saved settings as they were", [] {
+		const auto directory = test::scratch( "config-full-disk" );
+		const auto file      = directory / "config.json";
+		std::ofstream( file ) << "{}\n";
+		std::filesystem::create_symlink( "/dev/full", directory / "config.json.tmp" );
+		test::expect( !lg::config::Config{}.save( file ).has_value() );
+		if ( !test::expect( !std::filesystem::is_symlink( file ) ) )
+		{
+			return;
+		}
+		const std::ifstream in( file );
+		std::stringstream   kept;
+		kept << in.rdbuf();
+		test::expectEqual( kept.str(), std::string( "{}\n" ) );
+	} );
+#endif
+
 	const test::Registrar config_validation( "config validation", [] {
 		test::expect( !lg::config::Config::parse( R"({"scan":{"trigger":["Hyper"]}})" ).has_value() );
 		const auto clamped = lg::config::Config::parse( R"({"popup":{"width":5,"font_size":999}})" );

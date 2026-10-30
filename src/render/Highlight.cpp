@@ -301,9 +301,9 @@ namespace lexiglance::render
 			const auto* end = g_utf8_prev_char( sample.c_str() + marked );
 			pango_layout_index_to_pos( layout, static_cast<int>( end - sample.c_str() ), &last );
 			const Box word{ .x      = static_cast<int>( tx + pango_units_to_double( first.x ) ),
-				            .y      = static_cast<int>( ty + pango_units_to_double( first.y ) ),
-				            .width  = static_cast<int>( pango_units_to_double( last.x + last.width - first.x ) ),
-				            .height = static_cast<int>( pango_units_to_double( first.height ) ) };
+			                .y      = static_cast<int>( ty + pango_units_to_double( first.y ) ),
+			                .width  = static_cast<int>( pango_units_to_double( last.x + last.width - first.x ) ),
+			                .height = static_cast<int>( pango_units_to_double( first.height ) ) };
 			const Box area = highlightArea( word, scaled );
 			Color     mark = highlightTint( color, look.shape );
 			if ( automatic )

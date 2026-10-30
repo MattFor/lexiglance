@@ -11,6 +11,7 @@
 #include <string_view>
 
 #ifndef _WIN32
+	#include <sys/stat.h>
 	#include <unistd.h>
 #endif
 
@@ -211,6 +212,15 @@ namespace lexiglance::paths
 		}
 		if ( owner_only )
 		{
+#ifndef _WIN32
+			// In /tmp it may be another user's, or their symlink.
+			struct stat link{};
+			struct stat target{};
+			if ( ::lstat( dir.c_str(), &link ) != 0 || ::stat( dir.c_str(), &target ) != 0 || !S_ISDIR( target.st_mode ) || link.st_uid != ::getuid() || target.st_uid != ::getuid() )
+			{
+				return fail( "{} is not a directory of this user", dir.string() );
+			}
+#endif
 			fs::permissions( dir, fs::perms::owner_all, fs::perm_options::replace, ec );
 			if ( ec )
 			{

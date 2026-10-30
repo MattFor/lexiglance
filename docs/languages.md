@@ -24,27 +24,27 @@ Example, Belarusian:
 
 ```json
 {
-    "code": "be",
-    "name": "Belarusian",
-    "script": ["0400-052F"],
-    "word_characters": "-'’",
-    "sample_text": "У Іўі худы жвавы чорт у зялёнай камізэльцы пабег пад'есці фаршыраваных яек",
-    "sample_words": ["мова", "хлеб"],
-    "commons_prefix": "Be",
-    "ocr": {
-        "paddle": "PP-OCRv5/rec/eslav_PP-OCRv5_rec_mobile.onnx",
-        "tesseract": "bel"
-    },
-    "dictionaries": [
-        {
-            "name": "Wiktionary Belarusian-English",
-            "category": "Terms",
-            "title": "wty-be-en",
-            "description": "Belarusian-English dictionary built from Wiktionary.",
-            "homepage": "https://github.com/yomidevs/wiktionary-to-yomitan",
-            "download": "https://huggingface.co/datasets/daxida/wty-release/resolve/main/latest/dict/be/en/wty-be-en.zip"
-        }
-    ]
+  "code": "be",
+  "name": "Belarusian",
+  "script": ["0400-052F"],
+  "word_characters": "-'’",
+  "sample_text": "У Іўі худы жвавы чорт у зялёнай камізэльцы пабег пад'есці фаршыраваных яек",
+  "sample_words": ["мова", "хлеб"],
+  "commons_prefix": "Be",
+  "ocr": {
+    "paddle": "PP-OCRv5/rec/eslav_PP-OCRv5_rec_mobile.onnx",
+    "tesseract": "bel"
+  },
+  "dictionaries": [
+    {
+      "name": "Wiktionary Belarusian-English",
+      "category": "Terms",
+      "title": "wty-be-en",
+      "description": "Belarusian-English dictionary built from Wiktionary.",
+      "homepage": "https://github.com/yomidevs/wiktionary-to-yomitan",
+      "download": "https://huggingface.co/datasets/daxida/wty-release/resolve/main/latest/dict/be/en/wty-be-en.zip"
+    }
+  ]
 }
 ```
 

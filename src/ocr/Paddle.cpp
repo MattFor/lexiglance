@@ -405,14 +405,14 @@ namespace lexiglance::ocr
 			const int x1 = std::clamp( static_cast<int>( std::ceil( ( box.x + box.width ) * sx ) ), 0, image_width_ );
 			const int y1 = std::clamp( static_cast<int>( std::ceil( ( box.y + box.height ) * sy ) ), 0, image_height_ );
 			box          = { .x            = x0,
-				             .y            = y0,
-				             .width        = x1 - x0,
-				             .height       = y1 - y0,
-				             .score        = box.score,
-				             .inner_x      = static_cast<int>( std::floor( box.inner_x * sx ) ),
-				             .inner_y      = static_cast<int>( std::floor( box.inner_y * sy ) ),
-				             .inner_width  = static_cast<int>( std::ceil( box.inner_width * sx ) ),
-				             .inner_height = static_cast<int>( std::ceil( box.inner_height * sy ) ) };
+			                 .y            = y0,
+			                 .width        = x1 - x0,
+			                 .height       = y1 - y0,
+			                 .score        = box.score,
+			                 .inner_x      = static_cast<int>( std::floor( box.inner_x * sx ) ),
+			                 .inner_y      = static_cast<int>( std::floor( box.inner_y * sy ) ),
+			                 .inner_width  = static_cast<int>( std::ceil( box.inner_width * sx ) ),
+			                 .inner_height = static_cast<int>( std::ceil( box.inner_height * sy ) ) };
 		}
 		std::erase_if( boxes, []( const Box& box ) { return box.width < 4 || box.height < 4; } );
 		return boxes;

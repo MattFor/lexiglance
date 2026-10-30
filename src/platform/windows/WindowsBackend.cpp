@@ -798,9 +798,9 @@ namespace lexiglance::platform
 					updateTrigger();
 					out.push_back(
 							{ .id     = "keyboard",
-					          .title  = "Keyboard state",
-					          .status = health::Severity::Info,
-					          .detail = "A key was recorded as held although it was not (or the other way round); this was corrected." }
+							  .title  = "Keyboard state",
+							  .status = health::Severity::Info,
+							  .detail = "A key was recorded as held although it was not (or the other way round); this was corrected." }
 					);
 				}
 
@@ -845,9 +845,9 @@ namespace lexiglance::platform
 					const bool one = elevated_seen_.size() == 1;
 					out.push_back(
 							{ .id     = "elevated",
-					          .title  = "Programs run as administrator",
-					          .status = health::Severity::Warning,
-					          .detail = std::format(
+							  .title  = "Programs run as administrator",
+							  .status = health::Severity::Warning,
+							  .detail = std::format(
 									  "{} ran as administrator, and Lexiglance does not: while {} in front, Windows keeps its keys and clicks from "
 									  "Lexiglance, so the trigger does nothing over {}. Turn on Run as administrator (Overview, Startup; Windows asks "
 									  "once), or start {} without administrator rights.",
@@ -856,14 +856,14 @@ namespace lexiglance::platform
 									  one ? "it" : "them",
 									  one ? "it" : "them"
 							  ),
-					          .fix = "run-as-administrator" }
+							  .fix = "run-as-administrator" }
 					);
 				}
 
 				out.push_back(
 						{ .id     = "desktop",
-				          .title  = "Desktop",
-				          .detail = std::format(
+						  .title  = "Desktop",
+						  .detail = std::format(
 								  "Windows, {}x{} pixels, scale {}x, {}.",
 								  GetSystemMetrics( SM_CXVIRTUALSCREEN ),
 								  GetSystemMetrics( SM_CYVIRTUALSCREEN ),
@@ -882,14 +882,14 @@ namespace lexiglance::platform
 				{
 					auto created = createOcrCapture(
 							{ .engine    = config.scan.ocr_engine,
-					          .vertical  = config.scan.ocr_vertical,
-					          .model     = config.scan.ocr_model,
-					          .scale     = scaleFactor(),
-					          .languages = lang::enabledLanguages( config.disabled_languages ),
-					          .overlays  = [this] {
+							  .vertical  = config.scan.ocr_vertical,
+							  .model     = config.scan.ocr_model,
+							  .scale     = scaleFactor(),
+							  .languages = lang::enabledLanguages( config.disabled_languages ),
+							  .overlays  = [this] {
 								  const std::scoped_lock lock( overlays_mutex_ );
 								  return overlays_; },
-					          .screen    = [] { return createGdiScreen(); } }
+							  .screen    = [] { return createGdiScreen(); } }
 					);
 					if ( created )
 					{

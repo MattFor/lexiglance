@@ -368,7 +368,7 @@ namespace lexiglance::gui
 						}
 						updateDownloadButton();
 						// Windows' own runtime, which came along with the files: installed, and then the daemon is
-				        // started again, since it can only find the new libraries as it starts.
+						// started again, since it can only find the new libraries as it starts.
 						if ( !redist_.isEmpty() )
 						{
 							installRedist();

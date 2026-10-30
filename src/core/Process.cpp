@@ -407,7 +407,7 @@ namespace lexiglance::process
 		if ( fd_ < 0 )
 		{
 			// Close-on-exec: an audio player started by the daemon must never keep holding the lock after it.
-			fd_ = ::open( file_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600 ); // NOLINT(cppcoreguidelines-pro-type-vararg): open(2) takes the mode as a variadic argument
+			fd_ = ::open( file_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600 ); // NOLINT(cppcoreguidelines-pro-type-vararg): open(2) takes the mode as a variadic argument
 			if ( fd_ < 0 )
 			{
 				return false;

@@ -209,6 +209,7 @@ namespace lexiglance::daemon
 		{
 			std::ofstream out( temporary, std::ios::binary | std::ios::trunc );
 			out << text;
+			out.close();
 			if ( !out )
 			{
 				log::warn( "statistics: cannot write {}", temporary.string() );

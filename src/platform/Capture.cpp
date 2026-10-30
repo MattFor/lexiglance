@@ -134,9 +134,9 @@ namespace lexiglance::platform
 		{
 			out.push_back(
 					{ .id     = "accessibility",
-			          .title  = "Text in applications",
-			          .status = health::Severity::Warning,
-			          .detail = "This build cannot read text through the accessibility bus; only OCR and selections work." }
+					  .title  = "Text in applications",
+					  .status = health::Severity::Warning,
+					  .detail = "This build cannot read text through the accessibility bus; only OCR and selections work." }
 			);
 		}
 
@@ -144,10 +144,10 @@ namespace lexiglance::platform
 		{
 			out.push_back(
 					{ .id     = "ocr",
-			          .title  = "Text in images, games and videos (OCR)",
-			          .status = health::Severity::Warning,
-			          .detail = "OCR is turned off, so text that applications do not expose (images, games, videos, Discord, Wine) is not read.",
-			          .fix    = "enable-ocr" }
+					  .title  = "Text in images, games and videos (OCR)",
+					  .status = health::Severity::Warning,
+					  .detail = "OCR is turned off, so text that applications do not expose (images, games, videos, Discord, Wine) is not read.",
+					  .fix    = "enable-ocr" }
 			);
 		}
 		else if ( !ocr_ )
@@ -157,10 +157,10 @@ namespace lexiglance::platform
 			const bool runtime = ocr_state_.contains( ocr::vc_runtime_absent );
 			out.push_back(
 					{ .id     = "ocr",
-			          .title  = "Text in images, games and videos (OCR)",
-			          .status = health::Severity::Error,
-			          .detail = ocr_state_,
-			          .fix    = runtime ? "install-vcredist" : "open-scanning" }
+					  .title  = "Text in images, games and videos (OCR)",
+					  .status = health::Severity::Error,
+					  .detail = ocr_state_,
+					  .fix    = runtime ? "install-vcredist" : "open-scanning" }
 			);
 		}
 		else

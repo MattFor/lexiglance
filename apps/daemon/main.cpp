@@ -275,7 +275,15 @@ namespace
 		const auto log_file = lg::paths::stateDir() / "daemon.log";
 
 		// One daemon per user, decided before anything touches the desktop.
+#ifdef _WIN32
 		( void )lg::paths::ensureDirectory( lg::paths::runtimeDir(), true );
+#else
+		if ( auto runtime = lg::paths::ensureDirectory( lg::paths::runtimeDir(), true ); !runtime )
+		{
+			lg::log::error( "{}", runtime.error().message );
+			return 1;
+		}
+#endif
 		lg::process::InstanceLock lock( lg::paths::runtimeDir() / "daemon.lock" );
 		if ( replace )
 		{

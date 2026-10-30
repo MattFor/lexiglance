@@ -61,9 +61,17 @@ namespace lexiglance::net
 			curl_easy_setopt( handle, option, value ); // NOLINT(cppcoreguidelines-pro-type-vararg): libcurl's C API
 		}
 
+		constexpr std::size_t max_body = 64U << 20U;
+
+		// Older libcurl caps only the announced size, not the decompressed body.
 		std::size_t append( char* data, std::size_t size, std::size_t count, void* target )
 		{
-			static_cast<std::string*>( target )->append( data, size * count );
+			auto& body = *static_cast<std::string*>( target );
+			if ( size * count > max_body - body.size() )
+			{
+				return 0;
+			}
+			body.append( data, size * count );
 			return size * count;
 		}
 
@@ -117,7 +125,7 @@ namespace lexiglance::net
 		set( curl, CURLOPT_TIMEOUT_MS, timeout );
 		set( curl, CURLOPT_CONNECTTIMEOUT_MS, std::min( timeout, 5000L ) );
 		set( curl, CURLOPT_ACCEPT_ENCODING, "" );
-		set( curl, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>( 64 ) << 20U );
+		set( curl, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>( max_body ) );
 		set( curl, CURLOPT_WRITEFUNCTION, &append );
 		set( curl, CURLOPT_WRITEDATA, static_cast<void*>( &response.body ) );
 

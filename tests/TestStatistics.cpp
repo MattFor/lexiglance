@@ -88,6 +88,29 @@ namespace
 		test::expect( root["translations_enabled"].asBool() );
 	} );
 
+#ifdef __linux__
+	const test::Registrar full_disk( "statistics: a save the disk cannot hold keeps the tally there was", [] {
+		const auto directory = test::scratch( "statistics-full-disk" );
+		const auto file      = directory / "statistics.json";
+		std::ofstream( file ) << R"({"lookups":7})";
+		std::filesystem::create_symlink( "/dev/full", directory / "statistics.json.new" );
+		{
+			Statistics stats;
+			stats.load( file );
+			stats.recordLookup( "книга", "ru", "at-spi", 5, std::chrono::microseconds( 30 ) );
+			stats.save();
+		}
+		if ( !test::expect( !std::filesystem::is_symlink( file ) ) )
+		{
+			return;
+		}
+		Statistics again;
+		again.load( file );
+		const auto document = json::Document::parse( again.json() );
+		test::expect( document.has_value() && document->root()["lookups"].asInt() == 7 );
+	} );
+#endif
+
 	const test::Registrar saved_and_read( "statistics are written and read back, a tally from before 1.3.0 too", [] {
 		const auto file = test::scratch( "statistics-file" ) / "statistics.json";
 		{

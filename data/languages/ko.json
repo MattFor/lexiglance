@@ -1,30 +1,30 @@
 {
-    "code": "ko",
-    "name": "Korean",
-    "script": ["AC00-D7A3", "1100-11FF", "3130-318F", "A960-A97F", "D7B0-D7FF"],
-    "sample_text": "다람쥐 헌 쳇바퀴에 타고파",
-    "example_sentence": "어제 친구와 함께 도서관에서 책을 읽었어요.",
-    "sample_words": ["사람", "학교"],
-    "commons_prefix": "Ko",
-    "ocr": {
-        "paddle": "PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile.onnx",
-        "tesseract": "kor",
-        "tesseract_vertical": "kor_vert"
-    },
-    "translation": {
-        "model": "Xenova/opus-mt-ko-en",
-        "revision": "d9fa1ac6008242100fecb4fff9b0a5917a1be81f",
-        "size": 119600977,
-        "full_size": 452265889
-    },
-    "dictionaries": [
-        {
-            "name": "Wiktionary Korean-English",
-            "category": "Terms",
-            "title": "wty-ko-en",
-            "description": "Korean-English dictionary built from Wiktionary by kaikki.org and wty: definitions, examples, hanja and conjugated forms. Updated monthly.",
-            "homepage": "https://github.com/yomidevs/wiktionary-to-yomitan",
-            "download": "https://huggingface.co/datasets/daxida/wty-release/resolve/main/latest/dict/ko/en/wty-ko-en.zip"
-        }
-    ]
+  "code": "ko",
+  "name": "Korean",
+  "script": ["AC00-D7A3", "1100-11FF", "3130-318F", "A960-A97F", "D7B0-D7FF"],
+  "sample_text": "다람쥐 헌 쳇바퀴에 타고파",
+  "example_sentence": "어제 친구와 함께 도서관에서 책을 읽었어요.",
+  "sample_words": ["사람", "학교"],
+  "commons_prefix": "Ko",
+  "ocr": {
+    "paddle": "PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile.onnx",
+    "tesseract": "kor",
+    "tesseract_vertical": "kor_vert"
+  },
+  "translation": {
+    "model": "Xenova/opus-mt-ko-en",
+    "revision": "d9fa1ac6008242100fecb4fff9b0a5917a1be81f",
+    "size": 119600977,
+    "full_size": 452265889
+  },
+  "dictionaries": [
+    {
+      "name": "Wiktionary Korean-English",
+      "category": "Terms",
+      "title": "wty-ko-en",
+      "description": "Korean-English dictionary built from Wiktionary by kaikki.org and wty: definitions, examples, hanja and conjugated forms. Updated monthly.",
+      "homepage": "https://github.com/yomidevs/wiktionary-to-yomitan",
+      "download": "https://huggingface.co/datasets/daxida/wty-release/resolve/main/latest/dict/ko/en/wty-ko-en.zip"
+    }
+  ]
 }

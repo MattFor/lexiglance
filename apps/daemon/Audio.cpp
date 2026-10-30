@@ -416,6 +416,7 @@ namespace lexiglance::daemon
 		{
 			std::ofstream out( file, std::ios::binary | std::ios::trunc );
 			out.write( ( *clip )->data.data(), static_cast<std::streamsize>( ( *clip )->data.size() ) );
+			out.close();
 			if ( !out )
 			{
 				// Without the reason this reads as a broken path, which it almost never is.

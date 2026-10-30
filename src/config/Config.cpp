@@ -470,6 +470,8 @@ namespace lexiglance::config
 		{
 			std::ofstream out( temp, std::ios::binary | std::ios::trunc );
 			out << toJson( true ) << '\n';
+			// A full disk fails only on the flush in close().
+			out.close();
 			if ( !out )
 			{
 				return fail( "cannot write {}", temp.string() );

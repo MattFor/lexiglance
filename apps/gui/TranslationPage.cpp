@@ -641,7 +641,7 @@ namespace lexiglance::gui
 					const auto        took     = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started ).count();
 					const auto* const language = lang::findLanguage( ( *result )["language"].asString() );
 					test_result_->setText( QStringLiteral( "<b>%1</b><br><span style=\"color: %2\">%3, %4 ms</span>" )
-			                                       .arg( qs( ( *result )["translation"].asString() ).toHtmlEscaped(), palette().color( QPalette::Disabled, QPalette::Text ).name(), language != nullptr ? qs( language->name() ) : QString(), QString::number( took ) ) );
+					                               .arg( qs( ( *result )["translation"].asString() ).toHtmlEscaped(), palette().color( QPalette::Disabled, QPalette::Text ).name(), language != nullptr ? qs( language->name() ) : QString(), QString::number( took ) ) );
 				},
 				60000
 		);

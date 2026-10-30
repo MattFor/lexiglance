@@ -672,9 +672,9 @@ namespace lexiglance::platform
 					updateTrigger();
 					out.push_back(
 							{ .id     = "keyboard",
-					          .title  = "Keyboard state",
-					          .status = health::Severity::Info,
-					          .detail = "A key was recorded as held although it was not (or the other way round); this was corrected." }
+							  .title  = "Keyboard state",
+							  .status = health::Severity::Info,
+							  .detail = "A key was recorded as held although it was not (or the other way round); this was corrected." }
 					);
 				}
 
@@ -712,8 +712,8 @@ namespace lexiglance::platform
 
 				out.push_back(
 						{ .id     = "desktop",
-				          .title  = "Desktop",
-				          .detail = std::format(
+						  .title  = "Desktop",
+						  .detail = std::format(
 								  "X11, {}x{} pixels, scale {}x, {}.",
 								  DisplayWidth( display_, screen_ ),
 								  DisplayHeight( display_, screen_ ),
@@ -735,14 +735,14 @@ namespace lexiglance::platform
 				{
 					auto created = createOcrCapture(
 							{ .engine    = config.scan.ocr_engine,
-					          .vertical  = config.scan.ocr_vertical,
-					          .model     = config.scan.ocr_model,
-					          .scale     = scaleFactor(),
-					          .languages = lang::enabledLanguages( config.disabled_languages ),
-					          .overlays  = [this] {
+							  .vertical  = config.scan.ocr_vertical,
+							  .model     = config.scan.ocr_model,
+							  .scale     = scaleFactor(),
+							  .languages = lang::enabledLanguages( config.disabled_languages ),
+							  .overlays  = [this] {
 								  const std::scoped_lock lock( overlays_mutex_ );
 								  return overlays_; },
-					          .screen    = [] { return createX11Screen(); } }
+							  .screen    = [] { return createX11Screen(); } }
 					);
 					if ( created )
 					{

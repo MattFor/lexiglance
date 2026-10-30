@@ -19,27 +19,27 @@ file...** copies one in. They are easy to write by hand:
 
 ```json
 {
-    "name": "Evening paper",
-    "lexiglance_theme": 1,
-    "popup": {
-        "design": "friendly",
-        "scheme": "paper",
-        "accent_color": "#e39a64",
-        "colors": {
-            "muted": "#a89a86",
-            "tag_name": "#d46a8c"
-        },
-        "corner_radius": 12,
-        "border_width": 0,
-        "padding": 14,
-        "opacity": 95,
-        "furigana_size": 18,
-        "highlight_style": "fill",
-        "highlight_color": "#e39a6455",
-        "highlight_radius": 4,
-        "highlight_padding_x": 2,
-        "highlight_padding_y": 2
-    }
+  "name": "Evening paper",
+  "lexiglance_theme": 1,
+  "popup": {
+    "design": "friendly",
+    "scheme": "paper",
+    "accent_color": "#e39a64",
+    "colors": {
+      "muted": "#a89a86",
+      "tag_name": "#d46a8c"
+    },
+    "corner_radius": 12,
+    "border_width": 0,
+    "padding": 14,
+    "opacity": 95,
+    "furigana_size": 18,
+    "highlight_style": "fill",
+    "highlight_color": "#e39a6455",
+    "highlight_radius": 4,
+    "highlight_padding_x": 2,
+    "highlight_padding_y": 2
+  }
 }
 ```
 

@@ -493,7 +493,7 @@ namespace lexiglance::gui
 		{
 			lock_hint_->setText(
 					required_ ? QStringLiteral( "This card stays for a few seconds so setup is not closed by accident. Setup cannot be skipped." )
-							  : QStringLiteral( "This card stays for a few seconds so setup is not closed by accident." )
+					          : QStringLiteral( "This card stays for a few seconds so setup is not closed by accident." )
 			);
 			lock_hint_->show();
 			continue_->setEnabled( false );

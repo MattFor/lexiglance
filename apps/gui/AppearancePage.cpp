@@ -190,9 +190,9 @@ namespace lexiglance::gui
 		preview_timer_( new QTimer( this ) )
 	{
 		colours_ = { { { .button = new QPushButton(), .reset = new QToolButton(), .field = &config::PopupSettings::background_color, .name = QStringLiteral( "Background" ) },
-			           { .button = new QPushButton(), .reset = new QToolButton(), .field = &config::PopupSettings::text_color, .name = QStringLiteral( "Text" ) },
-			           { .button = new QPushButton(), .reset = new QToolButton(), .field = &config::PopupSettings::accent_color, .name = QStringLiteral( "Accent (furigana, numbers)" ) },
-			           { .button = new QPushButton(), .reset = new QToolButton(), .field = &config::PopupSettings::border_color, .name = QStringLiteral( "Border" ) } } };
+		               { .button = new QPushButton(), .reset = new QToolButton(), .field = &config::PopupSettings::text_color, .name = QStringLiteral( "Text" ) },
+		               { .button = new QPushButton(), .reset = new QToolButton(), .field = &config::PopupSettings::accent_color, .name = QStringLiteral( "Accent (furigana, numbers)" ) },
+		               { .button = new QPushButton(), .reset = new QToolButton(), .field = &config::PopupSettings::border_color, .name = QStringLiteral( "Border" ) } } };
 
 		scale_->setRange( 0.0, 4.0 );
 		scale_->setSingleStep( 0.25 );

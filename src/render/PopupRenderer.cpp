@@ -726,10 +726,10 @@ namespace lexiglance::render
 				{
 					ops_.emplace_back(
 							RectOp{ .x      = static_cast<double>( padding_ ),
-					                .y      = y_,
-					                .width  = static_cast<double>( content_width_ ),
-					                .height = std::max( 1.0, style_->scale ),
-					                .color  = theme().separator }
+							        .y      = y_,
+							        .width  = static_cast<double>( content_width_ ),
+							        .height = std::max( 1.0, style_->scale ),
+							        .color  = theme().separator }
 					);
 				}
 				y_ += style_->px( space + 1 );
@@ -1062,11 +1062,11 @@ namespace lexiglance::render
 					ops_.insert(
 							ops_.begin() + static_cast<std::ptrdiff_t>( band ),
 							RectOp{ .x      = padding_ - bleed,
-					                .y      = top - bleed,
-					                .width  = content_width_ + ( 2 * bleed ),
-					                .height = y_ - top + ( 2 * bleed ),
-					                .radius = static_cast<double>( style_->px( 8 ) ),
-					                .color  = mix( theme().accent, theme().background, 0.9 ) }
+							        .y      = top - bleed,
+							        .width  = content_width_ + ( 2 * bleed ),
+							        .height = y_ - top + ( 2 * bleed ),
+							        .radius = static_cast<double>( style_->px( 8 ) ),
+							        .color  = mix( theme().accent, theme().background, 0.9 ) }
 					);
 					y_ += bleed;
 				}
@@ -1451,8 +1451,8 @@ namespace lexiglance::render
 						const auto* tag = dictionary.findTag( key );
 						stats.push_back(
 								{ .label = std::string( tag != nullptr ? dictionary.string( tag->notes ) : key ),
-						          .color = theme().tag_default,
-						          .value = std::string( dictionary.string( list[i + 1] ) ) }
+								  .color = theme().tag_default,
+								  .value = std::string( dictionary.string( list[i + 1] ) ) }
 						);
 					}
 				}
@@ -1460,8 +1460,8 @@ namespace lexiglance::render
 				{
 					stats.push_back(
 							{ .label = shortName( ( *set_ )[f.dictionary].name ),
-					          .color = theme().tag_frequency,
-					          .value = f.display.empty() ? std::to_string( f.value ) : std::string( f.display ) }
+							  .color = theme().tag_frequency,
+							  .value = f.display.empty() ? std::to_string( f.value ) : std::string( f.display ) }
 					);
 				}
 				const double saved_x = column;

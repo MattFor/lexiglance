@@ -214,15 +214,15 @@ namespace lexiglance::daemon
 		{
 			checks.push_back(
 					{ .id     = "instances",
-			          .title  = "Other Lexiglance daemons",
-			          .status = Severity::Error,
-			          .detail = std::format(
+					  .title  = "Other Lexiglance daemons",
+					  .status = Severity::Error,
+					  .detail = std::format(
 							  "{} more {} running (pid {}). Each shows popups of its own, possibly with old settings; restarting stops them.",
 							  others.size(),
 							  others.size() == 1 ? "daemon is" : "daemons are",
 							  joined( others, ", " )
 					  ),
-			          .fix = "restart" }
+					  .fix = "restart" }
 			);
 		}
 
@@ -246,10 +246,10 @@ namespace lexiglance::daemon
 		{
 			checks.push_back(
 					{ .id     = "desktop",
-			          .title  = "Desktop",
-			          .status = Severity::Error,
-			          .detail = "There is no connection to the desktop (X11), so the trigger and popups cannot work. Was the daemon started outside the graphical session?",
-			          .fix    = "restart" }
+					  .title  = "Desktop",
+					  .status = Severity::Error,
+					  .detail = "There is no connection to the desktop (X11), so the trigger and popups cannot work. Was the daemon started outside the graphical session?",
+					  .fix    = "restart" }
 			);
 		}
 		else
@@ -269,10 +269,10 @@ namespace lexiglance::daemon
 			{
 				checks.push_back(
 						{ .id     = "desktop",
-				          .title  = "Desktop",
-				          .status = Severity::Error,
-				          .detail = "The desktop thread does not answer, so no popup can be shown.",
-				          .fix    = "restart" }
+						  .title  = "Desktop",
+						  .status = Severity::Error,
+						  .detail = "The desktop thread does not answer, so no popup can be shown.",
+						  .fix    = "restart" }
 				);
 			}
 		}
@@ -401,15 +401,15 @@ namespace lexiglance::daemon
 			const bool none = missing.size() == offered;
 			checks.push_back(
 					{ .id     = "recommended-dictionaries",
-			          .title  = "Recommended dictionaries",
-			          .status = none ? Severity::Warning : Severity::Info,
-			          .detail = none ? std::format(
+					  .title  = "Recommended dictionaries",
+					  .status = none ? Severity::Warning : Severity::Info,
+					  .detail = none ? std::format(
 											   "None of the recommended dictionaries for {} are installed ({}). Get them on the Dictionaries page.",
 											   preferred->name(),
 											   joined( missing, ", " )
 									   )
-			                         : std::format( "Still missing for {}: {}. Get them on the Dictionaries page.", preferred->name(), joined( missing, ", " ) ),
-			          .fix    = "open-dictionaries" }
+					                 : std::format( "Still missing for {}: {}. Get them on the Dictionaries page.", preferred->name(), joined( missing, ", " ) ),
+					  .fix    = "open-dictionaries" }
 			);
 		}
 	}
@@ -462,10 +462,10 @@ namespace lexiglance::daemon
 			{
 				checks.push_back(
 						{ .id     = "accessibility-setting",
-				          .title  = "Accessibility for Qt and Chromium",
-				          .status = Severity::Warning,
-				          .detail = "Qt, Chromium and Electron applications are not asked to expose their text, so it can only be read with OCR (slower, less exact).",
-				          .fix    = "enable-accessibility" }
+						  .title  = "Accessibility for Qt and Chromium",
+						  .status = Severity::Warning,
+						  .detail = "Qt, Chromium and Electron applications are not asked to expose their text, so it can only be read with OCR (slower, less exact).",
+						  .fix    = "enable-accessibility" }
 				);
 			}
 
@@ -473,10 +473,10 @@ namespace lexiglance::daemon
 			{
 				checks.push_back(
 						{ .id     = "capture",
-				          .title  = "Text capture",
-				          .status = Severity::Error,
-				          .detail = std::format( "Reading the text under the pointer has been stuck for {} s, most likely in a call to an application that does not answer.", busy.count() / 1000 ),
-				          .fix    = "restart" }
+						  .title  = "Text capture",
+						  .status = Severity::Error,
+						  .detail = std::format( "Reading the text under the pointer has been stuck for {} s, most likely in a call to an application that does not answer.", busy.count() / 1000 ),
+						  .fix    = "restart" }
 				);
 			}
 			else
@@ -507,11 +507,11 @@ namespace lexiglance::daemon
 				{
 					checks.push_back(
 							{ .id     = "capture",
-					          .title  = "Text capture",
-					          .status = replaced ? Severity::Warning : Severity::Error,
-					          .detail = replaced ? "Text capture was busy with lookups; check again without holding the trigger."
-					                             : "Text capture did not answer within 8 s.",
-					          .fix    = replaced ? "" : "restart" }
+							  .title  = "Text capture",
+							  .status = replaced ? Severity::Warning : Severity::Error,
+							  .detail = replaced ? "Text capture was busy with lookups; check again without holding the trigger."
+							                     : "Text capture did not answer within 8 s.",
+							  .fix    = replaced ? "" : "restart" }
 					);
 				}
 			}
@@ -534,9 +534,9 @@ namespace lexiglance::daemon
 			{
 				checks.push_back(
 						{ .id     = "last-capture",
-				          .title  = "Last lookup on screen",
-				          .status = Severity::Info,
-				          .detail = "none since Lexiglance started: hold the trigger over a word to try one." }
+						  .title  = "Last lookup on screen",
+						  .status = Severity::Info,
+						  .detail = "none since Lexiglance started: hold the trigger over a word to try one." }
 				);
 			}
 		}
@@ -698,9 +698,9 @@ namespace lexiglance::daemon
 				}
 				checks.push_back(
 						{ .id     = "log",
-				          .title  = "Recent problems",
-				          .status = errors ? Severity::Warning : Severity::Info,
-				          .detail = std::format( "{} logged in the last 30 minutes. Latest: {}.", recent.size() == 1 ? std::string( "One problem" ) : std::format( "{} problems", recent.size() ), latest ) }
+						  .title  = "Recent problems",
+						  .status = errors ? Severity::Warning : Severity::Info,
+						  .detail = std::format( "{} logged in the last 30 minutes. Latest: {}.", recent.size() == 1 ? std::string( "One problem" ) : std::format( "{} problems", recent.size() ), latest ) }
 				);
 			}
 		}

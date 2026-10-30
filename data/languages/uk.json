@@ -1,31 +1,31 @@
 {
-    "code": "uk",
-    "name": "Ukrainian",
-    "script": ["0400-052F"],
-    "word_characters": "-‐‑'’ʼ",
-    "sample_text": "Чуєш їх, доцю, га? Кумедна ж ти, прощайся без ґольфів!",
-    "example_sentence": "Учора ми з другом довго читали цікаві книжки.",
-    "sample_words": ["їжа", "мова"],
-    "commons_prefix": "Uk",
-    "ocr": {
-        "paddle": "PP-OCRv5/rec/eslav_PP-OCRv5_rec_mobile.onnx",
-        "tesseract": "ukr"
-    },
-    "distinctive_letters": "іїєґІЇЄҐ",
-    "translation": {
-        "model": "Xenova/opus-mt-uk-en",
-        "revision": "b2ad6afa424aaeff8913ff350860b7a7b7c0a607",
-        "size": 116526356,
-        "full_size": 438703458
-    },
-    "dictionaries": [
-        {
-            "name": "Wiktionary Ukrainian-English",
-            "category": "Terms",
-            "title": "wty-uk-en",
-            "description": "Ukrainian-English dictionary built from Wiktionary by kaikki.org and wty: definitions, examples, stress marks and every inflected form. Updated monthly.",
-            "homepage": "https://github.com/yomidevs/wiktionary-to-yomitan",
-            "download": "https://huggingface.co/datasets/daxida/wty-release/resolve/main/latest/dict/uk/en/wty-uk-en.zip"
-        }
-    ]
+  "code": "uk",
+  "name": "Ukrainian",
+  "script": ["0400-052F"],
+  "word_characters": "-‐‑'’ʼ",
+  "sample_text": "Чуєш їх, доцю, га? Кумедна ж ти, прощайся без ґольфів!",
+  "example_sentence": "Учора ми з другом довго читали цікаві книжки.",
+  "sample_words": ["їжа", "мова"],
+  "commons_prefix": "Uk",
+  "ocr": {
+    "paddle": "PP-OCRv5/rec/eslav_PP-OCRv5_rec_mobile.onnx",
+    "tesseract": "ukr"
+  },
+  "distinctive_letters": "іїєґІЇЄҐ",
+  "translation": {
+    "model": "Xenova/opus-mt-uk-en",
+    "revision": "b2ad6afa424aaeff8913ff350860b7a7b7c0a607",
+    "size": 116526356,
+    "full_size": 438703458
+  },
+  "dictionaries": [
+    {
+      "name": "Wiktionary Ukrainian-English",
+      "category": "Terms",
+      "title": "wty-uk-en",
+      "description": "Ukrainian-English dictionary built from Wiktionary by kaikki.org and wty: definitions, examples, stress marks and every inflected form. Updated monthly.",
+      "homepage": "https://github.com/yomidevs/wiktionary-to-yomitan",
+      "download": "https://huggingface.co/datasets/daxida/wty-release/resolve/main/latest/dict/uk/en/wty-uk-en.zip"
+    }
+  ]
 }

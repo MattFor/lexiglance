@@ -530,6 +530,14 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 					return;
 				}
 				auto* installer = new QProcess( this );
+				// A failed start never emits finished().
+				connect( installer, &QProcess::errorOccurred, this, [this, installer]( QProcess::ProcessError error ) {
+					if ( error == QProcess::FailedToStart )
+					{
+						installer->deleteLater();
+						fail( QStringLiteral( "Update failed: cannot start pkexec (%1)" ).arg( installer->errorString() ) );
+					}
+				} );
 				connect( installer, &QProcess::finished, this, [this, installer, arguments, tool]( int code, QProcess::ExitStatus status ) {
 					installer->deleteLater();
 					if ( status != QProcess::NormalExit || code != 0 )

@@ -172,7 +172,7 @@ namespace lexiglance::gui::ocr_install
 				parent,
 				QStringLiteral( "Microsoft Visual C++ Redistributable" ),
 				QStringLiteral( "Reading text from the screen needs the Microsoft Visual C++ Redistributable, which this computer does not have "
-		                        "(%1). Everything else in Lexiglance works without it.\n\nInstall it as well? Windows will ask for permission." )
+				                "(%1). Everything else in Lexiglance works without it.\n\nInstall it as well? Windows will ask for permission." )
 						.arg( missing )
 		);
 		return answer == QMessageBox::Yes ? vcredist::installerPath() : QString();

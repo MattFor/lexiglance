@@ -1,7 +1,7 @@
 # Lexiglance
 
 [![CI](https://github.com/MattFor/lexiglance/actions/workflows/ci.yml/badge.svg)](https://github.com/MattFor/lexiglance/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/MattFor/lexiglance)](https://github.com/MattFor/lexiglance/releases)
+[![Release](https://img.shields.io/github/v/release/MattFor/lexiglance)](https://github.com/MattFor/lexiglance/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Ever tried learning a language and gotten frustrated because pop-up dictionaries only work inside your browser? Worry no
@@ -100,8 +100,7 @@ I hope Lexiglance can be a useful tool to others and help everyone on their own 
 
 ## License
 
-MIT [LICENSE](LICENSE).  
-By MattFor
+MIT, see [LICENSE](LICENSE). By [MattFor](https://github.com/MattFor).
 
 Dictionaries, OCR and translation models and recordings are downloaded separately and keep their own
 licenses. Lexiglance includes the ONNX Runtime headers (MIT), a kanji table

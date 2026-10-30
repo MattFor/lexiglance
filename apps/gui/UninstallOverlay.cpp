@@ -225,6 +225,14 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 			root.front() = program;
 		}
 		auto* process = new QProcess( this );
+		// A failed start never emits finished().
+		connect( process, &QProcess::errorOccurred, this, [this, process]( QProcess::ProcessError error ) {
+			if ( error == QProcess::FailedToStart )
+			{
+				process->deleteLater();
+				fail( QStringLiteral( "Uninstalling failed (cannot start pkexec: %1). Nothing was removed." ).arg( process->errorString() ) );
+			}
+		} );
 		connect( process, &QProcess::finished, this, [this, process, plan, own]( int code, QProcess::ExitStatus status ) {
 			process->deleteLater();
 			if ( status != QProcess::NormalExit || code != 0 )
