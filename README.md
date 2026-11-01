@@ -18,7 +18,7 @@ same dictionary format as [Yomitan](https://yomitan.wiki/).
 </p>
 
 **[Download for Windows](https://github.com/MattFor/lexiglance/releases/latest/download/lexiglance-windows-setup.exe)**
-· **[Download for Linux](https://github.com/MattFor/lexiglance/releases/latest/download/lexiglance-x86_64.AppImage)**
+· **[Download for Linux](https://github.com/MattFor/lexiglance/releases/latest/download/Lexiglance-x86_64.AppImage)**
 · [Other packages](https://github.com/MattFor/lexiglance/releases/latest)
 
 ## Features
@@ -47,8 +47,8 @@ same dictionary format as [Yomitan](https://yomitan.wiki/).
   info -> Run anyway**. Running a newer one updates in place. For games that run as administrator, turn on
   **Overview -> Run as administrator**.
 - **Linux:** download
-  [lexiglance-x86_64.AppImage](https://github.com/MattFor/lexiglance/releases/latest/download/lexiglance-x86_64.AppImage),
-  make it executable (`chmod +x lexiglance-x86_64.AppImage`) and run it.
+  [Lexiglance-x86_64.AppImage](https://github.com/MattFor/lexiglance/releases/latest/download/Lexiglance-x86_64.AppImage),
+  make it executable (`chmod +x Lexiglance-x86_64.AppImage`) and run it.
 
 The [releases page](https://github.com/MattFor/lexiglance/releases) also has a portable `.zip` for Windows, a `.deb`
 for Debian and Ubuntu, a `.rpm` for Fedora, and a `.tar.gz`. From then on Lexiglance keeps itself up to date

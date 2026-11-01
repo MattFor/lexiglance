@@ -102,7 +102,7 @@ namespace lexiglance::gui
 				case Kind::WindowsPortable:
 					return QStringLiteral( "lexiglance-windows-portable.zip" );
 				case Kind::AppImage:
-					return QStringLiteral( "lexiglance-x86_64.AppImage" );
+					return QStringLiteral( "Lexiglance-x86_64.AppImage" );
 				case Kind::Deb:
 					return QStringLiteral( "lexiglance-amd64.deb" );
 				case Kind::Rpm:
@@ -149,7 +149,7 @@ namespace lexiglance::gui
 			const QString latest = qs( project_url ) + QStringLiteral( "/releases/latest" );
 			if ( QSysInfo::kernelType() == QStringLiteral( "linux" ) && QSysInfo::currentCpuArchitecture() == QStringLiteral( "x86_64" ) )
 			{
-				return { latest + QStringLiteral( "/download/lexiglance-x86_64.AppImage" ) };
+				return { latest + QStringLiteral( "/download/Lexiglance-x86_64.AppImage" ) };
 			}
 			return { latest };
 		}

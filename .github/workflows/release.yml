@@ -80,7 +80,7 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           # For AppImageUpdate and the like: the .zsync of the newest release, which appimagetool makes with zsyncmake.
-          UPDATE_INFORMATION: gh-releases-zsync|MattFor|lexiglance|latest|lexiglance-x86_64.AppImage.zsync
+          UPDATE_INFORMATION: gh-releases-zsync|MattFor|lexiglance|latest|Lexiglance-x86_64.AppImage.zsync
         run: |
           DESTDIR="$PWD/AppDir" cmake --install build
           # Fixed releases, checked: "continuous" builds change under a release (appimagetool's of 31-10-2026 refused the
@@ -115,11 +115,11 @@ jobs:
           # Under its published name and from dist: zsyncmake writes the .zsync to the working directory, and the file
           # name it records there is the one AppImageUpdate downloads.
           mkdir -p dist && cd dist
-          ../appimagetool-x86_64.AppImage -u "$UPDATE_INFORMATION" ../AppDir lexiglance-x86_64.AppImage
-          test -s lexiglance-x86_64.AppImage.zsync
-          [ "$(./lexiglance-x86_64.AppImage --appimage-updateinformation)" = "$UPDATE_INFORMATION" ]
+          ../appimagetool-x86_64.AppImage -u "$UPDATE_INFORMATION" ../AppDir Lexiglance-x86_64.AppImage
+          test -s Lexiglance-x86_64.AppImage.zsync
+          [ "$(./Lexiglance-x86_64.AppImage --appimage-updateinformation)" = "$UPDATE_INFORMATION" ]
           # Started as a user starts it: the runtime, AppRun and its hooks, the bundled libraries, then the daemon.
-          ./lexiglance-x86_64.AppImage --daemon --version
+          ./Lexiglance-x86_64.AppImage --daemon --version
       - uses: actions/upload-artifact@v7
         with:
           name: package-appimage
@@ -233,13 +233,17 @@ jobs:
           mv lexiglance-*.x86_64.rpm lexiglance-x86_64.rpm
           mv lexiglance-*-linux-*.tar.gz lexiglance-linux-x86_64.tar.gz
           sha256sum -- * > SHA256SUMS
+          # ponytail: 1.3.6 and older update from "lexiglance-x86_64.AppImage" (GitHub serves a file whatever the case of
+          # its name) and look that name up here; drop once they are gone.
+          line=$(grep '  Lexiglance-x86_64\.AppImage$' SHA256SUMS)
+          echo "${line%%  *}  lexiglance-x86_64.AppImage" >> SHA256SUMS
       - name: Notes
         # Which file to download comes first; the changes of this version follow, from CHANGELOG.md.
         run: |
           version="${GITHUB_REF_NAME#v}"
           {
             echo "- **Windows 10 and 11:** run \`lexiglance-windows-setup.exe\`. It needs no administrator rights and opens Lexiglance when it is done. \`lexiglance-windows-portable.zip\` is the same without installing."
-            echo "- **Linux:** make \`lexiglance-x86_64.AppImage\` executable and run it, or install \`lexiglance-amd64.deb\` on Debian and Ubuntu, \`lexiglance-x86_64.rpm\` on Fedora."
+            echo "- **Linux:** make \`Lexiglance-x86_64.AppImage\` executable and run it, or install \`lexiglance-amd64.deb\` on Debian and Ubuntu, \`lexiglance-x86_64.rpm\` on Fedora."
             echo
             awk -v v="$version" '/^## \[/{ found = index($0, "[" v "]") > 0; next } found' CHANGELOG.md
           } > notes.md

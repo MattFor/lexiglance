@@ -9,6 +9,8 @@
 
 ### Changed
 
+- The AppImage is now `Lexiglance-x86_64.AppImage`, spelled as the application is; copies of 1.3.6 and older still
+  update to it, and old links still download it.
 - Dictionaries import with at most three parser threads: no slower, and with less than half the memory on machines
   with many cores.
 - A dictionary file over 128 MB is refused, and the banks being parsed are kept under 128 MB together, so a hostile

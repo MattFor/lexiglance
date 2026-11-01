@@ -29,7 +29,7 @@ namespace lexiglance::gui
 		{
 			WindowsSetup,    // installed with lexiglance-windows-setup.exe
 			WindowsPortable, // unpacked from lexiglance-windows-portable.zip
-			AppImage,        // lexiglance-x86_64.AppImage
+			AppImage,        // Lexiglance-x86_64.AppImage
 			Deb,             // the lexiglance-amd64.deb package
 			Rpm,             // the lexiglance-x86_64.rpm package
 			Source,          // a build tree
