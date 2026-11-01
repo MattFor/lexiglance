@@ -3,7 +3,7 @@
 [![CI](https://github.com/MattFor/lexiglance/actions/workflows/ci.yml/badge.svg)](https://github.com/MattFor/lexiglance/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/MattFor/lexiglance)](https://github.com/MattFor/lexiglance/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![AppImage](https://img.shields.io/badge/AppImage-download-blue?logo=appimage)](https://github.com/MattFor/lexiglance/releases/latest/download/Lexiglance-x86_64.AppImage)
+[![AppImageHub](https://img.shields.io/badge/AppImageHub-Lexiglance-blue?logo=appimage)](https://appimage.github.io/Lexiglance/)
 
 Ever tried learning a language and gotten frustrated because pop-up dictionaries only work inside your browser? Worry no
 more!
