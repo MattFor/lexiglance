@@ -80,28 +80,46 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           # For AppImageUpdate and the like: the .zsync of the newest release, which appimagetool makes with zsyncmake.
-          LDAI_UPDATE_INFORMATION: gh-releases-zsync|MattFor|lexiglance|latest|lexiglance-x86_64.AppImage.zsync
+          UPDATE_INFORMATION: gh-releases-zsync|MattFor|lexiglance|latest|lexiglance-x86_64.AppImage.zsync
         run: |
           DESTDIR="$PWD/AppDir" cmake --install build
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          wget -q https://github.com/darealshinji/linuxdeploy-plugin-checkrt/releases/download/r4/linuxdeploy-plugin-checkrt.sh
-          chmod +x linuxdeploy*
+          # Fixed releases, checked: "continuous" builds change under a release (appimagetool's of 31-10-2026 refused the
+          # SVG icon 1.3.6 shipped with). Change a version and its hash together, then run this workflow by hand.
+          url=https://github.com
+          curl -fsSLO "$url/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage"
+          curl -fsSLO "$url/linuxdeploy/linuxdeploy-plugin-qt/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-qt-x86_64.AppImage"
+          curl -fsSLO "$url/darealshinji/linuxdeploy-plugin-checkrt/releases/download/r4/linuxdeploy-plugin-checkrt.sh"
+          curl -fsSLO "$url/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+          sha256sum -c - <<'EOF'
+          c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  linuxdeploy-x86_64.AppImage
+          15106be885c1c48a021198e7e1e9a48ce9d02a86dd0a1848f00bdbf3c1c92724  linuxdeploy-plugin-qt-x86_64.AppImage
+          292a0e13cdfd4686cc02dd9ebef95743ded0d22d19f0dad659af4b3e531d26e3  linuxdeploy-plugin-checkrt.sh
+          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool-x86_64.AppImage
+          EOF
+          chmod +x linuxdeploy* appimagetool-x86_64.AppImage
           export QMAKE="$QT_DIR/bin/qmake" LD_LIBRARY_PATH="$QT_DIR/lib"
           ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --plugin checkrt \
             --desktop-file AppDir/usr/share/applications/io.github.mattfor.lexiglance.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/lexiglance.svg \
             --executable AppDir/usr/bin/lexiglanced --executable AppDir/usr/bin/lexiglancectl
+          # Qt 5's (later plugin releases leave it out): it would point Qt 6 at a GTK theme plugin it does not have.
+          rm -f AppDir/apprun-hooks/linuxdeploy-plugin-qt-hook.sh
           rm AppDir/checkrt/exec.so
           # The hook's "$CHECKRT_LIBS:$LD_LIBRARY_PATH" ends in ':' when LD_LIBRARY_PATH is unset: the working directory.
           hook=AppDir/apprun-hooks/linuxdeploy-plugin-checkrt.sh
+          # shellcheck disable=SC2016 # the hook's own variables, not the step's
           sed -i 's/"${CHECKRT_LIBS}:${LD_LIBRARY_PATH}"/"${CHECKRT_LIBS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"/' "$hook"
           grep -qF 'LD_LIBRARY_PATH:+' "$hook"
+          # The AppImage's own icon (.DirIcon) is made from a PNG in the top level.
+          cp data/windows/lexiglance.png AppDir/lexiglance.png
           # Under its published name and from dist: zsyncmake writes the .zsync to the working directory, and the file
           # name it records there is the one AppImageUpdate downloads.
           mkdir -p dist && cd dist
-          LDAI_OUTPUT=lexiglance-x86_64.AppImage ../linuxdeploy-x86_64.AppImage --appdir ../AppDir --output appimage
+          ../appimagetool-x86_64.AppImage -u "$UPDATE_INFORMATION" ../AppDir lexiglance-x86_64.AppImage
           test -s lexiglance-x86_64.AppImage.zsync
+          [ "$(./lexiglance-x86_64.AppImage --appimage-updateinformation)" = "$UPDATE_INFORMATION" ]
+          # Started as a user starts it: the runtime, AppRun and its hooks, the bundled libraries, then the daemon.
+          ./lexiglance-x86_64.AppImage --daemon --version
       - uses: actions/upload-artifact@v7
         with:
           name: package-appimage
