@@ -90,11 +90,13 @@ jobs:
           curl -fsSLO "$url/linuxdeploy/linuxdeploy-plugin-qt/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-qt-x86_64.AppImage"
           curl -fsSLO "$url/darealshinji/linuxdeploy-plugin-checkrt/releases/download/r4/linuxdeploy-plugin-checkrt.sh"
           curl -fsSLO "$url/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+          curl -fsSLO "$url/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64"
           sha256sum -c - <<'EOF'
           c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  linuxdeploy-x86_64.AppImage
           15106be885c1c48a021198e7e1e9a48ce9d02a86dd0a1848f00bdbf3c1c92724  linuxdeploy-plugin-qt-x86_64.AppImage
           292a0e13cdfd4686cc02dd9ebef95743ded0d22d19f0dad659af4b3e531d26e3  linuxdeploy-plugin-checkrt.sh
           ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool-x86_64.AppImage
+          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  runtime-x86_64
           EOF
           chmod +x linuxdeploy* appimagetool-x86_64.AppImage
           export QMAKE="$QT_DIR/bin/qmake" LD_LIBRARY_PATH="$QT_DIR/lib"
@@ -116,9 +118,11 @@ jobs:
           # Under its published name and from dist: zsyncmake writes the .zsync to the working directory, and the file
           # name it records there is the one AppImageUpdate downloads.
           mkdir -p dist && cd dist
-          ../appimagetool-x86_64.AppImage -u "$UPDATE_INFORMATION" ../AppDir Lexiglance-x86_64.AppImage
+          # The runtime too: appimagetool would otherwise download the newest.
+          ../appimagetool-x86_64.AppImage --runtime-file ../runtime-x86_64 -u "$UPDATE_INFORMATION" ../AppDir Lexiglance-x86_64.AppImage
           test -s Lexiglance-x86_64.AppImage.zsync
-          [ "$(./Lexiglance-x86_64.AppImage --appimage-updateinformation)" = "$UPDATE_INFORMATION" ]
+          # Without APPIMAGE_EXTRACT_AND_RUN, which the runtime acts on before any --appimage- option: it would start the app.
+          [ "$(env -u APPIMAGE_EXTRACT_AND_RUN ./Lexiglance-x86_64.AppImage --appimage-updateinformation)" = "$UPDATE_INFORMATION" ]
           # Started as a user starts it: the runtime, AppRun and its hooks, the bundled libraries, then the daemon.
           ./Lexiglance-x86_64.AppImage --daemon --version
       - uses: actions/upload-artifact@v7
