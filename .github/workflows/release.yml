@@ -102,8 +102,9 @@ jobs:
             --desktop-file AppDir/usr/share/applications/io.github.mattfor.lexiglance.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/lexiglance.svg \
             --executable AppDir/usr/bin/lexiglanced --executable AppDir/usr/bin/lexiglancectl
-          # Qt 5's (later plugin releases leave it out): it would point Qt 6 at a GTK theme plugin it does not have.
-          rm -f AppDir/apprun-hooks/linuxdeploy-plugin-qt-hook.sh
+          # Qt 5's (later plugin releases leave it out): it would point Qt 6 at a GTK theme plugin it does not have. Emptied,
+          # not deleted: AppRun sources it by name.
+          : > AppDir/apprun-hooks/linuxdeploy-plugin-qt-hook.sh
           rm AppDir/checkrt/exec.so
           # The hook's "$CHECKRT_LIBS:$LD_LIBRARY_PATH" ends in ':' when LD_LIBRARY_PATH is unset: the working directory.
           hook=AppDir/apprun-hooks/linuxdeploy-plugin-checkrt.sh
