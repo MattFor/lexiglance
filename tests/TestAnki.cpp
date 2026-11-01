@@ -6,6 +6,7 @@
 #include <lexiglance/core/Md5.h>
 
 #include <format>
+#include <memory>
 #include <string>
 
 namespace
@@ -20,6 +21,22 @@ namespace
 		test::expectEqual( daemon::fillTemplate( "<b>{cloze-body}</b>", markers ), std::string( "<b>食べた</b>" ) );
 		// Unknown markers and unclosed braces stay as they are.
 		test::expectEqual( daemon::fillTemplate( "{nope} {expression", markers ), std::string( "{nope} {expression" ) );
+		// Anki's cloze braces around a marker.
+		test::expectEqual( daemon::fillTemplate( "{{c1::{cloze-body}}}", markers ), std::string( "{{c1::食べた}}" ) );
+	} );
+
+	const test::Registrar anki_escaped( "anki markers take screen text as text, not HTML", [] {
+		lexiglance::lookup::LookupResult result;
+		result.dictionaries = std::make_shared<const lexiglance::lookup::DictionarySet>();
+		result.text         = "配列";
+		result.terms.push_back( { .expression = "配列", .reading = "はいれつ", .matched_length = 2 } );
+		const std::string         sentence = "前の<i>配列</i>を使う";
+		const daemon::NoteContext context{ .sentence = sentence, .sentence_offset = sentence.find( "配列" ), .audio = nullptr };
+		const daemon::Markers     markers = daemon::noteMarkers( result, result.terms.front(), context );
+		test::expectEqual( markers.at( "sentence" ), std::string( "前の&lt;i&gt;配列&lt;/i&gt;を使う" ) );
+		test::expectEqual( daemon::fillTemplate( "{cloze-prefix}{{c1::{cloze-body}}}{cloze-suffix}", markers ), std::string( "前の&lt;i&gt;{{c1::配列}}&lt;/i&gt;を使う" ) );
+		// Markers that are HTML already stay HTML.
+		test::expect( markers.at( "furigana" ).starts_with( "<ruby>" ) );
 	} );
 
 	const test::Registrar anki_sentence( "sentence around a lookup", [] {

@@ -6,6 +6,7 @@
 #include <lexiglance/core/Log.h>
 
 #include <chrono>
+#include <format>
 #include <fstream>
 
 namespace
@@ -86,6 +87,25 @@ namespace
 		test::expectEqual( root["translated_languages"].items().front()["language"].asString(), std::string_view( "ru" ) );
 		test::expect( !root["enabled"].asBool() );
 		test::expect( root["translations_enabled"].asBool() );
+	} );
+
+	const test::Registrar new_words( "statistics count a new word once the list of words is full", [] {
+		Statistics stats;
+		stats.load( test::scratch( "statistics-words" ) / "statistics.json" );
+		for ( int i = 0; i < 2000; ++i )
+		{
+			stats.recordLookup( std::format( "w{:04}", i ), "en", "ocr", 5, std::chrono::microseconds( 1 ) );
+		}
+		// It sorts after every other word, so pruning at each lookup used to drop it at once.
+		stats.recordLookup( "zz", "en", "ocr", 2, std::chrono::microseconds( 1 ) );
+		stats.recordLookup( "zz", "en", "ocr", 2, std::chrono::microseconds( 1 ) );
+		const auto document = json::Document::parse( stats.json() );
+		if ( !test::expect( document.has_value() ) )
+		{
+			return;
+		}
+		const auto words = document->root()["words"].items();
+		test::expect( !words.empty() && words.front()["word"].asString() == "zz" && words.front()["count"].asInt() == 2 );
 	} );
 
 #ifdef __linux__

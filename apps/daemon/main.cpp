@@ -315,9 +315,20 @@ namespace
 		lg::log::setFile( log_file );
 		lg::log::info( "---- lexiglanced {} ({} build{}) ----", lg::version, lg::channel, lg::commit.empty() ? std::string() : std::format( " {}", lg::commit ) );
 		lg::log::info( "program {}, settings {}, dictionaries {}", lg::process::executable().string(), lg::paths::configFile().string(), lg::paths::dictionariesDir().string() );
+		std::filesystem::path broken_config;
 		if ( !config_problem.empty() )
 		{
 			lg::log::error( "{} (using defaults)", config_problem );
+			// Kept aside: the first settings save would replace it with the defaults.
+			broken_config = lg::paths::configFile();
+			broken_config += ".broken";
+			std::error_code moved;
+			std::filesystem::rename( lg::paths::configFile(), broken_config, moved );
+			if ( moved )
+			{
+				lg::log::error( "cannot move {} aside: {}", lg::paths::configFile().string(), moved.message() );
+				broken_config.clear();
+			}
 		}
 #ifdef _WIN32
 		if ( elevated )
@@ -360,7 +371,7 @@ namespace
 		lg::daemon::Daemon daemon( backend ? std::move( *backend ) : nullptr, std::move( *config ) );
 		if ( !config_problem.empty() )
 		{
-			daemon.noteStartupProblem( std::format( "The settings file could not be read ({}), so the defaults are used. Fix or delete it.", config_problem ) );
+			daemon.noteStartupProblem( std::format( "The settings file could not be read ({}), so the defaults are used. {}", config_problem, broken_config.empty() ? std::string( "Fix or delete it, then restart Lexiglance." ) : std::format( "It was moved to {}: fix it, rename it back to config.json and restart Lexiglance.", broken_config.string() ) ) );
 		}
 #ifdef _WIN32
 		daemon.setAdministrator( elevated, task_here );
@@ -428,6 +439,7 @@ namespace
 
 int main( int argc, char** argv )
 {
+	lexiglance::process::forgetForeignAppImage();
 	try
 	{
 		return run( std::span<char*>( argv, static_cast<std::size_t>( argc ) ) );

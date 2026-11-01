@@ -161,7 +161,8 @@ namespace lexiglance::render
 			case HighlightShape::Brackets:
 			{
 				// Corner marks, like a camera's focus frame.
-				const double arm = std::clamp( std::min( w, h ) * 0.4, 2.0 * t, std::min( w, h ) / 2.0 );
+				// Not std::clamp: a small box with a thick line has half < 2t.
+				const double arm = std::min( std::max( std::min( w, h ) * 0.4, 2.0 * t ), std::min( w, h ) / 2.0 );
 				const double e   = t / 2.0;
 				cairo_move_to( cr, e, arm );
 				cairo_line_to( cr, e, e );
@@ -213,7 +214,13 @@ namespace lexiglance::render
 			return bits;
 		}
 		cairo_surface_t* surface = cairo_image_surface_create( CAIRO_FORMAT_A8, width, height );
-		cairo_t*         cr      = cairo_create( surface );
+		// Over 32767 px (or out of memory) cairo hands back an error surface with no pixels.
+		if ( cairo_surface_status( surface ) != CAIRO_STATUS_SUCCESS )
+		{
+			cairo_surface_destroy( surface );
+			return bits;
+		}
+		cairo_t* cr = cairo_create( surface );
 		// Crisp edges: a window shape has no partial pixels.
 		cairo_set_antialias( cr, CAIRO_ANTIALIAS_NONE );
 		drawHighlight( cr, pieces, look, Color{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 } );

@@ -130,6 +130,21 @@ namespace
 
 		const auto kana_only = lg::lang::ja::distributeFurigana( "コーヒー", "コーヒー" );
 		test::expect( kana_only.size() == 1 && kana_only[0].reading.empty() );
+
+		const auto pulled = lg::lang::ja::distributeFurigana( "引き出し", "ひきだし" );
+		test::expect( pulled.size() == 4 && pulled[0].reading == "ひ" && pulled[2].reading == "だ" );
+
+		// A reading that can never align gives up quickly rather than trying every split.
+		std::string expression;
+		std::string reading;
+		for ( int i = 0; i < 60; ++i )
+		{
+			expression += i < 7 ? "漢あ" : "";
+			reading += "あ";
+		}
+		expression += "漢い";
+		const auto hopeless = lg::lang::ja::distributeFurigana( expression, reading );
+		test::expect( hopeless.size() == 1 && hopeless[0].text == expression && hopeless[0].reading == reading );
 	} );
 
 	std::shared_ptr<const lg::lookup::DictionarySet> fixtureSet()

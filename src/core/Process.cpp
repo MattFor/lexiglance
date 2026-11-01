@@ -730,6 +730,8 @@ namespace lexiglance::process
 		const std::string        path = program.string();
 		std::vector<std::string> owned( arguments.begin(), arguments.end() );
 		std::vector<char*>       argv = argumentVector( path, owned );
+		sigset_t                 none{};
+		sigemptyset( &none );
 		// Forked twice: the grandchild belongs to init, so it is reaped by it and not left a zombie here.
 		const pid_t child = ::fork();
 		if ( child < 0 )
@@ -742,6 +744,9 @@ namespace lexiglance::process
 			const pid_t grandchild = ::fork();
 			if ( grandchild == 0 )
 			{
+				// The daemon blocks its termination signals and ignores SIGPIPE; the program must not inherit that.
+				::sigprocmask( SIG_SETMASK, &none, nullptr );
+				( void )::signal( SIGPIPE, SIG_DFL );
 				discardOutput();
 				::execv( argv[0], argv.data() );
 				::_exit( 127 );
@@ -760,6 +765,23 @@ namespace lexiglance::process
 	{
 		const char* appimage = std::getenv( "APPIMAGE" );
 		return appimage != nullptr && *appimage != '\0' ? fs::path( appimage ) : executable();
+	}
+
+	void forgetForeignAppImage()
+	{
+#ifdef __linux__
+		const char*     dir = std::getenv( "APPDIR" );
+		std::error_code ec;
+		// /proc/self/exe is canonical; APPDIR is "$TMPDIR/.mount_X" as given.
+		const fs::path root   = dir != nullptr && *dir != '\0' ? fs::weakly_canonical( dir, ec ) : fs::path();
+		const fs::path inside = root.empty() || ec ? fs::path() : executable().lexically_relative( root );
+		if ( inside.empty() || *inside.begin() == ".." )
+		{
+			::unsetenv( "APPIMAGE" );
+			::unsetenv( "APPDIR" );
+			::unsetenv( "ARGV0" );
+		}
+#endif
 	}
 
 	bool replacementReady( std::optional<fs::file_time_type>& seen )

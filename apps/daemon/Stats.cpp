@@ -156,8 +156,10 @@ namespace lexiglance::daemon
 
 	void Statistics::save()
 	{
-		std::string           text;
-		std::filesystem::path file;
+		// Held through the write, so two threads never write the temporary file at once.
+		const std::scoped_lock saving( save_mutex_ );
+		std::string            text;
+		std::filesystem::path  file;
 		{
 			const std::scoped_lock lock( mutex_ );
 			if ( !dirty_ || file_.empty() )
@@ -253,7 +255,11 @@ namespace lexiglance::daemon
 				++tally_.words[std::string( word )];
 			}
 		}
-		prune( tally_.words, kept_words );
+		// A quarter over before pruning, so the sort is rare and a new word can be counted twice before it competes.
+		if ( tally_.words.size() > kept_words + kept_words / 4 )
+		{
+			prune( tally_.words, kept_words );
+		}
 		dirty_ = true;
 	}
 

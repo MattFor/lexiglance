@@ -154,6 +154,8 @@ namespace lexiglance::gui
 		bool                                                    importing           = false;
 		bool                                                    unpack_runtime      = false;
 		bool                                                    finishing           = false;
+		std::int64_t                                            import_job          = -1;
+		QString                                                 import_name;
 		QString                                                 failure;
 		QString                                                 runtime;
 		QString                                                 archive;
@@ -232,10 +234,10 @@ namespace lexiglance::gui
 		auto* features = new QVBoxLayout();
 		features->setContentsMargins( 20, 14, 20, 4 );
 		features->setSpacing( 12 );
-		features->addWidget( feature( QStringLiteral( "edit-find" ), QStringLiteral( "Point at a word" ), QStringLiteral( "Hold a key over text anywhere: a browser, a chat, a game, a video. What it means appears beside it." ) ) );
-		features->addWidget( feature( QStringLiteral( "preferences-desktop-locale" ), QStringLiteral( "Whole sentences in English" ), QStringLiteral( "Hold one more key and the sentence is translated, on this computer." ) ) );
-		features->addWidget( feature( QStringLiteral( "accessories-dictionary" ), QStringLiteral( "Dictionaries ready to use" ), QStringLiteral( "For %1, downloaded in a moment, with what reads text in games and videos." ).arg( listed( offered ) ) ) );
-		features->addWidget( feature( QStringLiteral( "document-send" ), QStringLiteral( "Keep what you learn" ), QStringLiteral( "Send words to Anki, with the sentence they came from." ) ) );
+		features->addWidget( feature( QStringLiteral( "edit-find" ), QStringLiteral( "Point at a word" ), QStringLiteral( "Hold a key over text anywhere: a browser, a chat, a game, a video. A pop-up will show you exactly what it means." ) ) );
+		features->addWidget( feature( QStringLiteral( "preferences-desktop-locale" ), QStringLiteral( "Whole sentences in English" ), QStringLiteral( "Hold one more key and the sentence is translated, locally on this computer." ) ) );
+		features->addWidget( feature( QStringLiteral( "accessories-dictionary" ), QStringLiteral( "Dictionaries ready to use" ), QStringLiteral( "For %1. Easily downloadable right from the program." ).arg( listed( offered ) ) ) );
+		features->addWidget( feature( QStringLiteral( "document-send" ), QStringLiteral( "Keep what you learn" ), QStringLiteral( "Send words to Anki along with the sentence they came from." ) ) );
 		welcome_layout->addLayout( features );
 
 		lock_hint_->setWordWrap( true );
@@ -433,6 +435,12 @@ namespace lexiglance::gui
 
 		// The sentence to try answers the keys: what the daemon did with them shows under it.
 		context_.client->onEvent( [this]( std::string_view name, const json::Value& params ) {
+			// A dictionary is in place once the daemon has imported it, not when it queued the job.
+			if ( name == "import.finished" && import_batch_ && params["job"].asInt() == import_batch_->import_job )
+			{
+				importDone( params["ok"].asBool() ? QString() : qs( params["error"].asString() ) );
+				return;
+			}
 			if ( !isVisible() || pages_->currentIndex() != static_cast<int>( Page::Done ) )
 			{
 				return;
@@ -449,6 +457,12 @@ namespace lexiglance::gui
 			else if ( name == "capture.result" && !tried_ )
 			{
 				practice_status_->setText( QStringLiteral( "<span style=\"color:#d19a1f\">Nothing found there</span>: point at the middle of a word." ) );
+			}
+		} );
+		context_.client->onConnection( [this]( bool connected ) {
+			if ( !connected && import_batch_ )
+			{
+				importDone( QStringLiteral( "Lexiglance stopped during the import" ) );
 			}
 		} );
 
@@ -872,31 +886,44 @@ namespace lexiglance::gui
 		batch->importing          = true;
 		const auto [name, target] = batch->import_queue.front();
 		batch->import_queue.pop_front();
+		batch->import_name = name;
 		install_status_->setText( QStringLiteral( "Installing %1..." ).arg( name ) );
 		dict_label_->setText( QStringLiteral( "Dictionaries: installing %1" ).arg( name ) );
 		json::Writer params;
 		params.beginObject().field( "path", ss( target ) ).field( "delete_source", true ).field( "replace", true ).endObject();
-		context_.client->call( "dictionaries.import", params.take(), [this, batch, name]( const json::Value*, const QString& import_error ) {
-			if ( !import_error.isEmpty() && batch->failure.isEmpty() )
+		context_.client->call( "dictionaries.import", params.take(), [this, batch]( const json::Value* result, const QString& import_error ) {
+			import_batch_ = batch;
+			if ( result == nullptr )
 			{
-				batch->failure = QStringLiteral( "%1: %2" ).arg( name, import_error );
+				importDone( import_error );
+				return;
 			}
-			batch->importing = false;
-			if ( batch->dict_imports_left > 0 )
-			{
-				--batch->dict_imports_left;
-			}
-			++batch->dict_finished;
-			if ( !batch->dicts.empty() )
-			{
-				dict_bar_->setRange( 0, static_cast<int>( batch->dicts.size() ) );
-				dict_bar_->setValue( static_cast<int>( batch->dict_finished ) );
-				dict_bar_->setFormat( QStringLiteral( "%v / %m" ) );
-			}
-			refreshProgress( batch );
-			pumpImports( batch );
-			tryFinishBatch( batch );
+			batch->import_job = ( *result )["job"].asInt();
 		} );
+	}
+
+	void SetupWizard::importDone( const QString& error )
+	{
+		const auto batch = std::exchange( import_batch_, {} );
+		if ( !error.isEmpty() && batch->failure.isEmpty() )
+		{
+			batch->failure = QStringLiteral( "%1: %2" ).arg( batch->import_name, error );
+		}
+		batch->importing = false;
+		if ( batch->dict_imports_left > 0 )
+		{
+			--batch->dict_imports_left;
+		}
+		++batch->dict_finished;
+		if ( !batch->dicts.empty() )
+		{
+			dict_bar_->setRange( 0, static_cast<int>( batch->dicts.size() ) );
+			dict_bar_->setValue( static_cast<int>( batch->dict_finished ) );
+			dict_bar_->setFormat( QStringLiteral( "%v / %m" ) );
+		}
+		refreshProgress( batch );
+		pumpImports( batch );
+		tryFinishBatch( batch );
 	}
 
 	void SetupWizard::onOcrDownloadDone( const std::shared_ptr<InstallBatch>& batch, const QString& error )

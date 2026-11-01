@@ -1,4 +1,5 @@
 #include "Anki.h"
+#include "Audio.h"
 #include "Daemon.h"
 
 #include <lexiglance/core/Log.h>
@@ -13,7 +14,6 @@
 #include <filesystem>
 #include <format>
 #include <future>
-#include <initializer_list>
 #include <iterator>
 #include <string>
 #include <vector>
@@ -63,37 +63,6 @@ namespace lexiglance::daemon
 			}
 			return std::chrono::duration_cast<std::chrono::milliseconds>( Clock::now() - Clock::time_point( Clock::duration( started ) ) );
 		}
-
-#ifndef _WIN32
-		// The first of `names` found on PATH.
-		std::string findProgram( std::initializer_list<std::string_view> names )
-		{
-			const char* path = std::getenv( "PATH" );
-			if ( path == nullptr )
-			{
-				return {};
-			}
-			for ( const auto name : names )
-			{
-				std::string_view directories( path );
-				while ( !directories.empty() )
-				{
-					const auto                  colon     = directories.find( ':' );
-					const std::filesystem::path candidate = std::filesystem::path( directories.substr( 0, colon ) ) / name;
-					if ( ::access( candidate.c_str(), X_OK ) == 0 )
-					{
-						return std::string( name );
-					}
-					if ( colon == std::string_view::npos )
-					{
-						break;
-					}
-					directories.remove_prefix( colon + 1 );
-				}
-			}
-			return {};
-		}
-#endif
 
 		// A pipeline thread's answer: nullopt when it did not come in time. `replaced` tells when the request was dropped
 		// for a newer one (the mailboxes hold one request), so it can simply be asked again.
@@ -592,7 +561,7 @@ namespace lexiglance::daemon
 #ifdef _WIN32
 			check.detail = "Pronunciations play through Windows (MCI); clips in formats other than MP3 and WAV need ffplay or mpv on PATH.";
 #else
-			const auto player = findProgram( { "ffplay", "mpv", "mpg123" } );
+			const auto player = audioPlayer();
 			if ( player.empty() )
 			{
 				check.status = Severity::Warning;

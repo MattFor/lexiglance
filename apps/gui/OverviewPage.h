@@ -72,6 +72,7 @@ namespace lexiglance::gui
 		QLabel*       capture_value_;
 		QPushButton*  check_;
 		QPushButton*  fix_all_;
+		QPushButton*  reset_all_;
 		QLabel*       health_summary_;
 		QProgressBar* health_progress_;
 		// Created for the first translation download the health check asks for.

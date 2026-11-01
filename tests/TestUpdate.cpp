@@ -86,6 +86,17 @@ namespace
 		::unsetenv( "APPIMAGE" );
 		test::expect( !lg::process::replacementReady( seen ) );
 	} );
+
+	const test::Registrar foreign_appimage( "update: APPIMAGE inherited from another AppImage's shell is forgotten", [] {
+		// The mount named as given, not canonical.
+		::setenv( "APPDIR", ( lg::process::executable().parent_path().string() + "//." ).c_str(), 1 );
+		::setenv( "APPIMAGE", "/opt/Other.AppImage", 1 );
+		lg::process::forgetForeignAppImage();
+		test::expect( std::getenv( "APPIMAGE" ) != nullptr );
+		::setenv( "APPDIR", test::scratch( "foreign-appimage" ).c_str(), 1 );
+		lg::process::forgetForeignAppImage();
+		test::expect( std::getenv( "APPIMAGE" ) == nullptr && std::getenv( "APPDIR" ) == nullptr );
+	} );
 #endif
 
 } // namespace

@@ -95,21 +95,24 @@ namespace lexiglance::daemon
 			return std::nullopt;
 		}
 
+		struct Candidate
+		{
+			std::string_view name;
+			std::string_view options;
+		};
+
+		// Players that decode MP3, the preferred first.
+		constexpr std::array<Candidate, 5> candidates{ {
+				{ .name = "ffplay", .options = "-nodisp -autoexit -loglevel quiet" },
+				{ .name = "mpv", .options = "--no-video --really-quiet" },
+				{ .name = "mpg123", .options = "-q" },
+				{ .name = "gst-play-1.0", .options = "-q" },
+				{ .name = "pw-play", .options = "" },
+		} };
+
 		// The first installed player that decodes MP3.
 		std::optional<std::vector<std::string>> playerCommand( const std::string& file )
 		{
-			struct Candidate
-			{
-				std::string_view name;
-				std::string_view options;
-			};
-			static constexpr std::array<Candidate, 5> candidates{ {
-					{ .name = "ffplay", .options = "-nodisp -autoexit -loglevel quiet" },
-					{ .name = "mpv", .options = "--no-video --really-quiet" },
-					{ .name = "mpg123", .options = "-q" },
-					{ .name = "gst-play-1.0", .options = "-q" },
-					{ .name = "pw-play", .options = "" },
-			} };
 			for ( const Candidate& candidate : candidates )
 			{
 				if ( auto program = findProgram( candidate.name ) )
@@ -284,6 +287,18 @@ namespace lexiglance::daemon
 #endif
 
 	} // namespace
+
+	std::string audioPlayer()
+	{
+		for ( const Candidate& candidate : candidates )
+		{
+			if ( findProgram( candidate.name ) )
+			{
+				return std::string( candidate.name );
+			}
+		}
+		return {};
+	}
 
 	std::string audioUrl( std::string_view source, std::string_view expression, std::string_view reading, const lang::Language* language )
 	{

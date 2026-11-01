@@ -7,8 +7,11 @@
 #include <lexiglance/core/Process.h>
 #include <lexiglance/core/Thread.h>
 #include <lexiglance/core/Version.h>
+#include <lexiglance/ipc/Socket.h>
 
 #include <QApplication>
+#include <QDir>
+#include <QFile>
 #include <QLoggingCategory>
 #include <QLocalServer>
 #include <QLocalSocket>
@@ -30,21 +33,33 @@
 	#endif
 	#include <windows.h>
 #else
+	#include <sys/stat.h>
 	#include <unistd.h>
 #endif
 
 namespace
 {
 
-	// Tells apart the instances of different users on one machine.
-	QString userKey()
+#ifndef _WIN32
+	// ponytail: windows of 1.3.6 and older listen in /tmp, where anyone can take the name; drop once they are gone.
+	bool reachLegacy( QLocalSocket& socket )
 	{
-#ifdef _WIN32
-		return qEnvironmentVariable( "USERNAME" );
-#else
-		return QString::number( ::getuid() );
-#endif
+		const QString legacy = QDir::tempPath() + QStringLiteral( "/lexiglance-gui-%1" ).arg( ::getuid() );
+		struct stat   info{};
+		if ( ::lstat( QFile::encodeName( legacy ).constData(), &info ) != 0 || !S_ISSOCK( info.st_mode ) || info.st_uid != ::getuid() )
+		{
+			return false;
+		}
+		socket.abort();
+		socket.connectToServer( legacy );
+		if ( socket.waitForConnected( 250 ) && lexiglance::ipc::peerIsThisUser( static_cast<int>( socket.socketDescriptor() ) ) )
+		{
+			return true;
+		}
+		socket.abort();
+		return false;
 	}
+#endif
 
 	// Qt's own warnings go into the log too, so a window that misbehaves leaves a trace behind.
 	void logQtMessage( QtMsgType type, const QMessageLogContext& context, const QString& message )
@@ -249,7 +264,36 @@ namespace
 		// for the version it replaces to end, and so does a release copy started while another copy's window is open
 		// (a build tree's, another AppImage's): it asks that one to make way, as starting it makes it the copy that runs
 		// (DesktopEntry.h). A window says which copy it is as soon as it is reached, then reads one request.
-		const QString instance = QStringLiteral( "lexiglance-gui-%1" ).arg( userKey() );
+#ifdef _WIN32
+		const QString instance    = QStringLiteral( "lexiglance-gui-%1" ).arg( qEnvironmentVariable( "USERNAME" ) );
+		const bool    private_dir = true;
+#else
+		// Beside the daemon's socket: a bare name would be in the shared /tmp, where another user can take it first.
+		const auto    folder      = std::filesystem::path( lexiglance::paths::ipcEndpoint() ).parent_path();
+		const auto    owned       = lexiglance::paths::ensureDirectory( folder, true );
+		const bool    private_dir = owned.has_value();
+		const QString instance    = lexiglance::gui::qs( ( folder / "gui.sock" ).string() );
+		if ( !owned )
+		{
+			lexiglance::log::warn( "settings window: no single-instance socket: {}", owned.error().message );
+		}
+#endif
+		// Never connects into a folder that is not this user's.
+		const auto reach = [&]( QLocalSocket& socket ) {
+			if ( private_dir )
+			{
+				socket.connectToServer( instance );
+				if ( socket.waitForConnected( 250 ) )
+				{
+					return true;
+				}
+			}
+#ifdef _WIN32
+			return false;
+#else
+			return reachLegacy( socket );
+#endif
+		};
 
 		// lexiglance --background-update: started by the daemon now and then, so a copy updates itself even when this
 		// window is never opened. It shows nothing, and leaves updating to a window that is open (which updates on its
@@ -257,8 +301,7 @@ namespace
 		if ( arguments.contains( QStringLiteral( "--background-update" ) ) )
 		{
 			QLocalSocket existing;
-			existing.connectToServer( instance );
-			if ( existing.waitForConnected( 250 ) )
+			if ( reach( existing ) )
 			{
 				lexiglance::log::info( "update: the settings window is open and updates by itself" );
 				return 0;
@@ -272,8 +315,7 @@ namespace
 		for ( int waited = 0;; ++waited )
 		{
 			QLocalSocket existing;
-			existing.connectToServer( instance );
-			if ( !existing.waitForConnected( 250 ) )
+			if ( !reach( existing ) )
 			{
 				break;
 			}
@@ -305,9 +347,15 @@ namespace
 			existing.disconnectFromServer();
 			QThread::msleep( 250 );
 		}
-		QLocalServer::removeServer( instance );
 		QLocalServer server;
-		server.listen( instance );
+		if ( private_dir )
+		{
+			QLocalServer::removeServer( instance );
+			if ( !server.listen( instance ) )
+			{
+				lexiglance::log::warn( "settings window: cannot listen on {}: {}", instance.toStdString(), server.errorString().toStdString() );
+			}
+		}
 
 		lexiglance::gui::MainWindow window;
 		// The autostart and the menu entry (DesktopEntry.h); not for the offscreen runs of checks and tests.
@@ -336,6 +384,7 @@ namespace
 
 int main( int argc, char** argv )
 {
+	lexiglance::process::forgetForeignAppImage();
 	try
 	{
 		return run( argc, argv );

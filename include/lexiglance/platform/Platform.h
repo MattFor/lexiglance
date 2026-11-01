@@ -64,6 +64,8 @@ namespace lexiglance::platform
 		std::string   wm_class;
 		bool          fullscreen = false;
 		bool          own        = false;
+		// Has the keyboard (X11; not cached with the rest).
+		bool active = false;
 	};
 
 	class TextCapture;
@@ -161,6 +163,8 @@ namespace lexiglance::platform
 		std::function<void( int )> adjust_length;
 		// The window the popup's text came from was closed, minimised or moved to another workspace.
 		std::function<void()> source_closed;
+		// The session is ending (UI thread): the process may end once it returns.
+		std::function<void()> session_ending;
 	};
 
 	struct PopupContent

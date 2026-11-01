@@ -533,7 +533,6 @@ namespace lexiglance::platform
 					chord_ = std::move( *chord );
 				}
 				sentence_key_   = config.translation.enabled ? config::extraKey( config.translation.sentence_key, chord_ ) : config::KeyGroup{};
-				sentence_held_  = false;
 				delay_          = std::chrono::milliseconds( config.scan.delay_ms );
 				move_threshold_ = config.scan.move_threshold;
 				selection_mode_ = config.scan.selection;
@@ -569,8 +568,12 @@ namespace lexiglance::platform
 						RemoveClipboardFormatListener( host_ );
 					}
 				}
-				trigger_active_ = false;
 				syncKeyboard();
+				// The new chord against the keys held now: a release or press it changes is reported as one.
+				if ( !recording_ )
+				{
+					updateTrigger();
+				}
 				updateWheelLock();
 			}
 
@@ -961,6 +964,10 @@ namespace lexiglance::platform
 						if ( wparam != FALSE )
 						{
 							// Logging off or shutting down: the daemon ends like on SIGTERM.
+							if ( events_.session_ending )
+							{
+								events_.session_ending();
+							}
 							quit_.store( true, std::memory_order_release );
 						}
 						return 0;
@@ -1021,7 +1028,8 @@ namespace lexiglance::platform
 						{
 							const int step = popup_.style.px( 56 );
 							const int max  = std::max( 0, popup_.image->height() - popup_size_.height );
-							scroll_        = GET_WHEEL_DELTA_WPARAM( wparam ) > 0 ? std::max( 0, scroll_ - step ) : std::min( max, scroll_ + step );
+							// Touchpads send fractions of a notch: scroll by as much.
+							scroll_ = std::clamp( scroll_ - MulDiv( GET_WHEEL_DELTA_WPARAM( wparam ), step, WHEEL_DELTA ), 0, max );
 							paintPopup();
 						}
 						return 0;
@@ -1383,7 +1391,7 @@ namespace lexiglance::platform
 			{
 				for ( int key = 0; key < key_count; ++key )
 				{
-					if ( down_.test( static_cast<std::size_t>( key ) ) && std::ranges::contains( recorded_, config::keyName( static_cast<config::Key>( key ) ) ) )
+					if ( down_.test( static_cast<std::size_t>( key ) ) && std::ranges::contains( recorded_, config::displayKeyName( static_cast<config::Key>( key ) ) ) )
 					{
 						return;
 					}
@@ -1933,7 +1941,8 @@ namespace lexiglance::platform
 				{
 					if ( const auto* chars = static_cast<const wchar_t*>( GlobalLock( data ) ); chars != nullptr )
 					{
-						text = win32::narrow( chars );
+						// Another process wrote it: the terminating null is not guaranteed.
+						text = win32::narrow( std::wstring_view( chars, wcsnlen( chars, GlobalSize( data ) / sizeof( wchar_t ) ) ) );
 						GlobalUnlock( data );
 					}
 				}

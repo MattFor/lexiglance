@@ -84,4 +84,30 @@ namespace
 		lg::test::expect( !lg::ipc::connectTo( name, 300ms ).has_value() );
 	} );
 
+	const lg::test::Registrar ipc_stuck_client( "the daemon's server hangs up on a client that stops reading", [] {
+		lg::daemon::IpcServer server;
+		server.on( "ping", []( const lg::json::Value& ) -> lg::Result<std::string> { return std::string( "{}" ); } );
+		const auto name = endpoint();
+		if ( !lg::test::expect( server.start( name ).has_value() ) )
+		{
+			return;
+		}
+		auto stuck = lg::ipc::Client::connect( name, 10s );
+		if ( !lg::test::expect( stuck.has_value() && stuck->call( "ping" ).has_value() ) )
+		{
+			return;
+		}
+		// Far more than a socket or pipe buffer holds, and the stuck client never reads it.
+		const auto params = std::format( R"({{"text":"{}"}})", std::string( 4096, 'x' ) );
+		for ( int i = 0; i < 1024; ++i )
+		{
+			server.broadcast( "fill", params );
+		}
+		// Served once the write to the stuck client has timed out.
+		auto other = lg::ipc::Client::connect( name, 15s );
+		lg::test::expect( other.has_value() && other->call( "ping" ).has_value() );
+		lg::test::expect( !stuck->call( "ping" ).has_value() );
+		server.stop();
+	} );
+
 } // namespace

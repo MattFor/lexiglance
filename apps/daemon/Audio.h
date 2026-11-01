@@ -23,6 +23,9 @@ namespace lexiglance::daemon
 	// {language}. Empty when the source has no words of the language.
 	[[nodiscard]] std::string audioUrl( std::string_view source, std::string_view expression, std::string_view reading, const lang::Language* language );
 
+	// The name of the external player pronunciations play with ("ffplay", "pw-play", ...); empty when none is installed.
+	[[nodiscard]] std::string audioPlayer();
+
 	// Term pronunciations from the configured sources, played with an external player (ffplay, mpv, mpg123, ...), on
 	// Windows through MCI first. All methods block and run on worker threads.
 	class AudioPlayer

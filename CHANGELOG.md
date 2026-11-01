@@ -1,5 +1,68 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- The AppImage carries update information, so AppImageUpdate and similar tools can update it; each release has its
+  `.zsync` beside it.
+
+### Changed
+
+- Dictionaries import with at most three parser threads: no slower, and with less than half the memory on machines
+  with many cores.
+- A dictionary file over 128 MB is refused, and the banks being parsed are kept under 128 MB together, so a hostile
+  archive fails its import instead of using up the memory.
+
+### Fixed
+
+- A settings file that cannot be read is kept as `config.json.broken` instead of being overwritten with the defaults.
+- Settings changed before the settings window has reached the daemon, or while it is away, are no longer lost or
+  pushed over the saved ones; **Reset all** waits for them to load.
+- Two saves at the same moment no longer corrupt `config.json` or `statistics.json` or drop a setting, and two imports
+  of the same dictionary no longer corrupt it.
+- Dictionaries and settings that start with a UTF-8 byte order mark load, and so do archives with empty compressed
+  files.
+- Russian pronouns no longer cost up to 100 ms per lookup, long entries render several times faster, and a popup that
+  already shows everything is not rendered a second time.
+- A crafted dictionary can no longer hang the popup (furigana) or crash the daemon.
+- Structured-content styles such as `transparent`, `inherit` or `none` no longer turn a definition into raw tags.
+- Translation no longer drops words from a sentence that repeats a phrase.
+- Anki: cards get the sentence the word is in, not the first one on the line; cloze templates such as
+  `{{c1::{expression}}}` are filled; text from the screen or a dictionary is escaped, so `<int>` shows and no markup
+  runs; check marks survive moving the pointer; a deck list that fails to load (Anki at its profile chooser) no longer
+  empties the chosen deck; `anki.add` fetches no audio when audio is off.
+- A client that stops reading no longer stalls the daemon, and `popup.show` while the desktop is busy no longer
+  writes into freed memory.
+- The setup wizard waits for each dictionary to be imported before it restarts the daemon.
+- Downloads that stall end after 30 s instead of keeping updates and setup busy, and a dictionary's update check reads
+  at most 4 MB.
+- Installing OCR and a translation model at once no longer unpacks ONNX Runtime twice.
+- **Fix issues** no longer pauses scanning again, and the Dictionaries page changes the dictionary you clicked even
+  right after an import.
+- Holding the trigger while settings change no longer stops lookups or leaves the popup up after the release.
+- The diagnosis zip leaves out the AnkiConnect key, and `lexiglancectl` replaces control characters in what it prints.
+- Linux: a terminal of another AppImage (an editor's, for example) no longer makes Lexiglance take that AppImage for
+  its own when it updates, uninstalls or starts the daemon.
+- Linux: the AppImage no longer looks for libraries in the folder it is started from.
+- Linux: without `XDG_RUNTIME_DIR`, the settings window and `lexiglancectl` refuse a daemon socket another user made,
+  and the settings window's own socket is no longer in the shared `/tmp`.
+- Linux: AT-SPI reads Flatpak applications, and no longer reads a window hidden behind one without a process id.
+- Linux: Wine games in override-redirect windows match the default OCR windows, and OCR reads 30-bit and 16-bit
+  displays correctly.
+- Linux: the updater and other programs the daemon starts no longer inherit its blocked signals.
+- Linux: pronunciation audio over HTTPS works with the AppImage where the certificates are kept elsewhere (openSUSE),
+  and older libcurl is held to HTTP and HTTPS as well.
+- Linux: Health no longer says no audio player is installed when `gst-play-1.0` or `pw-play` plays the audio.
+- PaddleOCR reads lines again once the popup no longer covers them, and no longer returns text from an earlier frame.
+- Statistics no longer re-sort every word on each new word once 2000 are counted, and count new words again.
+- Windows: UI Automation calls time out on a hung application instead of stalling lookups.
+- Windows: touchpad scrolling in the popup moves by the amount scrolled, and a word wrapped across lines gets a
+  highlight on each line.
+- Windows: statistics are saved at logoff and shutdown, and recording a key chord no longer ends at the first key let
+  go.
+- `.github/scripts/dev-install.sh` installs service files that start the daemon from the prefix it installs to.
+
 ## [1.3.6] - 08:24 CEST 30-10-2026
 
 ### Fixed

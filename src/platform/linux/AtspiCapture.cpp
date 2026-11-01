@@ -10,6 +10,8 @@
 #include <array>
 #include <chrono>
 #include <format>
+#include <fstream>
+#include <string>
 #include <unordered_map>
 
 namespace lexiglance::platform
@@ -149,6 +151,7 @@ namespace lexiglance::platform
 			~AtspiCapture() override
 			{
 				pids_.clear();
+				proxies_.clear();
 				desktop_.reset();
 			}
 
@@ -175,7 +178,14 @@ namespace lexiglance::platform
 				( void )drain( std::chrono::milliseconds( 30 ) );
 				deadline_ = Clock::now() + capture_budget;
 
-				auto target = windowAt( point, window.pid );
+				// Without a PID any application's window under the point would match, even one hidden behind this one.
+				auto target = window.pid != 0 || window.id == 0 ? windowAt( point, window.pid ) : Ref<AtspiAccessible>();
+				if ( !target && window.active )
+				{
+					// Flatpak: _NET_WM_PID is the sandbox's PID (or missing), and the bus reports that of xdg-dbus-proxy; a window
+					// without a PID is matched by being active. Only then: another window over it would read the text it hides.
+					target = windowAt( point, window.pid, true );
+				}
 				if ( !target )
 				{
 					return std::nullopt;
@@ -389,6 +399,18 @@ namespace lexiglance::platform
 				return pid;
 			}
 
+			bool proxied( AtspiAccessible* application )
+			{
+				if ( const auto it = proxies_.find( application ); it != proxies_.end() )
+				{
+					return it->second;
+				}
+				std::ifstream comm( std::format( "/proc/{}/comm", pidOf( application ) ) );
+				std::string   name;
+				std::getline( comm, name );
+				return proxies_.emplace( application, name == "xdg-dbus-proxy" ).first->second;
+			}
+
 			// The showing element with text under the point, found by walking the tree where hit-testing stops. Page tabs are
 			// entered regardless of their extents, which cover only the tab label (or nothing).
 			Ref<AtspiAccessible> searchText( AtspiAccessible* node, Point point, int depth, int& budget )
@@ -425,14 +447,16 @@ namespace lexiglance::platform
 				return {};
 			}
 
-			// The showing top-level window containing the point, preferring the active one.
-			Ref<AtspiAccessible> windowAt( Point point, std::uint32_t pid )
+			// The showing top-level window containing the point, preferring the active one. With `proxy`, only an active window
+			// is taken, and with a `pid` only one of an application behind xdg-dbus-proxy.
+			Ref<AtspiAccessible> windowAt( Point point, std::uint32_t pid, bool proxy = false )
 			{
 				ErrorSink  error;
 				const auto applications = atspi_accessible_get_child_count( desktop_.get(), error.out() );
 				if ( applications != known_applications_ )
 				{
 					pids_.clear();
+					proxies_.clear();
 					known_applications_ = applications;
 				}
 
@@ -441,7 +465,7 @@ namespace lexiglance::platform
 				for ( int i = 0; i < applications && !expired(); ++i )
 				{
 					const Ref<AtspiAccessible> application( atspi_accessible_get_child_at_index( desktop_.get(), i, error.out() ) );
-					if ( !application || ( pid != 0 && pidOf( application.get() ) != pid ) )
+					if ( !application || ( proxy ? pid != 0 && !proxied( application.get() ) : pid != 0 && pidOf( application.get() ) != pid ) )
 					{
 						continue;
 					}
@@ -455,12 +479,17 @@ namespace lexiglance::platform
 						{
 							continue;
 						}
+						// Before the hit test, so inactive proxied windows cost no round trip.
+						const bool active = atspi_state_set_contains( states.get(), ATSPI_STATE_ACTIVE ) != 0;
+						if ( proxy && !active )
+						{
+							continue;
+						}
 						const Ref<AtspiComponent> component( atspi_accessible_get_component_iface( window.get() ) );
 						if ( !component || atspi_component_contains( component.get(), point.x, point.y, ATSPI_COORD_TYPE_SCREEN, error.out() ) == 0 )
 						{
 							continue;
 						}
-						const bool active = atspi_state_set_contains( states.get(), ATSPI_STATE_ACTIVE ) != 0;
 						if ( !best || ( active && !best_active ) )
 						{
 							best        = std::move( window );
@@ -473,6 +502,7 @@ namespace lexiglance::platform
 
 			Ref<AtspiAccessible>                                desktop_;
 			std::unordered_map<AtspiAccessible*, std::uint32_t> pids_;
+			std::unordered_map<AtspiAccessible*, bool>          proxies_;
 			int                                                 known_applications_ = -1;
 			Clock::time_point                                   deadline_;
 			std::uint64_t                                       dispatched_       = 0;

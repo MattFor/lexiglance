@@ -63,6 +63,7 @@ namespace lexiglance::gui
 		void                                             startInstall();
 		void                                             beginBatch( const std::shared_ptr<InstallBatch>& batch );
 		void                                             pumpImports( const std::shared_ptr<InstallBatch>& batch );
+		void                                             importDone( const QString& error );
 		void                                             onDictDownloadDone( const std::shared_ptr<InstallBatch>& batch, const QString& name, const QString& target, const QString& error );
 		void                                             onOcrDownloadDone( const std::shared_ptr<InstallBatch>& batch, const QString& error );
 		void                                             refreshProgress( const std::shared_ptr<InstallBatch>& batch );
@@ -114,6 +115,8 @@ namespace lexiglance::gui
 		// A word was found on the sentence to try.
 		bool    tried_ = false;
 		QString redist_;
+		// The batch whose dictionary the daemon is importing, until import.finished comes for its job.
+		std::shared_ptr<InstallBatch> import_batch_;
 	};
 
 } // namespace lexiglance::gui

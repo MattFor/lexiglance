@@ -377,6 +377,14 @@ namespace lexiglance::daemon
 			markers["cloze-body"]   = std::string( matched );
 			markers["cloze-suffix"] = "";
 		}
+		// Anki fields are HTML, and screen text and dictionaries are not to be trusted as markup.
+		for ( auto& [name, value] : markers )
+		{
+			if ( name != "furigana" && !name.starts_with( "glossary" ) )
+			{
+				value = escapeHtml( value );
+			}
+		}
 		return markers;
 	}
 
@@ -387,13 +395,15 @@ namespace lexiglance::daemon
 		std::size_t at = 0;
 		while ( at < pattern.size() )
 		{
-			const auto open  = pattern.find( '{', at );
+			auto       open  = pattern.find( '{', at );
 			const auto close = open == std::string_view::npos ? std::string_view::npos : pattern.find( '}', open );
 			if ( close == std::string_view::npos )
 			{
 				out.append( pattern.substr( at ) );
 				break;
 			}
+			// The innermost brace, so a marker inside Anki's {{c1::...}} is filled.
+			open = pattern.rfind( '{', close );
 			out.append( pattern.substr( at, open - at ) );
 			const std::string name( pattern.substr( open + 1, close - open - 1 ) );
 			if ( const auto it = markers.find( name ); it != markers.end() )
@@ -480,7 +490,8 @@ namespace lexiglance::daemon
 		// AnkiConnect downloads the clip itself and stores it in the collection's media.
 		if ( context.audio && !audio_fields.empty() )
 		{
-			std::string filename = std::format( "lexiglance_{}_{}.mp3", markers.at( "expression" ), markers.at( "reading" ) );
+			// The raw term, not the HTML-escaped markers, so media names stay plain.
+			std::string filename = std::format( "lexiglance_{}_{}.mp3", entry.expression, entry.reading.empty() ? entry.expression : entry.reading );
 			std::ranges::replace( filename, '/', '_' );
 			out.key( "audio" ).beginArray().beginObject();
 			out.field( "url", context.audio->url ).field( "filename", filename );

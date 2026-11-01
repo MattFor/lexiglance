@@ -547,7 +547,8 @@ namespace lexiglance::render
 				}
 				const bool above = selection || translation_ != nullptr;
 				// Regions include the separator above them, so every pixel between entries belongs to one.
-				for ( std::size_t i = 0; i < result_->terms.size() && y_ < limit_; ++i )
+				std::size_t i = 0;
+				for ( ; i < result_->terms.size() && y_ < limit_; ++i )
 				{
 					const int top = i == 0 && !above ? 0 : static_cast<int>( y_ );
 					if ( i > 0 || above )
@@ -557,6 +558,7 @@ namespace lexiglance::render
 					term( result_->terms[i], i );
 					regions_.push_back( { .top = top, .bottom = static_cast<int>( std::ceil( y_ ) ), .text = std::string( result_->terms[i].expression ) } );
 				}
+				complete_ = i == result_->terms.size();
 				if ( result_->terms.empty() && style_->show_kanji && set_ != nullptr )
 				{
 					for ( const auto& entry : result_->kanji )
@@ -1474,28 +1476,34 @@ namespace lexiglance::render
 			{
 				const std::string_view text( pango_layout_get_text( item.layout.get() ) );
 				const auto             offset = static_cast<std::uint32_t>( selectable_text_.size() );
+				const auto             first  = glyphs_.size();
 				selectable_text_.append( text );
-				for ( std::size_t at = 0; at < text.size(); )
+				// One walk: pango_layout_index_to_pos per character re-walks the whole layout.
+				PangoLayoutIter* iter = pango_layout_get_iter( item.layout.get() );
+				do
 				{
-					const std::size_t start = at;
-					( void )utf8::decode( text, at );
-					if ( text[start] == '\n' )
+					const auto start = static_cast<std::size_t>( pango_layout_iter_get_index( iter ) );
+					// Paragraph ends: an empty run, which stops twice on a CRLF's '\r'.
+					if ( pango_layout_iter_get_run_readonly( iter ) == nullptr || start >= text.size() || text[start] == '\n' || text[start] == '\r' )
 					{
 						continue;
 					}
+					std::size_t at = start;
+					( void )utf8::decode( text, at );
 					PangoRectangle box{};
-					pango_layout_index_to_pos( item.layout.get(), static_cast<int>( start ), &box );
-					const double x = item.x + pango_units_to_double( std::min( box.x, box.x + box.width ) );
-					const double y = item.y + pango_units_to_double( box.y );
+					pango_layout_iter_get_char_extents( iter, &box );
 					glyphs_.push_back( {
-							.x      = static_cast<float>( x ),
-							.y      = static_cast<float>( y ),
-							.width  = static_cast<float>( pango_units_to_double( std::abs( box.width ) ) ),
+							.x      = static_cast<float>( item.x + pango_units_to_double( box.x ) ),
+							.y      = static_cast<float>( item.y + pango_units_to_double( box.y ) ),
+							.width  = static_cast<float>( pango_units_to_double( box.width ) ),
 							.height = static_cast<float>( pango_units_to_double( box.height ) ),
 							.begin  = offset + static_cast<std::uint32_t>( start ),
 							.end    = offset + static_cast<std::uint32_t>( at ),
 					} );
-				}
+				} while ( pango_layout_iter_next_char( iter ) );
+				pango_layout_iter_free( iter );
+				// The walk is visual; selection copies in text order (right-to-left runs).
+				std::ranges::sort( glyphs_.begin() + static_cast<std::ptrdiff_t>( first ), glyphs_.end(), {}, &PopupImage::Glyph::begin );
 			}
 
 			std::shared_ptr<const PopupImage> paint()
@@ -1540,7 +1548,7 @@ namespace lexiglance::render
 					}
 				}
 				cairo_surface_flush( surface );
-				return std::make_shared<const PopupImage>( surface, width_, height, std::move( regions_ ), std::move( buttons_ ), std::move( selectable_text_ ), std::move( glyphs_ ) );
+				return std::make_shared<const PopupImage>( surface, width_, height, std::move( regions_ ), std::move( buttons_ ), std::move( selectable_text_ ), std::move( glyphs_ ), complete_ );
 			}
 
 			const PopupRenderer::Impl*      impl_;
@@ -1559,6 +1567,7 @@ namespace lexiglance::render
 			std::vector<PopupImage::Button> buttons_;
 			std::string                     selectable_text_;
 			std::vector<PopupImage::Glyph>  glyphs_;
+			bool                            complete_ = true;
 		};
 
 	} // namespace

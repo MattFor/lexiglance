@@ -121,6 +121,7 @@ namespace lexiglance::daemon
 			std::vector<platform::Rect>    highlight;
 			std::vector<render::NoteState> notes;
 			std::uint64_t                  source = 0;
+			std::uint64_t                  key    = 0;
 			std::optional<platform::Rect>  chosen;
 			bool                           keeps = false;
 		};

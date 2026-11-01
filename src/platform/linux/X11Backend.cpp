@@ -5,6 +5,7 @@
 #endif
 #include "../Capture.h"
 #include "../ocr/OcrCapture.h"
+#include "X11Pixel.h"
 #include "X11Screen.h"
 
 #include <lexiglance/config/Keys.h>
@@ -13,7 +14,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <bit>
 #include <bitset>
 #include <chrono>
 #include <climits>
@@ -369,7 +369,6 @@ namespace lexiglance::platform
 					chord_ = std::move( *chord );
 				}
 				sentence_key_   = config.translation.enabled ? config::extraKey( config.translation.sentence_key, chord_ ) : config::KeyGroup{};
-				sentence_held_  = false;
 				delay_          = std::chrono::milliseconds( config.scan.delay_ms );
 				move_threshold_ = config.scan.move_threshold;
 				selection_mode_ = config.scan.selection;
@@ -388,9 +387,13 @@ namespace lexiglance::platform
 					look_ = look;
 					hideHighlight();
 				}
-				placement_      = config.popup.placement;
-				trigger_active_ = false;
+				placement_ = config.popup.placement;
 				syncKeyboard();
+				// The new chord against the keys held now: a release or press it changes is reported as one.
+				if ( !recording_ )
+				{
+					updateTrigger();
+				}
 				updateWheelGrab();
 			}
 
@@ -555,6 +558,7 @@ namespace lexiglance::platform
 				XTranslateCoordinates( display_, root_, root_, point.x, point.y, &x, &y, &child );
 				WindowInfo window = windowInfo( child );
 				window.own        = child != 0 && ( child == popup_window_ || child == highlight_window_ );
+				window.active     = window.id != 0 && activeWindow() == window.id;
 				return window;
 			}
 
@@ -596,7 +600,7 @@ namespace lexiglance::platform
 
 			[[nodiscard]] bool supportsTransparency() const override
 			{
-				return transparent_;
+				return transparent_.load( std::memory_order_relaxed );
 			}
 
 			[[nodiscard]] Clock::time_point lastInput() const override
@@ -965,18 +969,17 @@ namespace lexiglance::platform
 				{
 					if ( XImage* image = XGetImage( display_, root_, x0, y0, static_cast<unsigned>( x1 - x0 ), static_cast<unsigned>( y1 - y0 ), AllPlanes, ZPixmap ) )
 					{
-						const auto shift = []( unsigned long mask ) { return mask == 0 ? 0U : static_cast<unsigned>( std::countr_zero( mask ) ); };
-						const auto rs    = shift( image->red_mask );
-						const auto gs    = shift( image->green_mask );
-						const auto bs    = shift( image->blue_mask );
+						const Channel red( image->red_mask );
+						const Channel green( image->green_mask );
+						const Channel blue( image->blue_mask );
 						for ( int y = y0; y < y1; ++y )
 						{
 							for ( int x = x0; x < x1; ++x )
 							{
 								const unsigned long v                                                                                                       = XGetPixel( image, x - x0, y - y0 );
-								const auto          r                                                                                                       = static_cast<std::uint32_t>( ( v & image->red_mask ) >> rs ) & 0xFFU;
-								const auto          g                                                                                                       = static_cast<std::uint32_t>( ( v & image->green_mask ) >> gs ) & 0xFFU;
-								const auto          b                                                                                                       = static_cast<std::uint32_t>( ( v & image->blue_mask ) >> bs ) & 0xFFU;
+								const std::uint32_t r                                                                                                       = red( v );
+								const std::uint32_t g                                                                                                       = green( v );
+								const std::uint32_t b                                                                                                       = blue( v );
 								pixels[( static_cast<std::size_t>( y - rect.y ) * static_cast<std::size_t>( w ) ) + static_cast<std::size_t>( x - rect.x )] = 0xFF000000U | ( r << 16U ) | ( g << 8U ) | b;
 							}
 						}
@@ -1030,9 +1033,10 @@ namespace lexiglance::platform
 			// ARGB windows give rounded corners and translucency, but only look right under a compositor.
 			void chooseVisual()
 			{
-				transparent_ = wantsTransparency();
 				XVisualInfo info{};
-				if ( transparent_ && XMatchVisualInfo( display_, screen_, 32, TrueColor, &info ) != 0 )
+				const bool  argb = wantsTransparency() && XMatchVisualInfo( display_, screen_, 32, TrueColor, &info ) != 0;
+				transparent_.store( argb, std::memory_order_relaxed );
+				if ( argb )
 				{
 					visual_   = info.visual;
 					depth_    = 32;
@@ -1040,10 +1044,9 @@ namespace lexiglance::platform
 				}
 				else
 				{
-					transparent_ = false;
-					visual_      = DefaultVisual( display_, screen_ );
-					depth_       = DefaultDepth( display_, screen_ );
-					colormap_    = DefaultColormap( display_, screen_ );
+					visual_   = DefaultVisual( display_, screen_ );
+					depth_    = DefaultDepth( display_, screen_ );
+					colormap_ = DefaultColormap( display_, screen_ );
 				}
 			}
 
@@ -1702,6 +1705,7 @@ namespace lexiglance::platform
 
 				WindowInfo window = windowInfo( child );
 				window.own        = child != 0 && ( child == popup_window_ || child == highlight_window_ );
+				window.active     = window.id != 0 && activeWindow() == window.id;
 				if ( events_.scan )
 				{
 					events_.scan( last_point_, window, sentence_held_, std::exchange( sentence_pressed_, false ) );
@@ -1757,40 +1761,39 @@ namespace lexiglance::platform
 
 				WindowInfo   info;
 				const Window client = clientOf( frame );
-				info.id             = client != 0 ? client : frame;
-				if ( client != 0 )
+				// Override-redirect windows (unmanaged Wine games, popups) have no client but carry these themselves.
+				const Window target = client != 0 ? client : frame;
+				info.id             = target;
+				int  format         = 0;
+				auto pid            = readProperty( display_, target, atoms_->net_wm_pid, XA_CARDINAL, format );
+				if ( pid.size() >= sizeof( long ) )
 				{
-					int  format = 0;
-					auto pid    = readProperty( display_, client, atoms_->net_wm_pid, XA_CARDINAL, format );
-					if ( pid.size() >= sizeof( long ) )
-					{
-						long value = 0;
-						std::memcpy( &value, pid.data(), sizeof( long ) );
-						info.pid = static_cast<std::uint32_t>( value );
-					}
+					long value = 0;
+					std::memcpy( &value, pid.data(), sizeof( long ) );
+					info.pid = static_cast<std::uint32_t>( value );
+				}
 
-					XClassHint hint{};
-					if ( XGetClassHint( display_, client, &hint ) != 0 )
+				XClassHint hint{};
+				if ( XGetClassHint( display_, target, &hint ) != 0 )
+				{
+					info.wm_class = hint.res_class != nullptr ? hint.res_class : "";
+					if ( hint.res_name != nullptr )
 					{
-						info.wm_class = hint.res_class != nullptr ? hint.res_class : "";
-						if ( hint.res_name != nullptr )
-						{
-							info.wm_class = std::string( hint.res_name ) + "." + info.wm_class;
-							XFree( hint.res_name );
-						}
-						if ( hint.res_class != nullptr )
-						{
-							XFree( hint.res_class );
-						}
+						info.wm_class = std::string( hint.res_name ) + "." + info.wm_class;
+						XFree( hint.res_name );
 					}
+					if ( hint.res_class != nullptr )
+					{
+						XFree( hint.res_class );
+					}
+				}
 
-					const auto states = readProperty( display_, client, atoms_->net_wm_state, XA_ATOM, format );
-					for ( std::size_t i = 0; i + sizeof( long ) <= states.size(); i += sizeof( long ) )
-					{
-						long atom = 0;
-						std::memcpy( &atom, states.data() + i, sizeof( long ) );
-						info.fullscreen = info.fullscreen || std::cmp_equal( atom, atoms_->net_wm_state_fullscreen );
-					}
+				const auto states = readProperty( display_, target, atoms_->net_wm_state, XA_ATOM, format );
+				for ( std::size_t i = 0; i + sizeof( long ) <= states.size(); i += sizeof( long ) )
+				{
+					long atom = 0;
+					std::memcpy( &atom, states.data() + i, sizeof( long ) );
+					info.fullscreen = info.fullscreen || std::cmp_equal( atom, atoms_->net_wm_state_fullscreen );
 				}
 				window_cache_[frame] = { info, Clock::now() };
 				return info;
@@ -2110,10 +2113,10 @@ namespace lexiglance::platform
 			int                    xfixes_event_ = 0;
 			int                    wake_fd_      = -1;
 
-			Visual*  visual_      = nullptr;
-			Colormap colormap_    = 0;
-			int      depth_       = 24;
-			bool     transparent_ = false;
+			Visual*           visual_   = nullptr;
+			Colormap          colormap_ = 0;
+			int               depth_    = 24;
+			std::atomic<bool> transparent_{ false };
 
 			Window     popup_window_ = 0;
 			SurfacePtr popup_surface_;

@@ -201,6 +201,14 @@ namespace
 		const lg::render::Translation done{ .source = "Я читаю книгу.", .text = "I am reading a book.", .problem = {} };
 		const auto                    second = renderer.render( nothing, {}, 0, &done );
 		test::expect( second != nullptr && second->regionAt( 5 ) != nullptr && second->regionAt( 5 )->text == "I am reading a book." );
+
+		// Selected text comes out in text order, a right-to-left line and the line after it included.
+		const lg::render::Translation lines{ .source = "x", .text = "שלום עולם\nnext line", .problem = {} };
+		const auto                    third = renderer.render( nothing, {}, 0, &lines );
+		if ( test::expect( third != nullptr && !third->glyphs().empty() ) )
+		{
+			test::expectEqual( third->selectedText( 0, third->glyphs().size() - 1 ), lines.text );
+		}
 	} );
 
 	const test::Registrar popup_regions( "popup regions count entries only", [] {

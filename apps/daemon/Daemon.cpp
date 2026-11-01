@@ -15,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <exception>
 #include <format>
 #include <functional>
 #include <map>
@@ -499,9 +500,10 @@ namespace lexiglance::daemon
 			}
 			ipc_.broadcast( "trigger.changed", held ? R"({"held":true})" : R"({"held":false})" );
 		};
-		events.popup_action  = [this]( std::size_t entry, render::PopupAction action ) { onPopupAction( entry, action ); };
-		events.adjust_length = [this]( int delta ) { onAdjustLength( delta ); };
-		events.source_closed = [this] { onClickOutside(); };
+		events.popup_action   = [this]( std::size_t entry, render::PopupAction action ) { onPopupAction( entry, action ); };
+		events.adjust_length  = [this]( int delta ) { onAdjustLength( delta ); };
+		events.source_closed  = [this] { onClickOutside(); };
+		events.session_ending = [this] { stats_.save(); };
 		if ( auto started = backend_->start( std::move( events ) ); !started )
 		{
 			log::error( "{}", started.error().message );
@@ -616,6 +618,8 @@ namespace lexiglance::daemon
 
 	Result<> Daemon::applyConfig( config::Config config, bool save )
 	{
+		// An import's reloadDictionaries() must not store its older copy over this one; released before calling it.
+		std::unique_lock reload_lock( reload_mutex_ );
 		if ( save )
 		{
 			if ( auto saved = config.save( config_path_ ); !saved )
@@ -632,6 +636,7 @@ namespace lexiglance::daemon
 
 		auto snapshot = std::make_shared<const config::Config>( std::move( config ) );
 		config_.store( snapshot );
+		reload_lock.unlock();
 		stats_.setEnabled( snapshot->statistics, snapshot->statistics_translations );
 		if ( translation_ )
 		{
@@ -1045,13 +1050,13 @@ namespace lexiglance::daemon
 	{
 		( void )actions_->submit( [this, popup = std::move( popup ), cfg = config()]() mutable {
 			// Popups change quickly while the pointer moves; only the one still on screen is checked.
-			if ( popup.generation != generation_.load() )
+			if ( !current( popup.generation, popup.key ) )
 			{
 				return;
 			}
 			const NoteContext context{ .sentence = popup.shown->sentence, .sentence_offset = popup.shown->sentence_offset };
 			auto              addable = canAddNotes( cfg->anki, popup.shown->result, context );
-			if ( !addable || popup.generation != generation_.load() || std::ranges::all_of( *addable, []( bool can ) { return can; } ) )
+			if ( !addable || !current( popup.generation, popup.key ) || std::ranges::all_of( *addable, []( bool can ) { return can; } ) )
 			{
 				return;
 			}
@@ -1060,7 +1065,7 @@ namespace lexiglance::daemon
 			{
 				popup.notes.push_back( can ? render::NoteState::New : render::NoteState::Exists );
 			}
-			render_requests_.post( { .generation = popup.generation, .shown = popup.shown, .anchor = popup.anchor, .highlight = popup.highlight, .notes = std::move( popup.notes ), .source = popup.source } );
+			render_requests_.post( { .generation = popup.generation, .shown = popup.shown, .anchor = popup.anchor, .highlight = popup.highlight, .notes = std::move( popup.notes ), .source = popup.source, .key = popup.key, .chosen = popup.chosen, .keeps = popup.keeps } );
 		} );
 	}
 
@@ -1099,7 +1104,7 @@ namespace lexiglance::daemon
 					auto notes = current_.notes;
 					notes.resize( std::max( notes.size(), current_.shown->result.terms.size() ), render::NoteState::Unknown );
 					notes[entry] = render::NoteState::Exists;
-					render_requests_.post( { .generation = generation, .shown = current_.shown, .anchor = current_.anchor, .highlight = current_.highlight, .notes = std::move( notes ), .source = current_.source } );
+					render_requests_.post( { .generation = generation, .shown = current_.shown, .anchor = current_.anchor, .highlight = current_.highlight, .notes = std::move( notes ), .source = current_.source, .key = current_.key, .chosen = current_.chosen, .keeps = current_.keeps } );
 				}
 			} );
 		} );
@@ -1367,8 +1372,8 @@ namespace lexiglance::daemon
 			posted_key                    = key;
 			posted_generation             = request->generation;
 			const auto    available       = reach( *captured );
-			std::string   sentence        = captured->sentence.empty() ? captured->text : std::move( captured->sentence );
 			const auto    sentence_offset = captured->sentence.empty() ? 0 : captured->sentence_offset;
+			std::string   sentence        = captured->sentence.empty() ? captured->text : std::move( captured->sentence );
 			auto          shown           = std::make_shared<const Shown>( Shown{ .result = std::move( result ), .sentence = std::move( sentence ), .sentence_offset = sentence_offset, .available = available, .whole = whole, .translation = std::move( translating.shown ) } );
 			RenderRequest render{ .generation = request->generation, .shown = std::move( shown ), .anchor = anchor, .highlight = highlight, .source = request->length > 0 ? last_source : request->window.id, .key = key, .chosen = chosen ? marks.chosen : std::nullopt, .keeps = keeps };
 			// Posted under the lock translations are posted under, so a late one never takes the place of this newer popup.
@@ -1665,7 +1670,7 @@ namespace lexiglance::daemon
 			{
 				continue;
 			}
-			const bool whole = complete || image->height() < visible;
+			const bool whole = complete || image->complete() || image->height() < visible;
 			if ( !whole )
 			{
 				rest = *request;
@@ -1694,7 +1699,7 @@ namespace lexiglance::daemon
 				// The sentence key has been answered: pressing it again asks afresh.
 				sentence_asked_ = {};
 				backend_->showPopup( { .image = image, .style = style, .anchor = anchor, .source = source } );
-				current_ = { .generation = generation, .shown = shown, .anchor = anchor, .highlight = highlight, .notes = notes, .source = source, .chosen = chosen, .keeps = keeps };
+				current_ = { .generation = generation, .shown = shown, .anchor = anchor, .highlight = highlight, .notes = notes, .source = source, .key = key, .chosen = chosen, .keeps = keeps };
 				shown_key_.store( key );
 				// Turns of the wheel that came before the popup did.
 				if ( pending_wheel_ != 0 )
@@ -1814,7 +1819,17 @@ namespace lexiglance::daemon
 			ipc_.broadcast( "import.progress", out.str() );
 		};
 
-		const auto summary = store_.install( job.path, options, job.replace );
+		const auto summary = [&]() -> Result<dict::ImportSummary> {
+			// A bad archive (one that runs the parser out of memory) fails its import, not the daemon.
+			try
+			{
+				return store_.install( job.path, options, job.replace );
+			}
+			catch ( const std::exception& e )
+			{
+				return fail( "{}", e.what() );
+			}
+		}();
 		if ( job.delete_source )
 		{
 			std::error_code ec;
@@ -1926,9 +1941,13 @@ namespace lexiglance::daemon
 			auto done = actions_->submit( [this, shown, entry, cfg = config()]() -> Result<std::int64_t> {
 				const auto& term = shown->result.terms[entry];
 				NoteContext context{ .sentence = shown->sentence, .sentence_offset = shown->sentence.find( textOf( shown->result ) ) };
-				if ( auto clip = audio_.find( term.expression, term.reading, shown->result.language, cfg->audio ); clip && cfg->audio.enabled )
+				const bool  wants_audio = cfg->audio.enabled && std::ranges::any_of( cfg->anki.fields, []( const config::AnkiField& field ) { return field.value.contains( "{audio}" ); } );
+				if ( wants_audio )
 				{
-					context.audio = *clip;
+					if ( auto clip = audio_.find( term.expression, term.reading, shown->result.language, cfg->audio ) )
+					{
+						context.audio = *clip;
+					}
 				}
 				return addNote( cfg->anki, shown->result, term, context );
 			} );
@@ -2126,9 +2145,10 @@ namespace lexiglance::daemon
 			{
 				return fail( "no results" );
 			}
-			std::promise<platform::Point> where;
-			auto                          future = where.get_future();
-			backend_->post( [this, &where] { where.set_value( backend_->pointer() ); } );
+			// Shared with the task: it may run after this handler has given up waiting.
+			auto where  = std::make_shared<std::promise<platform::Point>>();
+			auto future = where->get_future();
+			backend_->post( [this, where] { where->set_value( backend_->pointer() ); } );
 			if ( future.wait_for( std::chrono::seconds( 2 ) ) != std::future_status::ready )
 			{
 				return fail( "desktop is not responding" );

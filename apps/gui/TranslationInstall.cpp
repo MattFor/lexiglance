@@ -247,7 +247,12 @@ namespace lexiglance::gui::translation_install
 						{
 							return;
 						}
-						if ( failure->isEmpty() && unpack )
+						// OCR's install may have brought the runtime meanwhile.
+						if ( failure->isEmpty() && unpack && QFile::exists( runtime + "/" + ocr_install::runtimeLibraryName() ) )
+						{
+							QFile::remove( ocr_install::runtimePackedPath() );
+						}
+						else if ( failure->isEmpty() && unpack )
 						{
 							*failure = ocr_install::unpackRuntime( runtime, archive );
 						}

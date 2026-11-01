@@ -67,6 +67,9 @@ namespace lexiglance::process
 	// The file this copy of Lexiglance runs from: the AppImage it came in ($APPIMAGE), else the executable.
 	[[nodiscard]] std::filesystem::path programFile();
 
+	// Unsets APPIMAGE, APPDIR and ARGV0 unless this process runs inside $APPDIR (another AppImage's shell passes them on).
+	void forgetForeignAppImage();
+
 	// Whether programFile() was replaced (rebuilt or updated) after this process started.
 	[[nodiscard]] bool executableReplaced();
 

@@ -1,6 +1,7 @@
 #include "X11Screen.h"
 
-#include <bit>
+#include "X11Pixel.h"
+
 #include <cstring>
 
 #include <X11/Xlib.h>
@@ -11,11 +12,6 @@ namespace lexiglance::platform
 
 	namespace
 	{
-
-		int shiftOf( unsigned long mask )
-		{
-			return mask == 0 ? 0 : std::countr_zero( mask );
-		}
 
 		class X11Screen final : public ScreenReader
 		{
@@ -65,10 +61,10 @@ namespace lexiglance::platform
 					return {};
 				}
 
-				const int                 red   = shiftOf( image->red_mask );
-				const int                 green = shiftOf( image->green_mask );
-				const int                 blue  = shiftOf( image->blue_mask );
 				std::vector<std::uint8_t> rgb( static_cast<std::size_t>( region.width ) * static_cast<std::size_t>( region.height ) * 3 );
+				const Channel             red( image->red_mask );
+				const Channel             green( image->green_mask );
+				const Channel             blue( image->blue_mask );
 				for ( int y = 0; y < region.height; ++y )
 				{
 					for ( int x = 0; x < region.width; ++x )
@@ -85,9 +81,9 @@ namespace lexiglance::platform
 							pixel = XGetPixel( image, x, y );
 						}
 						const std::size_t at = ( ( static_cast<std::size_t>( y ) * static_cast<std::size_t>( region.width ) ) + static_cast<std::size_t>( x ) ) * 3;
-						rgb[at]              = static_cast<std::uint8_t>( ( pixel & image->red_mask ) >> static_cast<unsigned>( red ) );
-						rgb[at + 1]          = static_cast<std::uint8_t>( ( pixel & image->green_mask ) >> static_cast<unsigned>( green ) );
-						rgb[at + 2]          = static_cast<std::uint8_t>( ( pixel & image->blue_mask ) >> static_cast<unsigned>( blue ) );
+						rgb[at]              = red( pixel );
+						rgb[at + 1]          = green( pixel );
+						rgb[at + 2]          = blue( pixel );
 					}
 				}
 				XDestroyImage( image );

@@ -26,6 +26,8 @@ namespace lexiglance::platform
 
 		// CUIAutomation, defined here because not every SDK's import libraries do.
 		constexpr CLSID automation_class{ 0xff48dba4, 0x60ef, 0x4201, { 0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e } };
+		// CUIAutomation8: only it implements IUIAutomation2 (the timeouts).
+		constexpr CLSID automation8_class{ 0xe22ad333, 0xb25f, 0x460c, { 0x83, 0xd0, 0x05, 0x81, 0x10, 0x73, 0x95, 0xc9 } };
 
 		// How far up from the element under the pointer the text pattern is looked for (browsers hit-test to a text leaf
 		// inside the document that has it).
@@ -239,6 +241,11 @@ namespace lexiglance::platform
 		// An element for messages: its class and control type.
 		std::string elementName( IUIAutomationElement* element )
 		{
+			// Only ever a debug-log argument: skip the round trips to the application otherwise.
+			if ( !log::enabled( log::Level::Debug ) )
+			{
+				return {};
+			}
 			Bstr          class_name;
 			CONTROLTYPEID type = 0;
 			( void )element->get_CurrentClassName( class_name.put() );
@@ -253,10 +260,13 @@ namespace lexiglance::platform
 			{
 				const HRESULT joined = CoInitializeEx( nullptr, COINIT_MULTITHREADED );
 				com_                 = SUCCEEDED( joined );
-				if ( FAILED( CoCreateInstance( automation_class, nullptr, CLSCTX_INPROC_SERVER, __uuidof( IUIAutomation ), automation_.putVoid() ) ) || !automation_ )
+				if ( FAILED( CoCreateInstance( automation8_class, nullptr, CLSCTX_INPROC_SERVER, __uuidof( IUIAutomation ), automation_.putVoid() ) ) || !automation_ )
 				{
-					log::warn( "accessibility: UI Automation is unavailable" );
-					return;
+					if ( FAILED( CoCreateInstance( automation_class, nullptr, CLSCTX_INPROC_SERVER, __uuidof( IUIAutomation ), automation_.putVoid() ) ) || !automation_ )
+					{
+						log::warn( "accessibility: UI Automation is unavailable" );
+						return;
+					}
 				}
 				// A hung application must never stall scanning for long.
 				Com<IUIAutomation2> timeouts;
@@ -264,6 +274,10 @@ namespace lexiglance::platform
 				{
 					( void )timeouts->put_ConnectionTimeout( 300 );
 					( void )timeouts->put_TransactionTimeout( 1200 );
+				}
+				else
+				{
+					log::debug( "accessibility: no UI Automation timeouts (IUIAutomation2 unavailable)" );
 				}
 				( void )automation_->get_RawViewWalker( walker_.put() );
 			}
@@ -363,15 +377,25 @@ namespace lexiglance::platform
 
 			std::optional<Rect> bounds( const CapturedText& captured, std::size_t length ) override
 			{
+				const auto lines = lineBounds( captured, length );
+				if ( lines.empty() )
+				{
+					return std::nullopt;
+				}
+				return unite( lines );
+			}
+
+			std::vector<Rect> lineBounds( const CapturedText& captured, std::size_t length ) override
+			{
 				auto* start = static_cast<IUIAutomationTextRange*>( captured.handle.get() );
 				if ( start == nullptr || length == 0 )
 				{
-					return std::nullopt;
+					return {};
 				}
 				Com<IUIAutomationTextRange> span;
 				if ( FAILED( start->Clone( span.put() ) ) || !span )
 				{
-					return std::nullopt;
+					return {};
 				}
 				// The characters of the first `length` code points of the captured text, which may start before the one the
 				// range holds (the beginning of its word).
@@ -386,12 +410,7 @@ namespace lexiglance::platform
 					( void )span->MoveEndpointByUnit( TextPatternRangeEndpoint_Start, TextUnit_Character, -lead, &back );
 				}
 				( void )span->MoveEndpointByUnit( TextPatternRangeEndpoint_End, TextUnit_Character, units + std::min( back, 0 ) - 1, &moved );
-				const auto boxes = rectanglesOf( span.get() );
-				if ( boxes.empty() )
-				{
-					return std::nullopt;
-				}
-				return unite( boxes );
+				return rectanglesOf( span.get() );
 			}
 
 			void diagnose( std::vector<health::Check>& out ) override

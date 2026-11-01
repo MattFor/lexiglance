@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <format>
 
 namespace lexiglance::dict
@@ -51,7 +52,9 @@ namespace lexiglance::dict
 				return ( value.size() == 4 || value.size() == 7 || value.size() == 9 ) &&
 				       std::ranges::all_of( value.substr( 1 ), []( char c ) { return ( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' ) || ( c >= 'A' && c <= 'F' ); } );
 			}
-			return !value.empty() && std::ranges::all_of( value, []( char c ) { return c >= 'a' && c <= 'z'; } );
+			// CSS keywords that are not colours, which Pango rejects.
+			constexpr std::array<std::string_view, 7> keywords{ "transparent", "inherit", "initial", "unset", "revert", "currentcolor", "none" };
+			return !value.empty() && std::ranges::all_of( value, []( char c ) { return c >= 'a' && c <= 'z'; } ) && std::ranges::find( keywords, value ) == keywords.end();
 		}
 
 		float parseScale( std::string_view value ) noexcept
@@ -80,18 +83,19 @@ namespace lexiglance::dict
 
 			float      number = 0.0F;
 			const auto parsed = std::from_chars( value.data(), value.data() + value.size(), number );
-			if ( parsed.ec != std::errc{} || number <= 0.0F )
+			if ( parsed.ec != std::errc{} || !std::isfinite( number ) || number <= 0.0F )
 			{
 				return 1.0F;
 			}
+			// Keeps the percentage a sane positive int for Pango and HTML.
 			const std::string_view unit( parsed.ptr, value.data() + value.size() );
 			if ( unit == "%" )
 			{
-				return number / 100.0F;
+				return std::clamp( number / 100.0F, 0.5F, 3.0F );
 			}
 			if ( unit == "em" || unit == "rem" )
 			{
-				return number;
+				return std::clamp( number, 0.5F, 3.0F );
 			}
 			return 1.0F;
 		}

@@ -15,6 +15,7 @@
 #else
 	#include <poll.h>
 	#include <sys/eventfd.h>
+	#include <sys/socket.h>
 	#include <unistd.h>
 #endif
 
@@ -33,8 +34,6 @@ namespace lexiglance::daemon
 
 		// WaitForMultipleObjects takes 64 handles: the wake event, the waiting instance and the clients.
 		constexpr std::size_t max_clients = MAXIMUM_WAIT_OBJECTS - 2;
-		// A client that stops reading cannot stall the server for longer.
-		constexpr auto write_timeout = std::chrono::seconds( 5 );
 
 	} // namespace
 
@@ -85,6 +84,31 @@ namespace lexiglance::daemon
 	};
 
 #endif
+
+	namespace
+	{
+
+		// A client that stops reading cannot stall the server for longer.
+		constexpr auto write_timeout = std::chrono::seconds( 5 );
+
+		// A client that cannot be written to is hung up on; the loop's read path then drops it (not here: a handler may be
+		// running for it).
+		bool sendTo( const ipc::Socket& socket, std::string_view message )
+		{
+			if ( socket.writeAll( message ) )
+			{
+				return true;
+			}
+#ifdef _WIN32
+			// Not CloseHandle: the client's pending read still uses the handle.
+			DisconnectNamedPipe( handleOf( socket ) );
+#else
+			::shutdown( socket.fd(), SHUT_RDWR );
+#endif
+			return false;
+		}
+
+	} // namespace
 
 	// Out of line: clients hold Windows' pending operations, complete only here.
 	IpcServer::IpcServer() = default;
@@ -202,7 +226,10 @@ namespace lexiglance::daemon
 		{
 			for ( const auto& message : messages )
 			{
-				( void )client.socket.writeAll( message );
+				if ( !sendTo( client.socket, message ) )
+				{
+					break;
+				}
 			}
 		}
 	}
@@ -212,7 +239,7 @@ namespace lexiglance::daemon
 		auto message = json::Document::parse( std::move( line ) );
 		if ( !message )
 		{
-			( void )client.socket.writeAll( ipc::errorResponse( -1, "malformed request: " + message.error().message ) );
+			sendTo( client.socket, ipc::errorResponse( -1, "malformed request: " + message.error().message ) );
 			return;
 		}
 
@@ -222,7 +249,7 @@ namespace lexiglance::daemon
 		const auto         it     = handlers_.find( method );
 		if ( it == handlers_.end() )
 		{
-			( void )client.socket.writeAll( ipc::errorResponse( id, "unknown method: " + method ) );
+			sendTo( client.socket, ipc::errorResponse( id, "unknown method: " + method ) );
 			return;
 		}
 
@@ -235,7 +262,7 @@ namespace lexiglance::daemon
 		{
 			result = fail( "{} failed: {}", method, e.what() );
 		}
-		( void )client.socket.writeAll( result ? ipc::response( id, *result ) : ipc::errorResponse( id, result.error().message ) );
+		sendTo( client.socket, result ? ipc::response( id, *result ) : ipc::errorResponse( id, result.error().message ) );
 	}
 
 #ifdef _WIN32
@@ -454,6 +481,7 @@ namespace lexiglance::daemon
 			{
 				if ( auto socket = ipc::acceptFrom( server_ ) )
 				{
+					( void )socket->setTimeout( write_timeout );
 					clients_.push_back( { .socket = std::move( *socket ) } );
 				}
 			}

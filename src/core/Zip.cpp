@@ -19,7 +19,8 @@ namespace lexiglance
 		constexpr std::uint32_t end_of_directory_signature = 0x06054b50;
 		constexpr std::uint32_t zip64_locator_signature    = 0x07064b50;
 		constexpr std::uint32_t zip64_end_signature        = 0x06064b50;
-		constexpr std::uint64_t max_entry_size             = 1ULL << 30U;
+		// Real banks are a few MB, and parsing costs about 16 times the text.
+		constexpr std::uint64_t max_entry_size = 128ULL << 20U;
 		// Deflate cannot expand data more than about 1032 times; a larger declared size is a lie meant to exhaust memory.
 		constexpr std::uint64_t max_deflate_ratio = 1032;
 
@@ -119,6 +120,8 @@ namespace lexiglance
 			std::string output( static_cast<std::size_t>( size ), '\0' );
 
 			z_stream stream{};
+			// zlib refuses a null next_out even with nothing to write, as for an empty entry.
+			stream.next_out = reinterpret_cast<Bytef*>( output.data() );
 			if ( inflateInit2( &stream, -MAX_WBITS ) != Z_OK )
 			{
 				return fail( "cannot initialise zlib" );
@@ -244,7 +247,7 @@ namespace lexiglance
 		{
 			return fail( "{}: encrypted entries are not supported", entry.name );
 		}
-		if ( entry.size > max_entry_size )
+		if ( std::max( entry.size, entry.compressed_size ) > max_entry_size )
 		{
 			return fail( "{}: entry too large", entry.name );
 		}
@@ -271,6 +274,10 @@ namespace lexiglance
 		switch ( entry.method )
 		{
 			case 0:
+				if ( entry.compressed_size != entry.size )
+				{
+					return fail( "{}: stored entry sizes disagree", entry.name );
+				}
 				output = std::string( input );
 				break;
 			case 8:

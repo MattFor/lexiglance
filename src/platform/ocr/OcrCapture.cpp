@@ -2275,6 +2275,8 @@ namespace lexiglance::platform
 			std::vector<std::uint8_t> pixels;
 			std::vector<Rect>         hidden;
 			std::vector<Rect>         blank;
+			// The parts of lines our popup hid when they were read: they are read again once it no longer hides them.
+			std::vector<std::pair<std::size_t, Rect>> cut;
 		};
 
 		class OcrCapture final : public TextCapture
@@ -2517,10 +2519,11 @@ namespace lexiglance::platform
 					if ( same )
 					{
 						entry.hash = hash;
-						cached     = &entry;
+						uncut( entry, covered.blank );
+						cached = &entry;
 						break;
 					}
-					if ( now - entry.detected < box_reuse )
+					if ( !revealed && now - entry.detected < box_reuse )
 					{
 						recent = &entry;
 					}
@@ -2529,6 +2532,11 @@ namespace lexiglance::platform
 				{
 					recent->hash = hash;
 					recent->lines.assign( recent->boxes.size(), std::nullopt );
+					recent->cut.clear();
+					recent->pixels = grab.rgb;
+					recent->hidden = covered.all;
+					// The boxes still lack what the popup hid when they were found.
+					recent->blank.insert( recent->blank.end(), covered.blank.begin(), covered.blank.end() );
 					cached = recent;
 				}
 				const ocr::Image image{ .width = region.width, .height = region.height, .rgb = std::move( grab.rgb ) };
@@ -2538,7 +2546,7 @@ namespace lexiglance::platform
 					{
 						paddle_cache_.erase( paddle_cache_.begin() );
 					}
-					PaddleRegion entry{ .region = region, .hash = hash, .boxes = paddle_->detect( image ), .strict = 0, .lines = {}, .detected = now, .pixels = image.rgb, .hidden = covered.all, .blank = covered.blank };
+					PaddleRegion entry{ .region = region, .hash = hash, .boxes = paddle_->detect( image ), .strict = 0, .lines = {}, .detected = now, .pixels = image.rgb, .hidden = covered.all, .blank = covered.blank, .cut = {} };
 					entry.strict = entry.boxes.size();
 					// Sparse glyphs (dotted and thin pixel fonts) only stand out with lower thresholds.
 					std::ranges::move( paddle_->redetect( 0.15F, 0.3F ), std::back_inserter( entry.boxes ) );
@@ -2579,6 +2587,7 @@ namespace lexiglance::platform
 					auto& line = cached->lines[index];
 					if ( !line )
 					{
+						noteCut( *cached, index, covered.blank );
 						line      = paddle_->recognize( image, cached->boxes[index], vertical_ );
 						line->box = inked( image, line->box, line->vertical );
 						snapWords( *line, image );
@@ -2827,6 +2836,33 @@ namespace lexiglance::platform
 				const int one   = mainScript( a );
 				const int other = mainScript( b );
 				return one == 0 || other == 0 || one == other;
+			}
+
+			// Notes the parts of line `index` that our popup hides as it is read: over its text, not a highlight's thin strip along it.
+			static void noteCut( PaddleRegion& cached, std::size_t index, const std::vector<Rect>& blank )
+			{
+				const ocr::Box& b = cached.boxes[index];
+				const Rect      core{ .x = b.inner_x, .y = b.inner_y, .width = b.inner_width, .height = b.inner_height };
+				for ( const Rect& r : blank )
+				{
+					if ( const Rect part = intersect( r, core ); !part.empty() && std::min( part.width, part.height ) * 2 >= std::min( core.width, core.height ) )
+					{
+						cached.cut.emplace_back( index, part );
+					}
+				}
+			}
+
+			// Forgets the lines read with a part hidden that our popup no longer fully hides, so they are read again.
+			static void uncut( PaddleRegion& cached, const std::vector<Rect>& blank )
+			{
+				for ( const auto& [index, part] : cached.cut )
+				{
+					if ( std::ranges::none_of( blank, [&]( const Rect& r ) { const Rect still = intersect( r, part ); return still.width == part.width && still.height == part.height; } ) )
+					{
+						cached.lines[index].reset();
+					}
+				}
+				std::erase_if( cached.cut, [&]( const auto& c ) { return !cached.lines[c.first]; } );
 			}
 
 			// The lines the text of line `chosen` goes on in, in order, until one ends a sentence: at most four, and 400

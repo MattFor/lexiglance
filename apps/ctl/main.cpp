@@ -88,6 +88,36 @@ namespace
 		return out;
 	}
 
+	// Dictionary text with its control characters as '?', so that none reaches the terminal as an escape sequence. C1
+	// controls (U+0080-U+009F) start sequences in some terminals too. `lines` keeps line breaks and tabs.
+	constexpr std::string printable( std::string_view text, bool lines = false )
+	{
+		std::string out;
+		out.reserve( text.size() );
+		for ( std::size_t i = 0; i < text.size(); ++i )
+		{
+			const auto c = static_cast<unsigned char>( text[i] );
+			if ( c == 0xC2 && i + 1 < text.size() && static_cast<unsigned char>( text[i + 1] ) >= 0x80 && static_cast<unsigned char>( text[i + 1] ) <= 0x9F )
+			{
+				out.push_back( '?' );
+				++i;
+			}
+			else if ( ( c < 0x20 && ( !lines || ( c != '\n' && c != '\t' ) ) ) || c == 0x7F )
+			{
+				out.push_back( '?' );
+			}
+			else
+			{
+				out.push_back( text[i] );
+			}
+		}
+		return out;
+	}
+
+	static_assert( printable( "Evil\x1b]52;c;cm0=\a\x7f" ) == "Evil?]52;c;cm0=??" );
+	static_assert( printable( "a\u009b2J 日本語\n\tb" ) == "a?2J 日本語??b" );
+	static_assert( printable( "a\n\tb\r", true ) == "a\n\tb?" );
+
 	// Prints the daemon's self-checks, one per line; exits with 1 when any failed.
 	int healthCommand()
 	{
@@ -131,10 +161,11 @@ namespace
 				case lg::health::Severity::Ok:
 					break;
 			}
-			std::println( "{}{:<8}{} {}: {}", colour ? paint : "", mark, colour ? "\x1b[0m" : "", check.title, indented( check.detail ) );
+			// Details carry screen text and window names.
+			std::println( "{}{:<8}{} {}: {}", colour ? paint : "", mark, colour ? "\x1b[0m" : "", printable( check.title ), indented( printable( check.detail, true ) ) );
 			if ( !check.fix.empty() )
 			{
-				std::println( "         fix: {}", check.fix );
+				std::println( "         fix: {}", printable( check.fix ) );
 			}
 		}
 		return errors > 0 ? 1 : 0;
@@ -158,7 +189,7 @@ namespace
 		}
 		for ( const auto& [key, value] : reply->root()["result"].members() )
 		{
-			std::println( "{}: {}", key, value.isString() ? std::string( value.asString() ) : lg::json::serialize( value ) );
+			std::println( "{}: {}", key, printable( value.isString() ? std::string( value.asString() ) : lg::json::serialize( value ) ) );
 		}
 		return 0;
 	}
@@ -226,13 +257,13 @@ namespace
 			}
 			if ( !summary )
 			{
-				std::println( stderr, "error: {}: {}", path, summary.error().message );
+				std::println( stderr, "error: {}: {}", path, printable( summary.error().message ) );
 				++failures;
 				continue;
 			}
 			std::println(
 					"{}: {} terms, {} meta, {} kanji, {} tags, {:.1f} MiB in {:.2f}s",
-					summary->title,
+					printable( summary->title ),
 					summary->terms,
 					summary->meta,
 					summary->kanji,
@@ -253,11 +284,11 @@ namespace
 			const auto& info = dictionary->info();
 			std::println(
 					"{:<32} {:>8} terms {:>8} meta {:>6} kanji  {}",
-					info.title,
+					printable( info.title ),
 					dictionary->terms().size(),
 					dictionary->meta().size(),
 					dictionary->kanji().size(),
-					info.revision
+					printable( info.revision )
 			);
 		}
 		return 0;
@@ -287,27 +318,27 @@ namespace
 
 		for ( const auto& entry : result.terms )
 		{
-			std::print( "{} [{}]  matched \"{}\"", entry.expression, entry.reading, result.matchedText( entry.matched_length ) );
+			std::print( "{} [{}]  matched \"{}\"", printable( entry.expression ), printable( entry.reading ), result.matchedText( entry.matched_length ) );
 			if ( const auto inflection = result.inflectionText( entry ); !inflection.empty() )
 			{
-				std::print( "  ({})", inflection );
+				std::print( "  ({})", printable( inflection ) );
 			}
 			std::println( "" );
 
 			for ( const auto& frequency : entry.frequencies )
 			{
-				std::println( "    freq {}: {}", set[frequency.dictionary].name, frequency.display.empty() ? std::to_string( frequency.value ) : std::string( frequency.display ) );
+				std::println( "    freq {}: {}", printable( set[frequency.dictionary].name ), frequency.display.empty() ? std::to_string( frequency.value ) : printable( frequency.display ) );
 			}
 			for ( const auto& definition : entry.definitions )
 			{
 				const auto& dictionary = *set[definition.dictionary].dictionary;
 				const auto& term       = dictionary.terms()[definition.term];
-				std::println( "    {} [{}]", set[definition.dictionary].name, dictionary.string( term.definition_tags ) );
+				std::println( "    {} [{}]", printable( set[definition.dictionary].name ), printable( dictionary.string( term.definition_tags ) ) );
 				for ( const auto& gloss : dictionary.glossary( term ) )
 				{
 					std::string text;
 					lg::dict::renderGlossary( text, gloss.kind, dictionary.string( gloss.data ), markup );
-					std::println( "      - {}", text );
+					std::println( "      - {}", printable( text, true ) );
 				}
 			}
 		}
@@ -316,9 +347,9 @@ namespace
 			const auto& dictionary = *set[kanji.dictionary].dictionary;
 			std::println(
 					"kanji {}  on: {}  kun: {}",
-					dictionary.string( kanji.record->character ),
-					dictionary.string( kanji.record->onyomi ),
-					dictionary.string( kanji.record->kunyomi )
+					printable( dictionary.string( kanji.record->character ) ),
+					printable( dictionary.string( kanji.record->onyomi ) ),
+					printable( dictionary.string( kanji.record->kunyomi ) )
 			);
 		}
 		std::println( "{} terms in {} us", result.terms.size(), std::chrono::duration_cast<std::chrono::microseconds>( result.elapsed ).count() );
@@ -703,6 +734,7 @@ namespace
 
 int main( int argc, char** argv )
 {
+	lexiglance::process::forgetForeignAppImage();
 	try
 	{
 		return run( std::span<char*>( argv, static_cast<std::size_t>( argc ) ) );

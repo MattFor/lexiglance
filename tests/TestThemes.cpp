@@ -147,6 +147,14 @@ namespace
 			test::expect( !text.contains( "geisha" ) && !text.contains( "clay bed-warmer" ) );
 			test::expect( limited->height() < friendly->height() );
 		}
+
+		// A quick render that still laid every entry out is complete; one that stopped early is not.
+		const auto quick = renderer.render( result, {}, 40 );
+		test::expect( quick->complete() && quick->height() > 40 );
+		auto twice = result;
+		twice.terms.push_back( twice.terms.front() );
+		test::expect( !renderer.render( twice, {}, 40 )->complete() );
+		test::expect( renderer.render( twice )->complete() );
 	} );
 
 	const test::Registrar kanji_entries( "kanji entries can be left out", [] {
@@ -247,7 +255,13 @@ namespace
 		// Brackets mark the corners only.
 		const auto brackets = highlightMask( w, h, { .shape = HighlightShape::Brackets, .thickness = 2, .radius = 0 } );
 		test::expect( bit( brackets, w, 1, 1 ) && bit( brackets, w, w - 2, h - 2 ) && !bit( brackets, w, w / 2, 1 ) && !bit( brackets, w, w / 2, h / 2 ) );
+		// A line thicker than a quarter of the box: the arms meet in the middle.
+		const auto thick = highlightMask( 20, 20, { .shape = HighlightShape::Brackets, .thickness = 12, .radius = 0 } );
+		test::expect( bit( thick, 20, 0, 0 ) && bit( thick, 20, 19, 19 ) );
 		test::expect( highlightMask( 0, 0, {} ).empty() );
+		// Too wide for cairo: nothing is drawn, and nothing crashes.
+		const auto wide_mask = highlightMask( 40000, 2, { .shape = HighlightShape::Fill, .thickness = 2 } );
+		test::expect( wide_mask.size() == 10000 && std::ranges::all_of( wide_mask, []( std::uint8_t b ) { return b == 0; } ) );
 
 		// The preview: two panels with the sample text and the mark.
 		cairo_surface_t* preview = lg::render::highlightPreview( { .shape = HighlightShape::Fill, .thickness = 2, .radius = 4, .padding_x = 2, .padding_y = 2 }, Color{ .r = 1.0, .g = 0.8, .b = 0.0, .a = 0.5 }, false, 1.0 );

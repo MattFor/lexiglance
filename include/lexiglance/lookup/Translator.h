@@ -8,9 +8,11 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -150,6 +152,14 @@ namespace lexiglance::lookup
 			}
 		};
 
+		// A form-of entry reached from one match at one depth (dictionary, term, depth, then what the match carries on).
+		using FollowKey = std::tuple<std::uint16_t, std::uint32_t, int, std::uint32_t, bool, std::uint8_t, std::array<std::uint16_t, lang::Deinflection::max_chain>>;
+		struct Followed
+		{
+			bool                     found = false;
+			std::vector<std::string> paths;
+		};
+
 		void        collect( const DictionarySet& set, const lang::TextVariant& variant, const lang::Deinflector& deinflector );
 		bool        addFormsOf( const DictionarySet& set, const dict::Dictionary& dictionary, const dict::format::TermRecord& term, const Match& match, int depth = 0 );
 		void        group( LookupResult& result );
@@ -159,6 +169,7 @@ namespace lexiglance::lookup
 		std::vector<lang::Deinflection>                deinflections_;
 		std::vector<Match>                             matches_;
 		std::unordered_set<std::uint64_t>              searched_;
+		std::map<FollowKey, Followed>                  followed_;
 		std::unordered_set<std::uint64_t>              seen_terms_;
 		std::unordered_map<std::uint64_t, std::size_t> groups_;
 	};

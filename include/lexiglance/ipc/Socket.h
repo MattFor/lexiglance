@@ -69,6 +69,11 @@ namespace lexiglance::ipc
 
 	[[nodiscard]] Result<Socket> acceptFrom( const Socket& server );
 
+#ifndef _WIN32
+	// Whether the process at the other end of a connected Unix socket runs as this user.
+	[[nodiscard]] bool peerIsThisUser( int fd );
+#endif
+
 #ifdef _WIN32
 	// A named pipe instance for the next client, which the daemon's server loop connects (listenOn() makes the first).
 	// Only this user can open it; `first` refuses a name another process already serves.

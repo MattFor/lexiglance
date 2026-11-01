@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -58,6 +59,9 @@ namespace lexiglance::translate
 	// Which precision of the model in `directory` is downloaded: `wanted` when it is, else the other one; none when
 	// neither is complete.
 	[[nodiscard]] std::optional<Precision> downloaded( const std::filesystem::path& directory, Precision wanted );
+
+	// Adds to `out` the piece that would begin a fourth copy in a row of what `written` ends with: a greedy decoding loop.
+	void repeating( std::span<const std::int64_t> written, std::vector<std::int64_t>& out );
 
 	// The ordinary state before a download, rather than a fault.
 	inline constexpr std::string_view model_absent = "the translation model is not downloaded";

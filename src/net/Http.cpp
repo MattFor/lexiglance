@@ -88,6 +88,27 @@ namespace lexiglance::net
 			}();
 			return path;
 		}
+	#elifdef __linux__
+		// The AppImage bundles Ubuntu's libcurl, which only knows Debian's CA bundle and fails where there is none.
+		const std::string& caBundle()
+		{
+			static const std::string path = [] {
+				std::error_code ec;
+				if ( std::filesystem::exists( "/etc/ssl/certs/ca-certificates.crt", ec ) )
+				{
+					return std::string();
+				}
+				for ( const char* bundle : { "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem" } )
+				{
+					if ( std::filesystem::is_regular_file( bundle, ec ) )
+					{
+						return std::string( bundle );
+					}
+				}
+				return std::string();
+			}();
+			return path;
+		}
 	#endif
 
 	} // namespace
@@ -110,13 +131,16 @@ namespace lexiglance::net
 		set( curl, CURLOPT_USERAGENT, user_agent.c_str() );
 		set( curl, CURLOPT_FOLLOWLOCATION, 1L );
 		set( curl, CURLOPT_MAXREDIRS, 5L );
-	#if LIBCURL_VERSION_NUM >= 0x075500
 		// Only the web, also after redirects: no file://, scp:// or other schemes from a server or a dictionary.
+	#if LIBCURL_VERSION_NUM >= 0x075500
 		set( curl, CURLOPT_PROTOCOLS_STR, "http,https" );
 		set( curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https" );
+	#else
+		set( curl, CURLOPT_PROTOCOLS, static_cast<long>( CURLPROTO_HTTP | CURLPROTO_HTTPS ) );
+		set( curl, CURLOPT_REDIR_PROTOCOLS, static_cast<long>( CURLPROTO_HTTP | CURLPROTO_HTTPS ) );
 	#endif
 		set( curl, CURLOPT_NOSIGNAL, 1L );
-	#ifdef _WIN32
+	#if defined( _WIN32 ) || defined( __linux__ )
 		if ( const std::string& ca = caBundle(); !ca.empty() )
 		{
 			set( curl, CURLOPT_CAINFO, ca.c_str() );

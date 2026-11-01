@@ -4,7 +4,8 @@
 of the ways below; the first works everywhere.
 
 Installed files live in `<prefix>/share/lexiglance/services/` (the systemd unit also in `<prefix>/lib/systemd/user/`),
-with the daemon's installed path already filled in.
+with the daemon's installed path already filled in. That path is the prefix the build was configured with: the release
+`.tar.gz`'s files start `/usr/bin/lexiglanced`, so edit them if you unpack it elsewhere.
 
 ## Desktop autostart (any desktop, recommended)
 

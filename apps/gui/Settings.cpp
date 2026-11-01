@@ -19,7 +19,12 @@ namespace lexiglance::gui
 				load();
 			}
 		} );
-		client.onEvent( [this]( std::string_view name, const json::Value& ) {
+		client.onEvent( [this]( std::string_view name, const json::Value& params ) {
+			// Pausing is the daemon's state (scan.pause), not a local edit: a push must never carry a stale one back.
+			if ( name == "status.changed" && params["paused"].isBool() )
+			{
+				config_.paused = params["paused"].asBool();
+			}
 			// Our own pushes come back as config.changed; only reload for changes made elsewhere.
 			if ( ( name == "config.changed" || name == "dictionaries.changed" ) && std::chrono::steady_clock::now() - pushed_at_ > std::chrono::milliseconds( 1500 ) )
 			{
@@ -76,6 +81,11 @@ namespace lexiglance::gui
 
 	void Settings::push()
 	{
+		// Stays pending: load() keeps the edit on reconnect and pushes it then.
+		if ( !client_->connected() )
+		{
+			return;
+		}
 		pushed_at_ = std::chrono::steady_clock::now();
 		pending_   = false;
 		client_->call( "config.set", "{\"config\":" + config_.toJson( false ) + "}" );

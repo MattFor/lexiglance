@@ -370,9 +370,11 @@ namespace lexiglance::gui
 		auto* reset_note   = new QLabel( QStringLiteral( "Every setting back to its default: the trigger, scanning, OCR, the popup's look, audio and Anki. Installed dictionaries and their order are kept." ) );
 		reset_note->setWordWrap( true );
 		reset_note->setEnabled( false );
-		auto* reset_all = new QPushButton( QStringLiteral( "Reset all settings..." ) );
+		reset_all_ = new QPushButton( QStringLiteral( "Reset all settings..." ) );
+		// Until the daemon's settings are here there are no dictionaries to keep (refresh() enables it).
+		reset_all_->setEnabled( false );
 		reset_layout->addWidget( reset_note, 1 );
-		reset_layout->addWidget( reset_all );
+		reset_layout->addWidget( reset_all_ );
 		layout->addWidget( reset_box );
 
 		auto* uninstall_box    = new QGroupBox( QStringLiteral( "Uninstall" ) );
@@ -391,7 +393,11 @@ namespace lexiglance::gui
 			}
 			uninstall_->open();
 		} );
-		connect( reset_all, &QPushButton::clicked, this, [this] {
+		connect( reset_all_, &QPushButton::clicked, this, [this] {
+			if ( !settings().loaded() )
+			{
+				return;
+			}
 			if ( !confirm( this, QStringLiteral( "Reset all settings" ), QStringLiteral( "Every setting goes back to its default: the trigger, scanning, OCR, the popup's look, audio and Anki. Installed dictionaries and their order are kept." ), QStringLiteral( "Reset all" ) ) )
 			{
 				return;
@@ -529,6 +535,7 @@ namespace lexiglance::gui
 	{
 		trigger_->setText( QStringLiteral( "Trigger: <b>%1</b>" ).arg( chordText( settings().config().scan.trigger ).toHtmlEscaped() ) );
 		setTrigger( false );
+		reset_all_->setEnabled( settings().loaded() );
 	}
 
 	void OverviewPage::showEvent( QShowEvent* event )

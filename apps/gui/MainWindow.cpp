@@ -216,6 +216,11 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		addPage( new AnkiPage( context ), QStringLiteral( "Anki" ), QStringLiteral( "document-send" ) );
 		addPage( new StatisticsPage( context ), QStringLiteral( "Statistics" ), QStringLiteral( "office-chart-bar" ) );
 		addPage( new AboutPage( context ), QStringLiteral( "About" ), QStringLiteral( "help-about" ) );
+		// Until the first config.get, an edit would land on a default config and be pushed over the saved one.
+		for ( Page* page : page_list_ )
+		{
+			page->setEnabled( dynamic_cast<OverviewPage*>( page ) != nullptr || dynamic_cast<SearchPage*>( page ) != nullptr || dynamic_cast<AboutPage*>( page ) != nullptr );
+		}
 
 		connect( navigation_, &QListWidget::currentRowChanged, this, [this]( int row ) {
 			pages_->setCurrentIndex( row );
@@ -235,6 +240,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		settings_->onChanged( [this] {
 			for ( Page* page : page_list_ )
 			{
+				page->setEnabled( true );
 				page->refresh();
 			}
 		} );

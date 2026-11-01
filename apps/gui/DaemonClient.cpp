@@ -4,6 +4,7 @@
 
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
+#include <lexiglance/ipc/Socket.h>
 
 #include <QProcess>
 
@@ -24,6 +25,14 @@ namespace lexiglance::gui
 			connectNow();
 		} );
 		connect( socket_, &QLocalSocket::connected, this, [this] {
+#ifndef _WIN32
+			if ( !ipc::peerIsThisUser( static_cast<int>( socket_->socketDescriptor() ) ) )
+			{
+				log::error( "{} is not served by this user's daemon", paths::ipcEndpoint() );
+				socket_->disconnectFromServer();
+				return;
+			}
+#endif
 			retry_->stop();
 			notifyConnection( true );
 		} );
@@ -45,6 +54,8 @@ namespace lexiglance::gui
 	{
 		if ( socket_->state() == QLocalSocket::UnconnectedState )
 		{
+			// A partial line from the last connection must not prefix the next one.
+			buffer_ = {};
 			socket_->connectToServer( qs( paths::ipcEndpoint() ) );
 		}
 	}

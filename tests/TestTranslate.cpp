@@ -56,6 +56,22 @@ namespace
 		test::expect( !lg::translate::Tokenizer::parse( "not json" ).has_value() );
 	} );
 
+	const test::Registrar translation_loops( "a translation stops a loop, not a phrase it repeats", [] {
+		using Ids         = std::vector<std::int64_t>;
+		const auto banned = []( const Ids& written ) {
+			Ids out;
+			lg::translate::repeating( written, out );
+			return out;
+		};
+		// "it's not my book, it's not": the second "not" is the meaning.
+		test::expect( banned( Ids{ 10, 11, 12, 13, 14, 15, 16, 10, 11, 12 } ).empty() );
+		test::expect( banned( Ids{ 7, 8, 7, 8 } ).empty() );
+		// A fourth copy in a row is a loop, a piece or a run of them.
+		test::expect( banned( Ids{ 1, 5, 5, 5 } ) == Ids{ 5 } );
+		test::expect( banned( Ids{ 1, 7, 8, 7, 8, 7, 8 } ) == Ids{ 7 } );
+		test::expect( banned( Ids{ 2, 3, 4, 2, 3, 4, 2, 3, 4 } ) == Ids{ 2 } );
+	} );
+
 	const test::Registrar translation_languages( "the language a sentence is translated from", [] {
 		const auto* russian   = lg::lang::findLanguage( "ru" );
 		const auto* ukrainian = lg::lang::findLanguage( "uk" );

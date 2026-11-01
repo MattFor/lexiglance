@@ -4,7 +4,9 @@
 #include <lexiglance/core/Json.h>
 
 #include <algorithm>
+#include <format>
 #include <fstream>
+#include <random>
 #include <sstream>
 
 namespace lexiglance::config
@@ -465,8 +467,9 @@ namespace lexiglance::config
 		std::error_code ec;
 		std::filesystem::create_directories( path.parent_path(), ec );
 
+		// One file per save, so two saves at once never write into the same one.
 		auto temp = path;
-		temp += ".tmp";
+		temp += std::format( ".{:08x}.tmp", std::random_device{}() );
 		{
 			std::ofstream out( temp, std::ios::binary | std::ios::trunc );
 			out << toJson( true ) << '\n';
@@ -474,13 +477,16 @@ namespace lexiglance::config
 			out.close();
 			if ( !out )
 			{
+				std::filesystem::remove( temp, ec );
 				return fail( "cannot write {}", temp.string() );
 			}
 		}
 		std::filesystem::rename( temp, path, ec );
 		if ( ec )
 		{
-			return fail( "cannot replace {}: {}", path.string(), ec.message() );
+			const auto reason = ec.message();
+			std::filesystem::remove( temp, ec );
+			return fail( "cannot replace {}: {}", path.string(), reason );
 		}
 		return {};
 	}

@@ -1,3 +1,4 @@
+#include "../src/platform/linux/X11Pixel.h"
 #include "Test.h"
 
 #include <lexiglance/ocr/Onnx.h>
@@ -122,6 +123,18 @@ namespace
 		// Nothing outside Windows imports it, so OCR is never held up there waiting for a runtime that does not apply.
 		test::expectEqual( lg::ocr::missingVcRuntime(), std::string() );
 #endif
+	} );
+
+	const test::Registrar ocr_x11_channels( "ocr x11 pixel channels", [] {
+		// Depth 24 as is; depth 30 keeps its top 8 bits; depth 16 (565) scales up to full range.
+		test::expectEqual( lg::platform::channel8( 0x80FF10, 0xFF0000 ), 128 );
+		test::expectEqual( lg::platform::channel8( 0x80FF10, 0xFF00 ), 255 );
+		test::expectEqual( lg::platform::channel8( 0x80FF10, 0xFF ), 16 );
+		test::expectEqual( lg::platform::channel8( 0x200UL << 20U, 0x3FF00000 ), 128 );
+		test::expectEqual( lg::platform::channel8( 0x3FF, 0x3FF ), 255 );
+		test::expectEqual( lg::platform::channel8( 0xFFFF, 0x7E0 ), 255 );
+		test::expectEqual( lg::platform::channel8( 0x8000, 0xF800 ), 131 );
+		test::expectEqual( lg::platform::channel8( 0xFFFFFF, 0 ), 0 );
 	} );
 
 } // namespace

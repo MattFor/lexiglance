@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <fstream>
 
 // Russian, and what makes a language pluggable: detection by script, languages turned off, search keys, form-of
 // entries of Wiktionary's dictionaries.
@@ -271,6 +273,52 @@ namespace
 		// With Russian turned off, Cyrillic text is not looked up at all.
 		result = translator.lookup( set, "книги", { .language = &japanese(), .languages = { &japanese() } } );
 		test::expect( result.language == &japanese() && result.terms.empty() );
+	} );
+
+	// Entries that are all forms of each other are each followed once, not once per path through them.
+	const test::Registrar form_of_cycles( "form-of entries that are forms of each other", [] {
+		const auto source = test::scratch( "form-of-cycles-source" );
+		std::ofstream( source / "index.json" ) << R"json({"title": "Cycles", "revision": "1", "format": 3, "sourceLanguage": "ru"})json";
+		std::string rows = "[";
+		for ( int i = 0; i < 100; ++i )
+		{
+			rows += R"json(["крак", "", "non-lemma", "", 0, [["крак", ["x"]]], 0, ""],)json";
+		}
+		rows.back() = ']';
+		std::ofstream( source / "term_bank_1.json" ) << rows;
+		const auto set = setOf( { compiled( source, "form-of-cycles" ) } );
+		if ( !test::expect( set != nullptr ) )
+		{
+			return;
+		}
+		lg::lookup::Translator translator;
+		const auto             result = translator.lookup( set, "крак" );
+		test::expect( !result.terms.empty() && result.terms.front().expression == "крак" && result.terms.front().unresolved );
+		test::expect( result.elapsed < std::chrono::seconds( 1 ) );
+	} );
+
+	// Every route through a form-of entry that is itself only a form says what the text is: none is lost to the above.
+	const test::Registrar form_of_routes( "form-of entries reached by several routes keep each description", [] {
+		const auto source = test::scratch( "form-of-routes-source" );
+		std::ofstream( source / "index.json" ) << R"json({"title": "Routes", "revision": "1", "format": 3, "sourceLanguage": "ru"})json";
+		std::ofstream( source / "term_bank_1.json" ) << R"json([
+			["её", "", "non-lemma", "", 0, [["она", ["genitive"]]], 0, ""],
+			["её", "", "non-lemma", "", 0, [["она", ["accusative"]]], 0, ""],
+			["она", "", "non-lemma", "", 0, [["он", ["feminine"]]], 0, ""],
+			["он", "", "pron", "", 0, ["he"], 0, ""]
+		])json";
+		const auto set = setOf( { compiled( source, "form-of-routes" ) } );
+		if ( !test::expect( set != nullptr ) )
+		{
+			return;
+		}
+		lg::lookup::Translator translator;
+		const auto             result = translator.lookup( set, "её" );
+		if ( test::expect( !result.terms.empty() && result.terms.front().expression == "он" ) )
+		{
+			const auto& form_of = result.terms.front().form_of;
+			test::expect( form_of.contains( "genitive" ) && form_of.contains( "accusative" ) );
+		}
 	} );
 
 	const test::Registrar mixed_languages( "japanese and russian dictionaries together", [] {

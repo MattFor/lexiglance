@@ -20,6 +20,8 @@ namespace lexiglance::lookup
 
 		// Form-of entries can point at other form-of entries (читающего -> читающий -> читать): followed this far.
 		constexpr int max_form_depth = 3;
+		// Routes followed through one form-of entry: each says what the text is of it, but pronoun tables have dozens.
+		constexpr std::size_t max_form_routes = 4;
 
 		// Rules applied, or the one step a form-of entry stands for; unresolved form-of entries go last.
 		std::size_t steps( const TermEntry& entry ) noexcept
@@ -262,6 +264,7 @@ namespace lexiglance::lookup
 		variants_.clear();
 		matches_.clear();
 		searched_.clear();
+		followed_.clear();
 		language.variants( source, variants_ );
 		for ( const lang::TextVariant& variant : variants_ )
 		{
@@ -419,15 +422,20 @@ namespace lexiglance::lookup
 			{
 				continue;
 			}
+			// Pronoun tables make every form a form of every lemma: an entry is expanded once per route, for a few routes.
 			for ( const auto& [index, term_index] : forms_of_it )
 			{
-				const dict::Dictionary& other = *set[index].dictionary;
-				Match                   next  = match;
-				next.form_of                  = path;
-				if ( addFormsOf( set, other, other.terms()[term_index], next, depth + 1 ) )
+				Followed& followed = followed_[{ index, term_index, depth, match.length, match.folded, match.chain_length, match.chain }];
+				if ( followed.paths.size() < max_form_routes && std::ranges::find( followed.paths, path ) == followed.paths.end() )
 				{
-					found = true;
+					followed.paths.push_back( path );
+					const dict::Dictionary& other = *set[index].dictionary;
+					Match                   next  = match;
+					next.form_of                  = path;
+					const bool walked             = addFormsOf( set, other, other.terms()[term_index], next, depth + 1 );
+					followed.found                = followed.found || walked;
 				}
+				found = found || followed.found;
 			}
 		}
 		if ( !found && depth == 0 )
@@ -557,9 +565,14 @@ namespace lexiglance::lookup
 			for ( const std::uint16_t index : set.withMeta() )
 			{
 				const dict::Dictionary& dictionary = *set[index].dictionary;
+				const auto              meta       = dictionary.meta();
 				for ( const std::uint32_t meta_index : dictionary.findMeta( character ) )
 				{
-					const auto& record = dictionary.meta()[meta_index];
+					if ( meta_index >= meta.size() )
+					{
+						continue;
+					}
+					const auto& record = meta[meta_index];
 					if ( record.kind == MetaKind::KanjiFrequency && dictionary.string( record.expression ) == character )
 					{
 						entry.frequencies.push_back( { .dictionary = index, .value = record.value, .display = dictionary.string( record.display ) } );

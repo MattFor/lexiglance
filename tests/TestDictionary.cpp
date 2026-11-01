@@ -140,6 +140,19 @@ namespace
 		lg::dict::renderGlossary( pango, GlossKind::StructuredContent, content, { .format = lg::dict::Markup::Pango, .styles = &styles } );
 		test::expect( pango.contains( "foreground=\"#ff0000\"" ) && pango.contains( "weight=\"bold\"" ) );
 
+		// Markup Pango rejects would show the whole definition as raw tags.
+		const auto  keywords = lg::dict::StyleSheet::parse( R"(span[data-sc-content="note"] { background: none; color: inherit; })" );
+		std::string rejected;
+		lg::dict::renderGlossary( rejected, GlossKind::StructuredContent, content, { .format = lg::dict::Markup::Pango, .styles = &keywords } );
+		lg::dict::renderGlossary(
+				rejected,
+				GlossKind::StructuredContent,
+				R"([{"tag":"span","style":{"fontSize":"1e30em","backgroundColor":"transparent"},"content":"a"},{"tag":"span","style":{"fontSize":"0.4%"},"content":"b"},{"tag":"span","style":{"fontSize":"nanem"},"content":"c"}])",
+				{ .format = lg::dict::Markup::Pango }
+		);
+		test::expect( !rejected.contains( "inherit" ) && !rejected.contains( "none" ) && !rejected.contains( "transparent" ) );
+		test::expect( rejected.contains( "size=\"300%\"" ) && rejected.contains( "size=\"50%\"" ) && !rejected.contains( "size=\"-" ) );
+
 		std::string html;
 		lg::dict::renderGlossary( html, GlossKind::Text, "a < b & \"c\"", { .format = lg::dict::Markup::Html } );
 		test::expectEqual( html, std::string( "a &lt; b &amp; &quot;c&quot;" ) );

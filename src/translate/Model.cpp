@@ -31,20 +31,6 @@ namespace lexiglance::translate
 			return text.str();
 		}
 
-		// The pieces that would repeat a run of three already written: greedy decoding otherwise tends to loop ("the the
-		// the").
-		void repeating( const std::vector<std::int64_t>& written, std::vector<std::int64_t>& out )
-		{
-			const std::size_t n = written.size();
-			for ( std::size_t i = 0; n >= 2 && i + 2 < n; ++i )
-			{
-				if ( written[i] == written[n - 2] && written[i + 1] == written[n - 1] )
-				{
-					out.push_back( written[i + 2] );
-				}
-			}
-		}
-
 		bool complete( const std::filesystem::path& directory, Precision precision )
 		{
 			return std::ranges::all_of( modelFiles( precision ), [&]( std::string_view file ) {
@@ -63,6 +49,20 @@ namespace lexiglance::translate
 	std::string_view precisionName( Precision precision )
 	{
 		return precision == Precision::Full ? "full" : "compact";
+	}
+
+	void repeating( std::span<const std::int64_t> written, std::vector<std::int64_t>& out )
+	{
+		constexpr std::size_t longest = 8;
+		for ( std::size_t period = 1; period <= longest && period * 3 <= written.size(); ++period )
+		{
+			// Three copies in a row of the last `period` pieces.
+			const auto tail = written.last( period * 3 );
+			if ( std::ranges::equal( tail.first( period * 2 ), tail.last( period * 2 ) ) )
+			{
+				out.push_back( tail.front() );
+			}
+		}
 	}
 
 	std::optional<Precision> downloaded( const std::filesystem::path& directory, Precision wanted )

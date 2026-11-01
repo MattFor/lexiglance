@@ -382,11 +382,24 @@ namespace lexiglance::gui
 				}
 				loading_ = false;
 			};
-			request( QStringLiteral( "deckNames" ), {}, [this, fill]( const QJsonValue& decks, const QString& ) {
+			request( QStringLiteral( "deckNames" ), {}, [this, fill]( const QJsonValue& decks, const QString& failure ) {
+				// No collection yet (profile chooser): keep the saved deck and note type, and let the poll retry.
+				if ( !failure.isEmpty() )
+				{
+					anki_connected_ = false;
+					anki_status_->setText( failure );
+					return;
+				}
 				fill( deck_, decks );
 				storeAnki();
 			} );
-			request( QStringLiteral( "modelNames" ), {}, [this, fill]( const QJsonValue& models, const QString& ) {
+			request( QStringLiteral( "modelNames" ), {}, [this, fill]( const QJsonValue& models, const QString& failure ) {
+				if ( !failure.isEmpty() )
+				{
+					anki_connected_ = false;
+					anki_status_->setText( failure );
+					return;
+				}
 				const QString before = model_->currentText();
 				fill( model_, models );
 				if ( model_->currentText() != before || fields_->rowCount() == 0 )

@@ -117,14 +117,15 @@ namespace lexiglance::render
 			std::uint32_t end    = 0;
 		};
 
-		PopupImage( cairo_surface_t* surface, int width, int height, std::vector<Region> regions, std::vector<Button> buttons = {}, std::string text = {}, std::vector<Glyph> glyphs = {} ) noexcept :
+		PopupImage( cairo_surface_t* surface, int width, int height, std::vector<Region> regions, std::vector<Button> buttons = {}, std::string text = {}, std::vector<Glyph> glyphs = {}, bool complete = true ) noexcept :
 			surface_( surface ),
 			width_( width ),
 			height_( height ),
 			regions_( std::move( regions ) ),
 			buttons_( std::move( buttons ) ),
 			text_( std::move( text ) ),
-			glyphs_( std::move( glyphs ) )
+			glyphs_( std::move( glyphs ) ),
+			complete_( complete )
 		{
 		}
 		~PopupImage();
@@ -147,6 +148,12 @@ namespace lexiglance::render
 		[[nodiscard]] int height() const noexcept
 		{
 			return height_;
+		}
+
+		// False when a render limit left entries out.
+		[[nodiscard]] bool complete() const noexcept
+		{
+			return complete_;
 		}
 
 		[[nodiscard]] const Region* regionAt( int y ) const noexcept
@@ -212,6 +219,7 @@ namespace lexiglance::render
 		std::vector<Button> buttons_;
 		std::string         text_;
 		std::vector<Glyph>  glyphs_;
+		bool                complete_;
 	};
 
 	// A translation shown above the entries: the text translated, and its translation once it is there (empty: still on

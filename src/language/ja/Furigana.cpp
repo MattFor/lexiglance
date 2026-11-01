@@ -29,8 +29,14 @@ namespace lexiglance::lang::ja
 		}
 
 		// Backtracking alignment: kana groups must match the reading literally, the others consume at least one character.
-		bool align( const std::vector<Group>& groups, std::size_t group, std::u32string_view reading, std::vector<std::u32string>& out )
+		// The budget bounds a reading that can never align; running out means the whole reading goes over the whole word.
+		bool align( const std::vector<Group>& groups, std::size_t group, std::u32string_view reading, std::vector<std::u32string>& out, std::size_t& budget )
 		{
+			if ( budget == 0 )
+			{
+				return false;
+			}
+			--budget;
 			if ( group == groups.size() )
 			{
 				return reading.empty();
@@ -40,12 +46,12 @@ namespace lexiglance::lang::ja
 			if ( current.kana )
 			{
 				const auto normalized = hiragana( current.text );
-				if ( !hiragana( reading ).starts_with( normalized ) )
+				if ( hiragana( reading.substr( 0, normalized.size() ) ) != normalized )
 				{
 					return false;
 				}
 				out.emplace_back();
-				if ( align( groups, group + 1, reading.substr( normalized.size() ), out ) )
+				if ( align( groups, group + 1, reading.substr( normalized.size() ), out, budget ) )
 				{
 					return true;
 				}
@@ -58,10 +64,10 @@ namespace lexiglance::lang::ja
 			{
 				reserved += groups[g].kana ? groups[g].text.size() : 1;
 			}
-			for ( std::size_t length = 1; length + reserved <= reading.size(); ++length )
+			for ( std::size_t length = 1; budget > 0 && length + reserved <= reading.size(); ++length )
 			{
 				out.emplace_back( reading.substr( 0, length ) );
-				if ( align( groups, group + 1, reading.substr( length ), out ) )
+				if ( align( groups, group + 1, reading.substr( length ), out, budget ) )
 				{
 					return true;
 				}
@@ -95,7 +101,8 @@ namespace lexiglance::lang::ja
 		}
 
 		std::vector<std::u32string> readings;
-		if ( !align( groups, 0, read, readings ) )
+		std::size_t                 budget = 4096;
+		if ( !align( groups, 0, read, readings, budget ) )
 		{
 			return { { .text = std::string( expression ), .reading = std::string( reading ) } };
 		}

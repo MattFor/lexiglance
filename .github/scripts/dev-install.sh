@@ -112,7 +112,8 @@ if $in_place; then
     ctl="$build/apps/ctl/lexiglancectl"
 else
     build="$repository/build/$preset"
-    [ -f "$build/CMakeCache.txt" ] || cmake --preset "$preset"
+    # The service files are generated with the configured prefix.
+    cmake --preset "$preset" -DCMAKE_INSTALL_PREFIX="$prefix"
     cmake --build --preset "$preset"
     daemon="$prefix/bin/lexiglanced"
     gui="$prefix/bin/lexiglance"

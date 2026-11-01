@@ -90,6 +90,7 @@ namespace lexiglance::daemon
 		void mark( std::uint64_t& counter, std::uint64_t Day::* daily, std::uint64_t by = 1 );
 
 		mutable std::mutex    mutex_;
+		std::mutex            save_mutex_;
 		std::filesystem::path file_;
 		Tally                 tally_;
 		bool                  enabled_              = true;

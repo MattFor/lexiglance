@@ -408,7 +408,17 @@ namespace lexiglance::gui
 		const bool    unpack  = !archive.isEmpty() && !QFile::exists( runtime + "/" + ocr_install::runtimeLibraryName() );
 		ocr_install::appendRuntime( files, &redist_, this );
 		fetchAll( QStringLiteral( "PaddleOCR" ), std::move( files ), [runtime, archive, unpack] {
-			return unpack ? ocr_install::unpackRuntime( runtime, archive ) : QString();
+			if ( !unpack )
+			{
+				return QString();
+			}
+			// A translation install may have brought the runtime meanwhile.
+			if ( QFile::exists( runtime + "/" + ocr_install::runtimeLibraryName() ) )
+			{
+				QFile::remove( ocr_install::runtimePackedPath() );
+				return QString();
+			}
+			return ocr_install::unpackRuntime( runtime, archive );
 		} );
 	}
 

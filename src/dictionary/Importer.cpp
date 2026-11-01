@@ -2,6 +2,7 @@
 
 #include <lexiglance/core/Json.h>
 #include <lexiglance/core/MappedFile.h>
+#include <lexiglance/core/Process.h>
 #include <lexiglance/core/Thread.h>
 #include <lexiglance/core/Utf8.h>
 #include <lexiglance/core/Zip.h>
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <limits>
 #include <optional>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -40,6 +42,8 @@ namespace lexiglance::dict
 
 			[[nodiscard]] virtual std::vector<std::string> names() const                         = 0;
 			[[nodiscard]] virtual Result<std::string>      read( const std::string& name ) const = 0;
+			// The declared size, before reading: 0 when unknown.
+			[[nodiscard]] virtual std::uint64_t size( const std::string& name ) const = 0;
 		};
 
 		class ZipSource final : public Source
@@ -74,10 +78,19 @@ namespace lexiglance::dict
 				return archive_.read( *entry );
 			}
 
+			[[nodiscard]] std::uint64_t size( const std::string& name ) const override
+			{
+				const auto* entry = archive_.find( prefix_ + name );
+				return entry == nullptr ? 0 : std::max( entry->size, entry->compressed_size );
+			}
+
 		private:
 			ZipArchive  archive_;
 			std::string prefix_;
 		};
+
+		// Same cap as a zip entry: a bank's parsed form takes many times its size.
+		constexpr std::size_t max_file_size = 128ULL << 20U;
 
 		Result<std::string> readFile( const fs::path& path )
 		{
@@ -88,6 +101,10 @@ namespace lexiglance::dict
 			}
 			in.seekg( 0, std::ios::end );
 			const auto size = static_cast<std::size_t>( in.tellg() );
+			if ( size > max_file_size )
+			{
+				return fail( "{} is too large", path.string() );
+			}
 			in.seekg( 0, std::ios::beg );
 
 			std::string data( size, '\0' );
@@ -124,6 +141,13 @@ namespace lexiglance::dict
 			[[nodiscard]] Result<std::string> read( const std::string& name ) const override
 			{
 				return readFile( root_ / name );
+			}
+
+			[[nodiscard]] std::uint64_t size( const std::string& name ) const override
+			{
+				std::error_code ec;
+				const auto      bytes = fs::file_size( root_ / name, ec );
+				return ec ? 0 : bytes;
 			}
 
 		private:
@@ -355,7 +379,6 @@ namespace lexiglance::dict
 
 		void parseTerms( const json::Value& root, int version, Bank& bank )
 		{
-			bank.terms.reserve( root.size() );
 			for ( const json::Value& row : root.items() )
 			{
 				if ( !row.isArray() || row.size() < 5 || row[0].asString().empty() )
@@ -422,7 +445,6 @@ namespace lexiglance::dict
 
 		void parseMeta( const json::Value& root, bool kanji, Bank& bank )
 		{
-			bank.meta.reserve( root.size() );
 			for ( const json::Value& row : root.items() )
 			{
 				if ( !row.isArray() || row.size() < 3 )
@@ -472,7 +494,6 @@ namespace lexiglance::dict
 
 		void parseKanji( const json::Value& root, int version, Bank& bank )
 		{
-			bank.kanji.reserve( root.size() );
 			for ( const json::Value& row : root.items() )
 			{
 				if ( !row.isArray() || row.size() < 4 || row[0].asString().empty() )
@@ -973,6 +994,7 @@ namespace lexiglance::dict
 	} // namespace
 
 	Result<std::string> readTitle( const fs::path& source )
+	try
 	{
 		auto opened = openSource( source );
 		if ( !opened )
@@ -996,8 +1018,13 @@ namespace lexiglance::dict
 		}
 		return title;
 	}
+	catch ( const std::exception& e )
+	{
+		return fail( "{}", e.what() );
+	}
 
 	Result<ImportSummary> compile( const fs::path& source_path, const fs::path& output, const ImportOptions& options )
+	try
 	{
 		const auto started = std::chrono::steady_clock::now();
 		const auto report  = [&]( std::string_view stage, std::uint64_t done, std::uint64_t total ) {
@@ -1057,6 +1084,15 @@ namespace lexiglance::dict
 
 		std::error_code ec;
 		fs::create_directories( output.parent_path(), ec );
+		// One import of a title at a time (the daemon's, lexiglancectl's); the lock ends with its process however it ends,
+		// and the next import then reuses the temporary file a killed one left.
+		fs::path lock_path = output;
+		lock_path += ".lock";
+		const process::InstanceLock lock( lock_path );
+		if ( !lock.held() )
+		{
+			return lock.holder() > 0 ? fail( "\"{}\" is being imported already", summary.title ) : fail( "cannot lock {}", lock_path.string() );
+		}
 		fs::path temp_path = output;
 		temp_path += ".tmp";
 		TemporaryFile temp( temp_path );
@@ -1082,19 +1118,30 @@ namespace lexiglance::dict
 		}
 
 		{
-			ThreadPool                            pool( options.threads, options.background, "lg-import" );
-			const std::size_t                     window = static_cast<std::size_t>( pool.size() ) * 2;
-			std::deque<std::future<Result<Bank>>> pending;
-			std::size_t                           next = 0;
+			// Compiler::add is serial, so more parsers only hold more banks in memory.
+			ThreadPool        pool( options.threads != 0 ? options.threads : std::min( 3U, std::max( 1U, std::thread::hardware_concurrency() ) ), options.background, "lg-import" );
+			const std::size_t window = static_cast<std::size_t>( pool.size() ) * 2;
+			// A bank parses to many times its size (16x for "[0,0,...]"), so the banks in flight are bounded by bytes too.
+			constexpr std::uint64_t                                         budget = 128ULL << 20U;
+			std::deque<std::pair<std::future<Result<Bank>>, std::uint64_t>> pending;
+			std::uint64_t                                                   in_flight = 0;
+			std::size_t                                                     next      = 0;
 
-			const auto submit = [&] {
-				const BankFile& file = banks[next++];
-				pending.push_back( pool.submit( [&source, &file, format_version] { return loadBank( source, file, format_version ); } ) );
+			const auto fill = [&] {
+				while ( next < banks.size() && pending.size() < window )
+				{
+					const BankFile&     file  = banks[next];
+					const std::uint64_t bytes = source.size( file.name );
+					if ( !pending.empty() && in_flight + bytes > budget )
+					{
+						return;
+					}
+					++next;
+					in_flight += bytes;
+					pending.emplace_back( pool.submit( [&source, &file, format_version] { return loadBank( source, file, format_version ); } ), bytes );
+				}
 			};
-			while ( next < banks.size() && pending.size() < window )
-			{
-				submit();
-			}
+			fill();
 
 			std::uint64_t done = 0;
 			report( "parsing", 0, banks.size() );
@@ -1105,12 +1152,10 @@ namespace lexiglance::dict
 					return fail( "import cancelled" );
 				}
 
-				auto bank = pending.front().get();
+				auto bank = pending.front().first.get();
+				in_flight -= pending.front().second;
 				pending.pop_front();
-				if ( next < banks.size() )
-				{
-					submit();
-				}
+				fill();
 				if ( !bank )
 				{
 					return std::unexpected( bank.error() );
@@ -1148,6 +1193,11 @@ namespace lexiglance::dict
 		summary.bytes   = header->file_size;
 		summary.seconds = std::chrono::duration<double>( std::chrono::steady_clock::now() - started ).count();
 		return summary;
+	}
+	catch ( const std::exception& e )
+	{
+		// A hostile archive can exhaust memory (bad_alloc); fail the import instead of terminating the caller.
+		return fail( "{}", e.what() );
 	}
 
 } // namespace lexiglance::dict

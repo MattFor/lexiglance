@@ -139,6 +139,11 @@ namespace lexiglance::json
 		Result<Value> run()
 		{
 			Value root;
+			// A UTF-8 byte order mark, as Windows tools write it; RFC 8259 lets a parser skip it.
+			if ( std::string_view( cursor_, static_cast<std::size_t>( end_ - cursor_ ) ).starts_with( "\xEF\xBB\xBF" ) )
+			{
+				cursor_ += 3;
+			}
 			skipWhitespace();
 			if ( !parseValue( root, 0 ) )
 			{

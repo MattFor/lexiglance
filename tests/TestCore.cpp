@@ -12,10 +12,15 @@
 #include <lexiglance/core/Zip.h>
 #include <lexiglance/ipc/Protocol.h>
 
+#include <array>
+#include <atomic>
+#include <csignal>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 #ifndef _WIN32
+	#include <sys/resource.h>
 	#include <unistd.h>
 #endif
 
@@ -84,6 +89,9 @@ namespace
 		test::expect( !lg::json::Document::parse( "[1] 2" ).has_value() );
 		const auto error = lg::json::Document::parse( "{\n\"a\": tru}" );
 		test::expect( !error && error.error().message.contains( "line 2" ) );
+		// A leading byte order mark is skipped, one anywhere else is not.
+		test::expect( lg::json::Document::parse( "\xEF\xBB\xBF{\"a\":1}" ).has_value() );
+		test::expect( !lg::json::Document::parse( "[\xEF\xBB\xBF]" ).has_value() );
 	} );
 
 	const test::Registrar json_round_trip( "json round trip", [] {
@@ -153,22 +161,52 @@ namespace
 		test::expect( parsed->dictionary( "Jiten" ) != nullptr && !parsed->dictionary( "Jiten" )->enabled );
 	} );
 
-#ifdef __linux__
-	// /dev/full fails the write as a full disk does.
+#ifndef _WIN32
+	// A file size limit fails the write as a full disk does.
 	const test::Registrar config_full_disk( "config: a save the disk cannot hold leaves the saved settings as they were", [] {
 		const auto directory = test::scratch( "config-full-disk" );
 		const auto file      = directory / "config.json";
 		std::ofstream( file ) << "{}\n";
-		std::filesystem::create_symlink( "/dev/full", directory / "config.json.tmp" );
-		test::expect( !lg::config::Config{}.save( file ).has_value() );
-		if ( !test::expect( !std::filesystem::is_symlink( file ) ) )
-		{
-			return;
-		}
+		rlimit previous{};
+		::getrlimit( RLIMIT_FSIZE, &previous );
+		rlimit limit       = previous;
+		limit.rlim_cur     = 1;
+		const auto handler = ::signal( SIGXFSZ, SIG_IGN );
+		::setrlimit( RLIMIT_FSIZE, &limit );
+		const bool saved = lg::config::Config{}.save( file ).has_value();
+		::setrlimit( RLIMIT_FSIZE, &previous );
+		( void )::signal( SIGXFSZ, handler );
+		test::expect( !saved );
 		const std::ifstream in( file );
 		std::stringstream   kept;
 		kept << in.rdbuf();
 		test::expectEqual( kept.str(), std::string( "{}\n" ) );
+		test::expectEqual( std::distance( std::filesystem::directory_iterator( directory ), std::filesystem::directory_iterator() ), 1 );
+	} );
+
+	const test::Registrar config_concurrent_saves( "config: saves at the same time each write a whole file", [] {
+		const auto         file = test::scratch( "config-concurrent" ) / "config.json";
+		lg::config::Config narrow;
+		lg::config::Config wide;
+		std::atomic<int>   failures = 0;
+		narrow.dictionaries         = { { .title = "a", .enabled = true } };
+		wide.dictionaries.assign( 200, { .title = "a long dictionary title", .enabled = true } );
+		{
+			const std::jthread first( [&] {
+				for ( int i = 0; i < 100; ++i )
+				{
+					failures += narrow.save( file ) ? 0 : 1;
+				}
+			} );
+			const std::jthread second( [&] {
+				for ( int i = 0; i < 100; ++i )
+				{
+					failures += wide.save( file ) ? 0 : 1;
+				}
+			} );
+		}
+		test::expectEqual( failures.load(), 0 );
+		test::expect( lg::config::Config::load( file ).has_value() );
 	} );
 #endif
 
@@ -451,5 +489,52 @@ namespace
 	}
 
 	const test::Registrar zip_bomb( "zip entries declaring impossible sizes are refused", &zipBomb );
+
+	std::string le( std::uint64_t value, int size )
+	{
+		std::string out;
+		for ( int i = 0; i < size; ++i )
+		{
+			out.push_back( static_cast<char>( ( value >> ( 8 * i ) ) & 0xFFU ) );
+		}
+		return out;
+	}
+
+	void zipEntrySizes()
+	{
+		struct Item
+		{
+			std::string_view name;
+			std::uint16_t    method;
+			std::uint32_t    crc32;
+			std::string_view data;
+			std::uint32_t    size;
+		};
+		// An empty file deflated (03 00, as Python's zipfile writes it), and a stored "hi" claiming one byte.
+		const std::array items{ Item{ "empty", 8, 0, std::string_view( "\x03\x00", 2 ), 0 }, Item{ "liar", 0, 0xD8932AACU, "hi", 1 } };
+		std::string      local;
+		std::string      central;
+		for ( const Item& item : items )
+		{
+			// "Version needed" to "extra length" are the same in both headers.
+			const std::string fields = le( 20, 2 ) + le( 0, 2 ) + le( item.method, 2 ) + le( 0, 4 ) + le( item.crc32, 4 ) + le( item.data.size(), 4 ) + le( item.size, 4 ) + le( item.name.size(), 2 ) + le( 0, 2 );
+			central += le( 0x02014b50, 4 ) + le( 20, 2 ) + fields + std::string( 10, '\0' ) + le( local.size(), 4 ) + std::string( item.name );
+			local += le( 0x04034b50, 4 ) + fields + std::string( item.name ) + std::string( item.data );
+		}
+		const std::string bytes = local + central + le( 0x06054b50, 4 ) + le( 0, 4 ) + le( items.size(), 2 ) + le( items.size(), 2 ) + le( central.size(), 4 ) + le( local.size(), 4 ) + le( 0, 2 );
+
+		const auto path = test::scratch( "zip-entry-sizes" ) / "sizes.zip";
+		std::ofstream( path, std::ios::binary ).write( bytes.data(), static_cast<std::streamsize>( bytes.size() ) );
+		const auto archive = lg::ZipArchive::open( path );
+		if ( !test::expect( archive.has_value() && archive->entries().size() == 2 ) )
+		{
+			return;
+		}
+		const auto empty = archive->read( archive->entries()[0] );
+		test::expect( empty.has_value() && empty->empty() );
+		test::expect( !archive->read( archive->entries()[1] ).has_value() );
+	}
+
+	const test::Registrar zip_entry_sizes( "zip: an empty deflated entry reads, a stored one whose sizes disagree does not", &zipEntrySizes );
 
 } // namespace

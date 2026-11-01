@@ -427,7 +427,25 @@ namespace lexiglance::ipc
 			}
 			return fail( "cannot connect to {}: {}", endpoint, errorText( errno ) );
 		}
+		// The daemon runs as this user; without XDG_RUNTIME_DIR the socket is in /tmp, where another account can be first.
+		if ( !peerIsThisUser( socket.fd() ) )
+		{
+			return fail( "{} is not served by this user's daemon", endpoint );
+		}
 		return socket;
+	}
+
+	bool peerIsThisUser( int fd )
+	{
+	#ifdef __linux__
+		ucred     peer{};
+		socklen_t size = sizeof( peer );
+		return ::getsockopt( fd, SOL_SOCKET, SO_PEERCRED, &peer, &size ) == 0 && peer.uid == ::getuid();
+	#else
+		uid_t uid = 0;
+		gid_t gid = 0;
+		return ::getpeereid( fd, &uid, &gid ) == 0 && uid == ::getuid();
+	#endif
 	}
 
 	Result<Socket> listenOn( const std::string& endpoint )

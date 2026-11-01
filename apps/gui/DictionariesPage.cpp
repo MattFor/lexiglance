@@ -258,12 +258,21 @@ namespace lexiglance::gui
 			{
 				return;
 			}
-			const int row   = table_->indexOfTopLevelItem( item );
-			auto&     prefs = settings().config().dictionaries;
-			if ( row >= 0 && static_cast<std::size_t>( row ) < prefs.size() )
+			const int row = table_->indexOfTopLevelItem( item );
+			if ( row >= 0 )
 			{
-				const bool enabled                             = item->checkState( 0 ) == Qt::Checked;
-				prefs[static_cast<std::size_t>( row )].enabled = enabled;
+				// By title: the working copy can be stale (an import landed since its last load), so rows need not match.
+				auto&      prefs   = settings().config().dictionaries;
+				const auto title   = ss( item->text( 0 ) );
+				const bool enabled = item->checkState( 0 ) == Qt::Checked;
+				if ( auto it = std::ranges::find( prefs, title, &config::DictionaryPreference::title ); it != prefs.end() )
+				{
+					it->enabled = enabled;
+				}
+				else
+				{
+					prefs.insert( prefs.begin() + static_cast<std::ptrdiff_t>( std::min<std::size_t>( static_cast<std::size_t>( row ), prefs.size() ) ), { .title = title, .enabled = enabled } );
+				}
 				settings().commit();
 				if ( static_cast<std::size_t>( row ) < installed_.size() )
 				{
@@ -497,17 +506,16 @@ namespace lexiglance::gui
 	void DictionariesPage::move( int delta )
 	{
 		const int row    = table_->indexOfTopLevelItem( table_->currentItem() );
-		auto&     prefs  = settings().config().dictionaries;
 		const int target = row + delta;
-		if ( row < 0 || target < 0 || static_cast<std::size_t>( target ) >= prefs.size() || static_cast<std::size_t>( row ) >= installed_.size() )
+		if ( row < 0 || target < 0 || static_cast<std::size_t>( target ) >= installed_.size() || static_cast<std::size_t>( row ) >= installed_.size() )
 		{
 			return;
 		}
-		std::swap( prefs[static_cast<std::size_t>( row )], prefs[static_cast<std::size_t>( target )] );
 		std::swap( installed_[static_cast<std::size_t>( row )], installed_[static_cast<std::size_t>( target )] );
-		settings().commit();
 		rebuildTable();
 		table_->setCurrentItem( table_->topLevelItem( target ) );
+		// Preferences follow the table by title, never by row.
+		reorder();
 	}
 
 	void DictionariesPage::reorder()

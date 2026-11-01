@@ -131,6 +131,25 @@ namespace lexiglance::gui
 			return zip.addFile( name, path );
 		}
 
+		// The zip goes into public bug reports: never the raw file, it may hold the AnkiConnect key.
+		Result<> addConfig( ZipWriter& zip )
+		{
+			if ( !std::filesystem::is_regular_file( paths::configFile() ) )
+			{
+				return {};
+			}
+			auto config = config::Config::load( paths::configFile() );
+			if ( !config )
+			{
+				return addText( zip, "config-error.txt", qs( config.error().message ) + '\n' );
+			}
+			if ( !config->anki.key.empty() )
+			{
+				config->anki.key = "<redacted>";
+			}
+			return addText( zip, "config.json", qs( config->toJson( true ) ) + '\n' );
+		}
+
 	} // namespace
 
 	AboutPage::AboutPage( Context context, QWidget* parent ) :
@@ -344,7 +363,7 @@ namespace lexiglance::gui
 				return true;
 			};
 
-			if ( fail( addText( zip, "summary.txt", summary ) ) || fail( addText( zip, "status.json", status_json->isEmpty() ? QStringLiteral( "{}\n" ) : *status_json ) ) || fail( addText( zip, "health.json", health_json->isEmpty() ? QStringLiteral( "{}\n" ) : *health_json ) ) || fail( addOptionalFile( zip, "config.json", paths::configFile() ) ) || fail( addOptionalFile( zip, "settings-application.ini", paths::configDir() / "settings-application.ini" ) ) || fail( addOptionalFile( zip, "daemon.log", paths::stateDir() / "daemon.log" ) ) || fail( addOptionalFile( zip, "application.log", paths::stateDir() / "application.log" ) ) || fail( zip.close() ) )
+			if ( fail( addText( zip, "summary.txt", summary ) ) || fail( addText( zip, "status.json", status_json->isEmpty() ? QStringLiteral( "{}\n" ) : *status_json ) ) || fail( addText( zip, "health.json", health_json->isEmpty() ? QStringLiteral( "{}\n" ) : *health_json ) ) || fail( addConfig( zip ) ) || fail( addOptionalFile( zip, "settings-application.ini", paths::configDir() / "settings-application.ini" ) ) || fail( addOptionalFile( zip, "daemon.log", paths::stateDir() / "daemon.log" ) ) || fail( addOptionalFile( zip, "application.log", paths::stateDir() / "application.log" ) ) || fail( zip.close() ) )
 			{
 				return;
 			}
