@@ -1,12 +1,14 @@
 #include "../src/platform/linux/X11Pixel.h"
 #include "Test.h"
 
+#include <lexiglance/language/Language.h>
 #include <lexiglance/ocr/Onnx.h>
 #include <lexiglance/ocr/Paddle.h>
 
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <initializer_list>
 #include <ios>
 #include <string>
 #include <utility>
@@ -80,6 +82,31 @@ namespace
 		test::expectEqual( decoded[2].text, std::string( "で" ) );
 		test::expectEqual( decoded[2].last, 5 );
 		test::expect( decoded[2].confidence > 0.79F && decoded[2].confidence < 0.81F );
+	} );
+
+	const test::Registrar ocr_reading_worth( "ocr reading of the recogniser that knows the script", [] {
+		const auto line = []( std::initializer_list<const char*> letters, float confidence ) {
+			lg::ocr::TextLine out;
+			for ( const char* letter : letters )
+			{
+				out.characters.push_back( { .text = letter, .confidence = confidence } );
+			}
+			return out;
+		};
+		const std::array russian{ lg::lang::findLanguage( "ru" ) };
+		const std::array japanese{ lg::lang::findLanguage( "ja" ) };
+		if ( !test::expect( russian.front() != nullptr && japanese.front() != nullptr ) )
+		{
+			return;
+		}
+		// A Russian word as its recogniser reads it, as another one spells it in Latin look-alikes, and as a third one
+		// leaves it out: the surer the wrong ones are, the more a mean would have liked them.
+		const auto read     = lg::ocr::readingWorth( line( { "к", "н", "и", "г", "а", "." }, 0.80F ), russian );
+		const auto spelled  = lg::ocr::readingWorth( line( { "K", "H", "u", "r", "a", "." }, 0.95F ), japanese );
+		const auto left_out = lg::ocr::readingWorth( line( { " ", " ", "." }, 0.99F ), japanese );
+		test::expect( read > spelled && read > left_out );
+		// With no letter of anyone's script (digits), the reading with more to it.
+		test::expect( lg::ocr::readingWorth( line( { "1", "2", "3" }, 0.9F ), russian ) > lg::ocr::readingWorth( line( { "1" }, 0.99F ), japanese ) );
 	} );
 
 	const test::Registrar ocr_not_set_up( "ocr not set up is not a fault", [] {

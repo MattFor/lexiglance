@@ -26,6 +26,35 @@
 namespace lexiglance::daemon
 {
 
+	// The sentence key: each press turns the translation at the pointer on or off. It goes by what was last asked for
+	// there as well as by what is on show, which lags behind, so presses in quick succession each count.
+	struct SentenceKey
+	{
+		// How far the pointer may have moved for a press to be at the same spot as what was asked for before it.
+		static constexpr int reach = 24;
+
+		// A translation was asked for at x, y.
+		bool on = false;
+		int  x  = 0;
+		int  y  = 0;
+
+		[[nodiscard]] constexpr bool near( int at_x, int at_y ) const noexcept
+		{
+			const int dx = at_x - x;
+			const int dy = at_y - y;
+			return ( dx * dx ) + ( dy * dy ) <= reach * reach;
+		}
+
+		// A press at a point, `over` a translation on show or not: whether it asks for a translation (or turns one off).
+		[[nodiscard]] constexpr bool press( int at_x, int at_y, bool over ) noexcept
+		{
+			on = !( over || ( on && near( at_x, at_y ) ) );
+			x  = at_x;
+			y  = at_y;
+			return on;
+		}
+	};
+
 	// Sentences translated offline on a thread of their own: one at a time, and only the newest of those waiting (the
 	// pointer has moved on from the others). Models load when first needed and are let go after a while unused, since
 	// each holds several hundred megabytes; translations made are kept.
@@ -47,7 +76,9 @@ namespace lexiglance::daemon
 		// A translation already made of `text`, if there is one.
 		[[nodiscard]] std::optional<std::string> cached( const lang::Language& language, std::string_view text );
 
-		// Translates `text`, written in `language`; a request still waiting is dropped for it.
+		// Translates `text`, written in `language`. A request still waiting is dropped for it, and one being translated is
+		// given up for it, unless that is this very text: it then answers to the new ticket, so asking twice (the sentence
+		// key pressed again) translates once.
 		void request( std::uint64_t ticket, const lang::Language& language, std::string text );
 
 		// Translates `text` and waits for it, at most `timeout` (lexiglancectl, the settings application): after the request
@@ -88,10 +119,12 @@ namespace lexiglance::daemon
 		Result<translate::Model*> model( const lang::Language& language );
 		void                      remember( const lang::Language& language, const std::string& text, const std::string& translation );
 
-		Done                                        done_;
-		mutable std::mutex                          mutex_;
-		std::condition_variable_any                 wake_;
-		std::optional<Request>                      pending_;
+		Done                        done_;
+		mutable std::mutex          mutex_;
+		std::condition_variable_any wake_;
+		std::optional<Request>      pending_;
+		// The request being translated.
+		std::optional<Request>                      active_;
 		std::deque<std::move_only_function<void()>> jobs_;
 		bool                                        reload_ = false;
 		// A warm() waiting to be done: the scans of a key held down ask again and again.

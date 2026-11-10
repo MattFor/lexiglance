@@ -47,6 +47,24 @@ namespace
 		test::expect( none.has_value() && daemon::TranslationService::unavailable( **none ).contains( "has no translation model" ) );
 	} );
 
+	const test::Registrar sentence_key( "the sentence key toggles on every press", [] {
+		daemon::SentenceKey key;
+		// Pressed three times at one spot (the hand moves a little), faster than anything reaches the screen.
+		test::expect( key.press( 100, 100, false ) );
+		test::expect( !key.press( 103, 98, false ) );
+		test::expect( key.press( 100, 100, false ) );
+		// Further along the sentence its translation is shown for: still that translation, turned off.
+		test::expect( !key.press( 400, 100, true ) );
+		test::expect( key.press( 400, 100, false ) );
+		// Somewhere else a press translates, whatever the one before it did.
+		test::expect( key.press( 100, 300, false ) );
+		// A translation on show that no press here asked for (the pointer came back to it) is turned off as well.
+		key.on = false;
+		test::expect( !key.press( 100, 300, true ) );
+		// The hand moves the pointer a little; further off is another spot.
+		test::expect( key.near( 110, 310 ) && !key.near( 100, 330 ) );
+	} );
+
 	const test::Registrar translation_service_precisions( "each language is loaded from the weights it was given", [] {
 		auto japanese = lg::lang::parseLanguage( R"({"code": "ja", "script": ["3040-309F"], "translation": {"model": "Nobody/opus-mt-ja-en", "revision": "0"}})" );
 		auto russian  = lg::lang::parseLanguage( R"({"code": "ru", "script": ["0400-04FF"], "translation": {"model": "Nobody/opus-mt-ru-en", "revision": "0"}})" );

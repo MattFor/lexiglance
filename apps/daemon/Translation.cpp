@@ -87,6 +87,12 @@ namespace lexiglance::daemon
 	{
 		{
 			const std::scoped_lock lock( mutex_ );
+			if ( active_ && active_->language == &language && active_->text == text )
+			{
+				active_->ticket = ticket;
+				pending_.reset();
+				return;
+			}
 			pending_ = Request{ .ticket = ticket, .language = &language, .text = std::move( text ) };
 		}
 		wake_.notify_all();
@@ -272,6 +278,7 @@ namespace lexiglance::daemon
 				else
 				{
 					request = std::exchange( pending_, std::nullopt );
+					active_ = request;
 				}
 			}
 			if ( unload && !models_.empty() )
@@ -288,16 +295,49 @@ namespace lexiglance::daemon
 			{
 				continue;
 			}
-			last_used_  = std::chrono::steady_clock::now();
+			last_used_ = std::chrono::steady_clock::now();
+			// The ticket it answers to may have changed while it was translated (asked for again).
+			const auto answer = [&]( Result<std::string> translated, std::chrono::microseconds took ) {
+				std::uint64_t ticket = 0;
+				{
+					const std::scoped_lock lock( mutex_ );
+					ticket = active_->ticket;
+					active_.reset();
+				}
+				done_( ticket, std::move( translated ), took );
+			};
+			// Made a moment ago, while this request waited behind the very same text.
+			if ( auto known = cached( *request->language, request->text ) )
+			{
+				answer( std::move( *known ), std::chrono::microseconds::zero() );
+				continue;
+			}
 			auto loaded = model( *request->language );
 			if ( !loaded )
 			{
-				done_( request->ticket, std::unexpected( loaded.error() ), std::chrono::microseconds::zero() );
+				answer( std::unexpected( loaded.error() ), std::chrono::microseconds::zero() );
 				continue;
 			}
+			// A newer text waiting means nobody is looking at this one any more (the wheel turned on, the pointer moved).
+			bool       dropped    = false;
 			const auto started    = std::chrono::steady_clock::now();
-			auto       translated = ( *loaded )->translate( request->text );
+			auto       translated = ( *loaded )->translate( request->text, [&] {
+				const std::scoped_lock lock( mutex_ );
+				return dropped = pending_.has_value();
+			} );
 			const auto took       = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - started );
+			if ( dropped && !translated )
+			{
+				log::debug( "translation: given up after {} ms for a newer text", took.count() / 1000 );
+				const std::scoped_lock lock( mutex_ );
+				// Asked for again just now, in place of that newer text: translated after all.
+				if ( !pending_ )
+				{
+					pending_ = std::move( active_ );
+				}
+				active_.reset();
+				continue;
+			}
 			log::debug( "translation: {} characters in {} ms", request->text.size(), took.count() / 1000 );
 			if ( translated )
 			{
@@ -307,7 +347,7 @@ namespace lexiglance::daemon
 			{
 				log::warn( "translation failed: {}", translated.error().message );
 			}
-			done_( request->ticket, std::move( translated ), took );
+			answer( std::move( translated ), took );
 		}
 	}
 

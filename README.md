@@ -46,7 +46,8 @@ same dictionary format as [Yomitan](https://yomitan.wiki/).
   [lexiglance-windows-setup.exe](https://github.com/MattFor/lexiglance/releases/latest/download/lexiglance-windows-setup.exe)
   and run it. Administrator permissions are not needed, it may also warn about an unknown publisher: choose **More
   info -> Run anyway**. Running a newer one updates in place. For games that run as administrator, turn on
-  **Overview -> Run as administrator**.
+  **Overview -> Run as administrator**. Untick **Install the settings window** (`/NOGUI` with `/S`) for the daemon and
+  `lexiglancectl` alone: set up through `config.json`, and updated by running a newer setup.
 - **Linux:** download
   [Lexiglance-x86_64.AppImage](https://github.com/MattFor/lexiglance/releases/latest/download/Lexiglance-x86_64.AppImage),
   make it executable (`chmod +x Lexiglance-x86_64.AppImage`) and run it.

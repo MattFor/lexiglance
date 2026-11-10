@@ -2,6 +2,8 @@
 ; A welcome page, a progress bar, then Lexiglance opens. Running a newer one updates in place; settings and dictionaries
 ; live elsewhere and stay. An update that fails part way puts the version before back. The uninstaller asks whether to
 ; delete settings, dictionaries and downloaded models too (yes unless unticked; /KEEPDATA keeps them when silent).
+; The settings window can be left out (a box on the welcome page, /NOGUI when silent): the daemon and lexiglancectl
+; alone, set up through config.json. An update keeps it out.
 ; Built from an install prefix by .github/scripts/windows-installer.ps1:
 ;   makensis /DVERSION=x.y.z /DSTAGE=<prefix> /DOUTFILE=<setup.exe> installer.nsi
 
@@ -47,6 +49,9 @@ VIAddVersionKey "LegalCopyright" "MattFor, MIT license"
 
 ; What the welcome page says: a first install, or one over the version there is.
 Var WelcomeText
+; Whether the settings window is installed (1) or the daemon and lexiglancectl alone (0), and the box that asks.
+Var Gui
+Var GuiBox
 
 !define MUI_ICON "lexiglance.ico"
 !define MUI_UNICON "lexiglance.ico"
@@ -56,6 +61,7 @@ Var WelcomeText
 !define MUI_WELCOMEPAGE_TEXT "$WelcomeText"
 !define MUI_PAGE_CUSTOMFUNCTION_PRE WelcomePre
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomeShow
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE WelcomeLeave
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
 UninstPage custom un.ChoosePage un.ChooseLeave
@@ -75,10 +81,40 @@ Function WelcomePre
     ${EndIf}
 FunctionEnd
 
-; The button that starts it says what it does.
+; The button that starts it says what it does. Below the text, the one choice there is.
 Function WelcomeShow
     GetDlgItem $0 $HWNDPARENT 1
     SendMessage $0 ${WM_SETTEXT} 0 "STR:Install"
+    ${NSD_CreateCheckbox} 120u 177u 195u 12u "Install the settings window (untick for the daemon alone)"
+    Pop $GuiBox
+    SetCtlColors $GuiBox "" "${MUI_BGCOLOR}"
+    ${If} $Gui == 1
+        ${NSD_Check} $GuiBox
+    ${EndIf}
+FunctionEnd
+
+Function WelcomeLeave
+    ${NSD_GetState} $GuiBox $0
+    ${If} $0 == ${BST_CHECKED}
+        StrCpy $Gui 1
+    ${Else}
+        StrCpy $Gui 0
+    ${EndIf}
+FunctionEnd
+
+; The settings window comes along unless /NOGUI says otherwise, or the Lexiglance being replaced is without one.
+Function .onInit
+    StrCpy $Gui 1
+    ${If} ${FileExists} "$INSTDIR\bin\lexiglanced.exe"
+    ${AndIfNot} ${FileExists} "$INSTDIR\bin\lexiglance.exe"
+        StrCpy $Gui 0
+    ${EndIf}
+    ${GetParameters} $0
+    ClearErrors
+    ${GetOptions} $0 "/NOGUI" $1
+    ${IfNot} ${Errors}
+        StrCpy $Gui 0
+    ${EndIf}
 FunctionEnd
 
 ; The programs cannot be replaced or removed while they run: ended, and waited for (up to ten seconds) until Windows
@@ -197,8 +233,20 @@ Section
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
     SetShellVarContext current
-    ; The shortcut the settings application keeps too, so there is only ever one.
-    CreateShortcut "$SMPROGRAMS\Lexiglance.lnk" "$INSTDIR\bin\lexiglance.exe"
+    ${If} $Gui == 1
+        ; The shortcut the settings application keeps too, so there is only ever one.
+        CreateShortcut "$SMPROGRAMS\Lexiglance.lnk" "$INSTDIR\bin\lexiglance.exe"
+    ${Else}
+        ; Without the settings window: its program, Qt, and ICU, which only Qt loads, go again; so do the ways to start it.
+        ; ponytail: Qt's smaller libraries (PCRE2-16, double-conversion, md4c) stay; list them once the megabyte matters.
+        Delete "$INSTDIR\bin\lexiglance.exe"
+        Delete "$INSTDIR\bin\qt.conf"
+        Delete "$INSTDIR\bin\Qt6*.dll"
+        Delete "$INSTDIR\bin\libicu*.dll"
+        RMDir /r "$INSTDIR\share\qt6"
+        Delete "$SMPROGRAMS\Lexiglance.lnk"
+        DeleteRegValue HKCU "${RUN_KEY}" "Lexiglance tray"
+    ${EndIf}
 
     ; Start with Windows, the settings application's option under the same name: turned on by a first install, and on
     ; an update kept pointing here if it is on (someone who turned it off keeps it off).
@@ -211,13 +259,14 @@ Section
     ; The settings application in the tray at login too, when chosen there: kept pointing here as well.
     ReadRegStr $3 HKCU "${RUN_KEY}" "Lexiglance tray"
     ${If} $3 != ""
+    ${AndIf} $Gui == 1
         WriteRegStr HKCU "${RUN_KEY}" "Lexiglance tray" '"$INSTDIR\bin\lexiglance.exe" --tray'
     ${EndIf}
 
     WriteRegStr HKCU "${APP_KEY}" "InstallDir" "$INSTDIR"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "Lexiglance"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\bin\lexiglance.exe"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\bin\lexiglanced.exe"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "MattFor"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "URLInfoAbout" "https://github.com/MattFor/lexiglance"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
@@ -234,7 +283,8 @@ SectionEnd
 
 ; Straight into Lexiglance, which starts its daemon. A silent install (CI) starts nothing, unless it is Lexiglance
 ; updating itself: /relaunch=tray opens it in the tray, /relaunch=window on its updates, /relaunch=daemon only the
-; daemon (an update made in the background, with no window open).
+; daemon (an update made in the background, with no window open). Without the settings window the daemon is all there
+; is to start.
 Function .onInstSuccess
     RMDir /r "$INSTDIR\bin.old"
     RMDir /r "$INSTDIR\lib.old"
@@ -245,16 +295,19 @@ Function .onInstSuccess
     ClearErrors
     ${GetOptions} $0 "/relaunch=" $1
     ${IfNot} ${Errors}
-        ${If} $1 == "tray"
-            Exec '"$INSTDIR\bin\lexiglance.exe" --tray'
-        ${ElseIf} $1 == "daemon"
+        ${If} $1 == "daemon"
+        ${OrIf} $Gui == 0
             Exec '"$INSTDIR\bin\lexiglanced.exe"'
+        ${ElseIf} $1 == "tray"
+            Exec '"$INSTDIR\bin\lexiglance.exe" --tray'
         ${Else}
             Exec '"$INSTDIR\bin\lexiglance.exe" --page overview'
         ${EndIf}
-    ${Else}
-        ${IfNot} ${Silent}
+    ${ElseIfNot} ${Silent}
+        ${If} $Gui == 1
             Exec '"$INSTDIR\bin\lexiglance.exe"'
+        ${Else}
+            Exec '"$INSTDIR\bin\lexiglanced.exe"'
         ${EndIf}
     ${EndIf}
 FunctionEnd

@@ -153,11 +153,9 @@ namespace lexiglance::daemon
 		void logSetup( const config::Config& cfg );
 
 		void onScan( platform::Point point, const platform::WindowInfo& window, bool sentence, bool sentence_pressed );
-		// Whether a translation asked for is still being made.
-		[[nodiscard]] bool translating();
-		// Whether what the sentence key last asked for is still on its way: the screen being read for it, or the
-		// translation being made (backend thread).
-		[[nodiscard]] bool sentenceComing();
+		// Asks the capture thread for a lookup (backend thread). `acted`: the sentence key or the wheel asks, which
+		// replaces whatever was asked for before it.
+		void post( CaptureRequest request, bool acted );
 		// Lets go of a translation on its way, so it cannot arrive after what replaced it.
 		void               forgetTranslation();
 		void               onClickOutside();
@@ -185,6 +183,19 @@ namespace lexiglance::daemon
 			platform::Point                       last_point;
 			platform::WindowInfo                  last_window;
 			bool                                  last_whole = false;
+
+			// Keeps what a request read off the screen at a point (not a selection, nor the wheel asking for another
+			// length of what was kept).
+			void keep( const CaptureRequest& request, const std::optional<platform::CapturedText>& captured, bool whole )
+			{
+				if ( !request.text && request.length == 0 )
+				{
+					last        = captured;
+					last_point  = request.point;
+					last_window = request.window;
+					last_whole  = whole;
+				}
+			}
 		};
 
 		// What the capture thread read for a request. Where the text came from, and text that was read but is not looked
@@ -280,6 +291,8 @@ namespace lexiglance::daemon
 		// the latest capture found stays valid although newer scans were made.
 		std::atomic<std::uint64_t> latest_key_{ 0 };
 		std::atomic<std::uint64_t> cancelled_{ 0 };
+		// The generation the sentence key or the wheel last asked at: what was asked for before it is not shown.
+		std::atomic<std::uint64_t> acted_{ 0 };
 		std::atomic<std::uint64_t> lookups_{ 0 };
 		std::atomic<std::uint64_t> lookup_nanoseconds_{ 0 };
 		std::atomic<std::uint64_t> capture_resets_{ 0 };
@@ -319,14 +332,14 @@ namespace lexiglance::daemon
 		int          forced_length_ = 0;
 		// Turns of the wheel while the trigger's first popup was still on its way (UI thread), applied once it is up.
 		int pending_wheel_ = 0;
+		// A lookup was asked for and neither its popup nor word that there is none has come yet (UI thread).
+		bool awaiting_ = false;
 		// The last press of the sentence key turned a translation off: nothing is translated until it is pressed again.
 		bool translation_off_ = false;
-		// When the sentence key last asked for a translation and where the pointer was, so pressing it again while that
-		// one is still being made does not throw the work away (backend thread).
-		std::chrono::steady_clock::time_point sentence_asked_;
-		platform::Point                       sentence_point_{};
-		std::string                           autoplayed_;
-		AudioPlayer                           audio_;
+		// Whether the lookup last asked for at the pointer translates, and where that was (backend thread).
+		SentenceKey sentence_key_;
+		std::string autoplayed_;
+		AudioPlayer audio_;
 		// What has been looked up over time, for the Statistics page; kept between runs. `unsaved_stats_` counts the
 		// lookups since it was last written (capture thread only).
 		Statistics  stats_;

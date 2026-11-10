@@ -1,10 +1,12 @@
 # Checks a Windows package on its own: the .zip cpack makes, unpacked, or the setup .exe, installed silently and
 # uninstalled at the end. With nothing but Windows on PATH, the Qt plugins are there, the programs start, a dictionary
 # imports and a conjugated word is found. Used by CI and the release.
-#   powershell -File .github/scripts/smoke-test-windows.ps1 <package.zip | setup.exe>
+#   powershell -File .github/scripts/smoke-test-windows.ps1 <package.zip | setup.exe> [-NoGui]
+# -NoGui installs the setup .exe without the settings window (/NOGUI): the daemon and lexiglancectl must work alone,
+# and an update over it must keep the settings window out.
 # The installer check registers and unregisters Lexiglance for the current user (Start menu, Apps list, autostart):
 # run it where Lexiglance is not installed, as CI does.
-param([Parameter(Mandatory = $true)][string]$Package)
+param([Parameter(Mandatory = $true)][string]$Package, [switch]$NoGui)
 
 $ErrorActionPreference = 'Stop'
 $work = Join-Path ([IO.Path]::GetTempPath()) ('lexiglance-smoke-' + [Guid]::NewGuid().ToString('N'))
@@ -22,9 +24,17 @@ if ($installer) {
     # left a shortcut to itself; the installer has to make its own.
     Remove-Item $shortcut -ErrorAction SilentlyContinue
     $target = Join-Path $work 'installed'
-    $setup  = Start-Process $Package -ArgumentList "/S /D=$target" -Wait -PassThru
+    $options = if ($NoGui) { '/S /NOGUI' } else { '/S' }
+    $setup  = Start-Process $Package -ArgumentList "$options /D=$target" -Wait -PassThru
     Check 'the installer runs silently' ($setup.ExitCode -eq 0)
-    Check 'the installer adds a Start menu entry' (Test-Path $shortcut)
+    if ($NoGui) {
+        # Once more as an update would run it, without the option: what is installed decides.
+        $update = Start-Process $Package -ArgumentList "/S /D=$target" -Wait -PassThru
+        Check 'an update keeps the settings window out' ($update.ExitCode -eq 0 -and -not (Test-Path (Join-Path $target 'bin\lexiglance.exe')))
+        Check 'no Start menu entry without the settings window' (-not (Test-Path $shortcut))
+    } else {
+        Check 'the installer adds a Start menu entry' (Test-Path $shortcut)
+    }
     Check 'the installer starts Lexiglance with Windows' (Autostart)
 } else {
     Expand-Archive -Path $Package -DestinationPath $work
@@ -38,10 +48,14 @@ $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\W
 $env:LEXIGLANCE_HOME = Join-Path $work 'home'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
-foreach ($plugin in 'platforms\qwindows.dll', 'styles\*.dll', 'imageformats\*.dll', 'tls\qschannelbackend.dll') {
-    Check "Qt plugin $plugin" (@(Get-ChildItem (Join-Path $root "share\qt6\plugins\$plugin") -ErrorAction SilentlyContinue).Count -gt 0)
+if ($NoGui) {
+    Check 'neither the settings window nor Qt is installed' (@(Get-ChildItem $bin -Include 'lexiglance.exe', 'Qt6*.dll', 'libicu*.dll', 'qt.conf' -Recurse).Count -eq 0 -and -not (Test-Path (Join-Path $root 'share\qt6')))
+} else {
+    foreach ($plugin in 'platforms\qwindows.dll', 'styles\*.dll', 'imageformats\*.dll', 'tls\qschannelbackend.dll') {
+        Check "Qt plugin $plugin" (@(Get-ChildItem (Join-Path $root "share\qt6\plugins\$plugin") -ErrorAction SilentlyContinue).Count -gt 0)
+    }
+    Check 'qt.conf next to the programs' (Test-Path (Join-Path $bin 'qt.conf'))
 }
-Check 'qt.conf next to the programs' (Test-Path (Join-Path $bin 'qt.conf'))
 
 # lexiglancectl is a console program. (The words are spelled as code points: this script stays ASCII.)
 $fixture   = Join-Path $PSScriptRoot '..\..\tests\data\fixture'
@@ -55,9 +69,11 @@ Check 'a conjugated word is found' ($LASTEXITCODE -eq 0 -and $found.Contains($le
 # The daemon and the settings application are windowed programs: they are waited for. A missing DLL fails at start.
 $daemon = Start-Process "$bin\lexiglanced.exe" -ArgumentList '--version' -Wait -PassThru
 Check 'the daemon starts' ($daemon.ExitCode -eq 0)
-$shot     = Join-Path $work 'about.png'
-$settings = Start-Process "$bin\lexiglance.exe" -ArgumentList '--screenshot', 'about', "`"$shot`"", '100' -Wait -PassThru
-Check 'the settings application starts and draws a page' ($settings.ExitCode -eq 0 -and (Test-Path $shot) -and (Get-Item $shot).Length -gt 10000)
+if (-not $NoGui) {
+    $shot     = Join-Path $work 'about.png'
+    $settings = Start-Process "$bin\lexiglance.exe" -ArgumentList '--screenshot', 'about', "`"$shot`"", '100' -Wait -PassThru
+    Check 'the settings application starts and draws a page' ($settings.ExitCode -eq 0 -and (Test-Path $shot) -and (Get-Item $shot).Length -gt 10000)
+}
 
 if ($installer) {
     # _? runs the uninstaller in place and waits for it, instead of starting a copy of it and returning at once.

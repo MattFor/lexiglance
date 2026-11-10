@@ -30,6 +30,8 @@ option(LEXIGLANCE_BUILD_DAEMON "Build the lookup daemon (lexiglanced)" ON)
 option(LEXIGLANCE_BUILD_GUI "Build the Qt settings application (lexiglance)" ON)
 option(LEXIGLANCE_BUILD_CTL "Build the lexiglancectl scripting client" ON)
 option(LEXIGLANCE_BUILD_TESTS "Build the unit tests" ON)
+option(LEXIGLANCE_BUILD_TOOLS
+       "Build the developer tools (the OCR benchmark's driver, see tools/)" OFF)
 option(LEXIGLANCE_WITH_ATSPI
        "Read text under the cursor through AT-SPI (Linux)" ON)
 option(LEXIGLANCE_ENABLE_LTO
@@ -88,6 +90,10 @@ if(LEXIGLANCE_BUILD_TESTS)
 endif()
 if(LEXIGLANCE_FUZZ)
     add_subdirectory(tests/fuzz)
+endif()
+# They read the screen as the daemon does, so they need what it is built from.
+if(LEXIGLANCE_BUILD_TOOLS AND LEXIGLANCE_BUILD_DAEMON)
+    add_subdirectory(tools)
 endif()
 
 # Windows executables carry a manifest that makes UTF-8 their code page.

@@ -52,9 +52,10 @@ jobs:
         if: startsWith(matrix.cxx, 'clang')
         run: wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 20
       - name: Configure
+        # The tools too (tools/): nothing else builds them, and they are of no use once they no longer compile.
         run: >-
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
-          -DLEXIGLANCE_WARNINGS_AS_ERRORS=ON
+          -DLEXIGLANCE_WARNINGS_AS_ERRORS=ON -DLEXIGLANCE_BUILD_TOOLS=ON
       - name: Build
         run: cmake --build build
       - name: Test
@@ -199,3 +200,6 @@ jobs:
           ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem build/lexiglance-*.zip | Select-Object -First 1).FullName
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem build/*-setup.exe | Select-Object -First 1).FullName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Without the settings window: the daemon and lexiglancectl must not miss what was left out with it.
+          ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem build/*-setup.exe | Select-Object -First 1).FullName -NoGui

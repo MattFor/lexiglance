@@ -2279,6 +2279,16 @@ namespace lexiglance::platform
 			std::vector<std::pair<std::size_t, Rect>> cut;
 		};
 
+		// What of the pointer's text lies outside the region that was read: its line running on past the region's edge
+		// before or after it (along the reading direction), and how large its letters are.
+		struct Cut
+		{
+			bool before   = false;
+			bool after    = false;
+			bool vertical = false;
+			int  size     = 0;
+		};
+
 		class OcrCapture final : public TextCapture
 		{
 		public:
@@ -2479,13 +2489,68 @@ namespace lexiglance::platform
 			// grid, so moving along a line keeps hitting the cache.
 			std::optional<CapturedText> capturePaddle( Point point, const WindowInfo& window, CaptureScope scope )
 			{
-				const int u      = unit_;
-				Rect      region = { .x = floorTo( point.x - ( 10 * u ), 8 * u ), .y = floorTo( point.y - ( 10 * u ), 4 * u ), .width = 44 * u, .height = 20 * u };
-				region           = intersect( region, screen_->bounds() );
+				const int u     = unit_;
+				Rect      limit = screen_->bounds();
 				if ( const auto bounds = windowRect( window.id ) )
 				{
-					region = intersect( region, *bounds );
+					limit = intersect( limit, *bounds );
 				}
+				const Rect region = intersect( { .x = floorTo( point.x - ( 10 * u ), 8 * u ), .y = floorTo( point.y - ( 10 * u ), 4 * u ), .width = 44 * u, .height = 20 * u }, limit );
+				Cut        cut;
+				auto       text = readRegion( region, point, scope, 0.0, cut );
+				if ( !cut.before && !cut.after )
+				{
+					return text;
+				}
+				// Large letters, or a long line pointed at near its end: the text runs on past what was read. It is read
+				// again with as much of the screen again on that side, the letters shrunk to a size the detector is at
+				// home with (and the whole to what it takes in at once), so large text costs no more for it.
+				Rect       wider = region;
+				const auto grow  = [&]( int Rect::* at, int Rect::* length ) {
+					const int from = cut.before ? std::max( limit.*at, region.*at - region.*length ) : region.*at;
+					const int to   = cut.after ? std::min( limit.*at + limit.*length, region.*at + ( 2 * region.*length ) ) : region.*at + region.*length;
+					wider.*at      = from;
+					wider.*length  = to - from;
+				};
+				cut.vertical ? grow( &Rect::y, &Rect::height ) : grow( &Rect::x, &Rect::width );
+				if ( wider.width == region.width && wider.height == region.height )
+				{
+					return text;
+				}
+				log::debug( "ocr: the line at {},{} runs on past {}x{}: reading {}x{}", point.x, point.y, region.width, region.height, wider.width, wider.height );
+				const double zoom = std::min( std::clamp( 20.0 / std::max( 1, cut.size ), 0.2, 1.0 ), 3200.0 / std::max( wider.width, wider.height ) );
+				Cut          beyond;
+				auto         whole = readRegion( wider, point, scope, zoom, beyond );
+				return whole ? std::move( whole ) : std::move( text );
+			}
+
+			// What of the text read at character `start` of `line`, with the lines its sentence runs over, lies outside
+			// `region`: a box that reaches the region's edge is a line the edge cut through.
+			[[nodiscard]] static Cut runsOn( const Rect& region, const ocr::TextLine& line, std::size_t start, std::span<const ocr::TextLine* const> preceding, std::span<const ocr::TextLine* const> following, CaptureScope scope )
+			{
+				const auto reaches = [&]( const ocr::TextLine& of, bool end ) {
+					const int from = of.vertical ? of.box.y : of.box.x;
+					const int to   = from + ( of.vertical ? of.box.height : of.box.width );
+					return end ? to >= ( of.vertical ? region.height : region.width ) : from <= 0;
+				};
+				// What comes before the pointer matters for a sentence, and for a word written with spaces that starts
+				// there; what comes after it, while fewer characters were read than are looked up.
+				const auto before = line.characters | std::views::take( start ) | std::views::transform( &ocr::Character::text );
+				const bool word   = !line.vertical && std::ranges::none_of( before, isSpace ) && wordScript( line.characters | std::views::transform( &ocr::Character::text ) );
+				const bool few    = line.characters.size() - start < scope.characters;
+				return {
+					.before   = ( reaches( line, false ) && ( scope.sentence || word ) ) || ( scope.sentence && !preceding.empty() && reaches( *preceding.front(), false ) ),
+					.after    = ( reaches( line, true ) && ( scope.sentence || few ) ) || ( scope.sentence && !following.empty() && reaches( *following.back(), true ) ),
+					.vertical = line.vertical,
+					.size     = line.vertical ? line.box.inner_width : line.box.inner_height,
+				};
+			}
+
+			// The text at the pointer as `region` shows it. `zoom` is the size the detector sees the region at (0: as it
+			// is); `cut` is told what of the text lies outside the region.
+			std::optional<CapturedText> readRegion( const Rect& region, Point point, CaptureScope scope, double zoom, Cut& cut )
+			{
+				const int u = unit_;
 				if ( region.width < 16 || region.height < 16 || !region.contains( point ) )
 				{
 					return std::nullopt;
@@ -2546,7 +2611,7 @@ namespace lexiglance::platform
 					{
 						paddle_cache_.erase( paddle_cache_.begin() );
 					}
-					PaddleRegion entry{ .region = region, .hash = hash, .boxes = paddle_->detect( image ), .strict = 0, .lines = {}, .detected = now, .pixels = image.rgb, .hidden = covered.all, .blank = covered.blank, .cut = {} };
+					PaddleRegion entry{ .region = region, .hash = hash, .boxes = paddle_->detect( image, zoom ), .strict = 0, .lines = {}, .detected = now, .pixels = image.rgb, .hidden = covered.all, .blank = covered.blank, .cut = {} };
 					entry.strict = entry.boxes.size();
 					// Sparse glyphs (dotted and thin pixel fonts) only stand out with lower thresholds.
 					std::ranges::move( paddle_->redetect( 0.15F, 0.3F ), std::back_inserter( entry.boxes ) );
@@ -2599,6 +2664,7 @@ namespace lexiglance::platform
 				const auto           start = pointed( line, local );
 				if ( !start )
 				{
+					log::debug( "ocr: {},{} is beside the line", point.x, point.y );
 					return std::nullopt;
 				}
 				// A sentence the line does not finish goes on on the next lines of its paragraph (wrapped text in a chat,
@@ -2614,6 +2680,7 @@ namespace lexiglance::platform
 				{
 					preceding = precedingLines( *cached, *chosen, read );
 				}
+				cut = runsOn( region, line, *start, preceding, following, scope );
 				return selectLine( line, *start, preceding, following, region, scope.characters, loose ? 0.8F : 0.6F );
 			}
 
@@ -3051,8 +3118,13 @@ namespace lexiglance::platform
 					++count;
 				}
 				const float confidence = sum / static_cast<float>( count );
-				if ( confidence < gate || chars[start].confidence < gate - 0.1F )
+				// One unsure letter in a line that was read surely is a letter all the same (stylised lettering has
+				// them): it does not keep the whole line from being looked up.
+				const float whole = std::accumulate( chars.begin(), chars.end(), 0.0F, []( float all, const ocr::Character& c ) { return all + c.confidence; } ) / static_cast<float>( chars.size() );
+				const bool  sure  = chars.size() >= 4 && whole >= gate + 0.2F && chars[start].confidence >= 0.2F;
+				if ( confidence < gate || ( chars[start].confidence < gate - 0.1F && !sure ) )
 				{
+					log::debug( "ocr: too unsure of «{}» ({:.2f}, and {:.2f} from there on)", chars[start].text, chars[start].confidence, confidence );
 					return std::nullopt;
 				}
 

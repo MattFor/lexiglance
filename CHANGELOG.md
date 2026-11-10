@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Windows: the installer can leave the settings window out (a box on its welcome page, `/NOGUI` for a silent
+  install), for the daemon and `lexiglancectl` alone. An update keeps it out.
+
+### Changed
+
+- The sentence key acts on every press, however quickly it is pressed: where a translation was asked for it turns it
+  off, anywhere else it translates. A press no longer waits for the one before it, and pressing again translates
+  nothing twice.
+- A translation nobody is waiting for any more (the wheel turned on, the pointer moved to another sentence) is given
+  up, so the one that is wanted comes sooner.
+
+### Fixed
+
+- OCR: with the recognisers of several languages loaded, a line could come back as « .» or spelled in look-alike
+  letters of another script (Сохранить as CoxpaHuTb), because the recogniser that did not know its script was the
+  surest of what it read.
+- OCR: large text, and long lines pointed at near their end, are read whole. A line that runs on past the area that
+  was read is read again from further out; sentences in letters of 48 px and more used to lose their beginning.
+- Text chosen with the wheel no longer snaps back to the word when the hand on the wheel moves the pointer by a few
+  pixels.
+- Turns of the wheel where nothing was found are no longer applied to the next popup.
+
 ## [1.3.7] - 12:14 CEST 01-11-2026
 
 ### Added

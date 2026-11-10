@@ -101,6 +101,36 @@ build/fuzz/tests/fuzz/fuzzZip -max_total_time=300 corpus/
 
 A crash input found this way belongs in a regression test next to the fix.
 
+## Measuring OCR
+
+A change to how text is read off the screen (`src/ocr`, `src/platform/ocr`) is measured rather than judged by a few
+screenshots: what helps one font often costs another. The benchmark draws lines of Japanese, Russian, Korean and
+Greek in some fifty fonts, sizes and styles, has the build's own screen reading read them, and counts the characters
+that came out wrong. Run it on the code before the change and after it:
+
+```sh
+cmake --preset release -DLEXIGLANCE_BUILD_TOOLS=ON && cmake --build --preset release
+QUICK=1 bash tools/ocr-bench/run.sh build/release before          # a fifth of the pictures; without QUICK=1, all
+QUICK=1 bash tools/ocr-bench/run.sh build/release after before    # with the change: beside the results before it
+```
+
+It needs PaddleOCR downloaded (**Scanning -> Download PaddleOCR**), Python with Pillow and NumPy, and fontconfig;
+the fonts and the recognisers of the other languages are downloaded on the first run. `tools/ocr-bench/run.sh` says
+more, `--beside` among it: pointing next to the text, where nothing may be read.
+
+## Trying the keys and the wheel
+
+The trigger, the sentence key and the wheel are tried on a real daemon in a display of its own (Xvfb), so nothing on
+your desktop is touched: xdotool presses and turns as fast as an impatient hand, and the daemon's log says whether
+every press counted.
+
+```sh
+bash tools/input-test.sh build/release/apps/daemon/lexiglanced
+```
+
+It needs Xvfb, xdotool and ImageMagick, and PaddleOCR, the Japanese translation model and a Japanese dictionary
+installed.
+
 ## Adding a language
 
 Most languages are a single JSON file in `data/languages`. [docs/languages.md](docs/languages.md) explains the format.

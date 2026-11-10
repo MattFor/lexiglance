@@ -200,6 +200,8 @@ jobs:
           ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem dist/*.zip | Select-Object -First 1).FullName
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem dist/*-setup.exe | Select-Object -First 1).FullName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem dist/*-setup.exe | Select-Object -First 1).FullName -NoGui
       - uses: actions/upload-artifact@v7
         with:
           name: package-windows

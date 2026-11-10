@@ -139,9 +139,6 @@ namespace lexiglance::daemon
 			return out;
 		}
 
-		// How far the pointer may have moved for a press of the sentence key to be the same spot as the press before it.
-		constexpr int sentence_reach = 24;
-
 		// Identifies what a popup from the screen shows, so an identical one is not drawn again; 0 for other popups.
 		std::uint64_t popupKey( bool from_screen, const platform::CapturedText& captured, std::uint32_t matched, int length, const platform::Rect& anchor, std::string_view translated )
 		{
@@ -479,7 +476,8 @@ namespace lexiglance::daemon
 		events.trigger_released = [this] {
 			pending_wheel_   = 0;
 			translation_off_ = false;
-			sentence_asked_  = {};
+			sentence_key_.on = false;
+			awaiting_        = false;
 			if ( !backend_->pointerOnPopup() )
 			{
 				++generation_;
@@ -843,12 +841,6 @@ namespace lexiglance::daemon
 	// Pipeline
 	// ---------------------------------------------------------------------------------------------------------------------
 
-	bool Daemon::translating()
-	{
-		const std::scoped_lock lock( translating_mutex_ );
-		return translating_.has_value();
-	}
-
 	void Daemon::forgetTranslation()
 	{
 		const std::scoped_lock lock( translating_mutex_ );
@@ -866,38 +858,31 @@ namespace lexiglance::daemon
 		{
 			return;
 		}
-		// A translation asked for with the sentence key stays while the pointer is over what it translates: the key let
-		// go, the pointer moving along the sentence.
 		const bool over = backend_->popupVisible() && current_.chosen && onChosen( *current_.chosen, point );
-		// The key pressed again over a translation turns it off: the same text is looked up without one, and pressing
-		// once more translates afresh. Only a press does this, not the key being held while the pointer moves.
+		// On text chosen with the wheel: over it, or where it was read while its popup is still on its way.
+		const bool choice = forced_length_ > 0 && ( over || sentence_key_.near( point.x, point.y ) );
+		// Each press of the sentence key decides: where a translation was asked for it turns it off (the same text is
+		// looked up without one), anywhere else it translates. Between presses the key stays down, so the choice holds
+		// until the next one. Nothing is thrown away by pressing again: the screen as it was read and the translations
+		// made are kept, and one being made goes on for whoever asks for it next.
 		if ( sentence_pressed )
 		{
-			// The press before this one is still being worked on at this spot (the screen read, the model loaded, the
-			// sentence translated): pressing again would throw that work away and start over, so it is let be.
-			const int dx = point.x - sentence_point_.x;
-			const int dy = point.y - sentence_point_.y;
-			if ( sentenceComing() && ( dx * dx ) + ( dy * dy ) <= sentence_reach * sentence_reach )
-			{
-				log::debug( "translation: already on its way, the sentence key is let be" );
-				return;
-			}
-			// Each press decides: over a translation it turns it off, anywhere else it translates. Between presses the key
-			// stays down, so the choice holds until the next one.
-			translation_off_ = over && current_.keeps;
+			translation_off_ = !sentence_key_.press( point.x, point.y, over && current_.keeps );
 			if ( translation_off_ )
 			{
 				log::debug( "translation: turned off with the sentence key" );
-				sentence_asked_ = {};
 				forgetTranslation();
+				// The translation still on show is as good as gone: the next press is not over one.
+				current_.keeps = false;
 				// What the wheel chose stays chosen: only the translation goes.
-				capture_requests_.post( { .generation = ++generation_, .point = point, .window = window, .length = forced_length_, .sentence = false } );
+				post( { .point = point, .window = window, .length = forced_length_, .sentence = false }, true );
 				return;
 			}
-			sentence_asked_ = std::chrono::steady_clock::now();
-			sentence_point_ = point;
 		}
-		if ( over && current_.keeps )
+		// A translation stays while the pointer is over what it translates: the key let go, the pointer moving along the
+		// sentence. So does text chosen with the wheel: the hand on the wheel moves the pointer by a few pixels, which
+		// would otherwise look the word up afresh and undo the choice.
+		else if ( ( over && current_.keeps ) || choice )
 		{
 			return;
 		}
@@ -913,20 +898,27 @@ namespace lexiglance::daemon
 			}
 		}
 		// The sentence key over text chosen with the wheel translates just that text.
-		if ( over && translate && forced_length_ > 0 )
+		if ( choice && translate )
 		{
-			capture_requests_.post( { .generation = ++generation_, .length = forced_length_, .sentence = true } );
+			post( { .length = forced_length_, .sentence = true }, true );
 			return;
 		}
 		forced_length_ = 0;
-		capture_requests_.post( { .generation = ++generation_, .point = point, .window = window, .sentence = translate } );
+		// What the next press of the key goes by: whether this spot is being translated.
+		sentence_key_ = { .on = translate, .x = point.x, .y = point.y };
+		post( { .point = point, .window = window, .sentence = translate }, sentence_pressed );
 	}
 
-	bool Daemon::sentenceComing()
+	void Daemon::post( CaptureRequest request, bool acted )
 	{
-		// The translation itself is being made, or the screen is still being read for it (OCR takes a moment). The time
-		// bounds the wait: a press is never let be for long, whatever became of the one before it.
-		return translating() || ( sentence_asked_ != std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() - sentence_asked_ < std::chrono::seconds( 5 ) );
+		request.generation = ++generation_;
+		if ( acted )
+		{
+			acted_.store( request.generation );
+		}
+		// A popup is on its way, unless nothing is found: turns of the wheel are kept for it.
+		awaiting_ = true;
+		capture_requests_.post( std::move( request ) );
 	}
 
 	void Daemon::onSelection( std::string text, platform::Point point )
@@ -955,8 +947,9 @@ namespace lexiglance::daemon
 		}
 		backend_->hidePopup();
 		backend_->hideHighlight();
-		current_        = {};
-		sentence_asked_ = {};
+		current_         = {};
+		sentence_key_.on = false;
+		awaiting_        = false;
 		shown_key_.store( 0 );
 		cancelled_.store( generation_.load() );
 		autoplayed_.clear();
@@ -978,10 +971,11 @@ namespace lexiglance::daemon
 
 	void Daemon::onAdjustLength( int delta )
 	{
-		// The popup is still on its way (a slow capture, OCR, is reading): the turn is kept for it.
+		// The popup is still on its way (a slow capture, OCR, is reading): the turn is kept for it. With none coming
+		// (nothing was found here) a turn is for nothing, and not for whatever is pointed at next.
 		if ( !backend_->popupVisible() )
 		{
-			pending_wheel_ += delta;
+			pending_wheel_ = awaiting_ ? pending_wheel_ + delta : 0;
 			return;
 		}
 		if ( !current_.shown || current_.shown->result.text.empty() )
@@ -993,7 +987,7 @@ namespace lexiglance::daemon
 		const int  now       = forced_length_ > 0 ? forced_length_ : static_cast<int>( current_.shown->result.matched_length );
 		forced_length_       = std::clamp( now + delta, 1, std::max( 1, available ) );
 		// A translation asked for with the sentence key follows: it translates the text chosen now.
-		capture_requests_.post( { .generation = ++generation_, .length = forced_length_, .sentence = current_.keeps } );
+		post( { .length = forced_length_, .sentence = current_.keeps || sentence_key_.on }, true );
 	}
 
 	void Daemon::onPopupAction( std::size_t entry, render::PopupAction action )
@@ -1263,7 +1257,6 @@ namespace lexiglance::daemon
 		CaptureState state;
 		refreshCapture( state, *config() );
 		lookup::Translator translator;
-		std::uint64_t      last_source       = 0;
 		std::uint64_t      posted_key        = 0;
 		std::uint64_t      posted_generation = 0;
 
@@ -1313,13 +1306,12 @@ namespace lexiglance::daemon
 				continue;
 			}
 
-			if ( !request->text && request->length == 0 )
+			state.keep( *request, captured, whole );
+			// Asked for before the sentence key or the wheel asked for something else, which is what is wanted now: its
+			// popup would only flash by, and its sentence be translated for nobody.
+			if ( request->generation < acted_.load() )
 			{
-				state.last        = captured;
-				state.last_point  = request->point;
-				state.last_window = request->window;
-				state.last_whole  = whole;
-				last_source       = request->window.id;
+				continue;
 			}
 			if ( !captured )
 			{
@@ -1375,7 +1367,7 @@ namespace lexiglance::daemon
 			const auto    sentence_offset = captured->sentence.empty() ? 0 : captured->sentence_offset;
 			std::string   sentence        = captured->sentence.empty() ? captured->text : std::move( captured->sentence );
 			auto          shown           = std::make_shared<const Shown>( Shown{ .result = std::move( result ), .sentence = std::move( sentence ), .sentence_offset = sentence_offset, .available = available, .whole = whole, .translation = std::move( translating.shown ) } );
-			RenderRequest render{ .generation = request->generation, .shown = std::move( shown ), .anchor = anchor, .highlight = highlight, .source = request->length > 0 ? last_source : request->window.id, .key = key, .chosen = chosen ? marks.chosen : std::nullopt, .keeps = keeps };
+			RenderRequest render{ .generation = request->generation, .shown = std::move( shown ), .anchor = anchor, .highlight = highlight, .source = request->length > 0 ? state.last_window.id : request->window.id, .key = key, .chosen = chosen ? marks.chosen : std::nullopt, .keeps = keeps };
 			// Posted under the lock translations are posted under, so a late one never takes the place of this newer popup.
 			const std::scoped_lock lock( translating_mutex_ );
 			translating_.reset();
@@ -1402,10 +1394,11 @@ namespace lexiglance::daemon
 			{
 				return;
 			}
-			// Nothing to translate there: the sentence key can be pressed again at once.
-			sentence_asked_ = {};
+			// Nothing to translate there: the next press of the sentence key asks afresh.
+			sentence_key_.on = false;
 			// Nothing here: turns of the wheel waiting for a popup are not for the next one.
 			pending_wheel_ = 0;
+			awaiting_      = false;
 			if ( hide )
 			{
 				dismiss();
@@ -1696,8 +1689,7 @@ namespace lexiglance::daemon
 					backend_->hideHighlight();
 				}
 				const bool first = shown_key_.load() != key;
-				// The sentence key has been answered: pressing it again asks afresh.
-				sentence_asked_ = {};
+				awaiting_        = false;
 				backend_->showPopup( { .image = image, .style = style, .anchor = anchor, .source = source } );
 				current_ = { .generation = generation, .shown = shown, .anchor = anchor, .highlight = highlight, .notes = notes, .source = source, .key = key, .chosen = chosen, .keeps = keeps };
 				shown_key_.store( key );

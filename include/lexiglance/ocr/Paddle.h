@@ -10,6 +10,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace lexiglance::ocr
@@ -68,6 +69,13 @@ namespace lexiglance::ocr
 	// CTC greedy decoding of per step class probabilities (class 0 is the blank, the last one a space).
 	[[nodiscard]] std::vector<Decoded> decodeCtc( std::span<const float> probabilities, int steps, int classes, std::span<const std::string> dictionary );
 
+	// What a reading is worth among those of other recognisers: its letters in the scripts of `languages` (those its
+	// recogniser is for), each as sure as it was read, and all its characters after that. A recogniser shown a script it
+	// does not know leaves most of the line out and is sure of the little it writes (a Russian line read as « .»), or
+	// spells the line in look-alikes of its own letters (Сохранить as CoxpaHuTb): the mean of its confidences rewards
+	// both.
+	[[nodiscard]] std::pair<float, float> readingWorth( const TextLine& line, std::span<const lang::Language* const> languages );
+
 	// PaddleOCR (PP-OCR) text detection and recognition. Not thread-safe.
 	class PaddleOcr
 	{
@@ -84,8 +92,9 @@ namespace lexiglance::ocr
 		// Whether the default recogniser (Chinese, Japanese, English) is loaded.
 		[[nodiscard]] bool hasDefaultRecognizer() const noexcept;
 
-		// Text boxes in image coordinates.
-		[[nodiscard]] std::vector<Box> detect( const Image& image );
+		// Text boxes in image coordinates. `zoom` is the size the detector sees the image at (0.5: half), for letters
+		// too large for it as they are; 0 leaves the choice to it.
+		[[nodiscard]] std::vector<Box> detect( const Image& image, double zoom = 0.0 );
 
 		// The last detection with other thresholds (fainter or sparser text, more noise), without running the model again.
 		[[nodiscard]] std::vector<Box> redetect( float threshold, float box_threshold ) const;
@@ -102,6 +111,8 @@ namespace lexiglance::ocr
 			std::string                file;
 			// The languages it reads; none for the default recogniser.
 			std::vector<std::string> languages;
+			// The languages whose letters it is trusted with: the default recogniser's are those without one of their own.
+			std::vector<const lang::Language*> reads;
 		};
 
 		[[nodiscard]] static Result<Recognizer> loadRecognizer( const std::filesystem::path& file, const std::filesystem::path& runtime_dir, int threads );

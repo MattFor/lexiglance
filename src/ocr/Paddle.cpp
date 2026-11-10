@@ -8,7 +8,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <numeric>
+#include <span>
+#include <utility>
 
 namespace lexiglance::ocr
 {
@@ -129,6 +132,26 @@ namespace lexiglance::ocr
 		}
 
 	} // namespace
+
+	std::pair<float, float> readingWorth( const TextLine& line, std::span<const lang::Language* const> languages )
+	{
+		float own = 0.0F;
+		float all = 0.0F;
+		for ( const Character& c : line.characters )
+		{
+			const char32_t letter = utf8::first( c.text );
+			if ( letter == U' ' || letter == 0x3000 )
+			{
+				continue;
+			}
+			all += c.confidence;
+			if ( std::ranges::any_of( languages, [&]( const lang::Language* language ) { return language->isScriptCharacter( letter ); } ) )
+			{
+				own += c.confidence;
+			}
+		}
+		return { own, all };
+	}
 
 	std::vector<Box> textBoxes( std::span<const float> map, int width, int height, float threshold, float box_threshold, double unclip )
 	{
@@ -291,6 +314,7 @@ namespace lexiglance::ocr
 			if ( const auto it = std::ranges::find( ocr->recognizers_, name, &Recognizer::file ); it != ocr->recognizers_.end() )
 			{
 				it->languages.emplace_back( language->code() );
+				it->reads.push_back( language );
 				continue;
 			}
 			const auto      file = directory / name;
@@ -303,6 +327,7 @@ namespace lexiglance::ocr
 			{
 				own->file = name;
 				own->languages.emplace_back( language->code() );
+				own->reads.push_back( language );
 				ocr->recognizers_.push_back( std::move( *own ) );
 			}
 			else
@@ -317,6 +342,7 @@ namespace lexiglance::ocr
 			{
 				return std::unexpected( recognizer.error() );
 			}
+			std::ranges::copy_if( wanted, std::back_inserter( recognizer->reads ), []( const lang::Language* language ) { return language->ocrModels().paddle.empty(); } );
 			ocr->recognizers_.insert( ocr->recognizers_.begin(), std::move( *recognizer ) );
 		}
 		return ocr;
@@ -334,7 +360,7 @@ namespace lexiglance::ocr
 		{
 			return std::unexpected( model.error() );
 		}
-		Recognizer recognizer{ .model = std::move( *model ), .dictionary = {}, .file = file.filename().string(), .languages = {} };
+		Recognizer recognizer{ .model = std::move( *model ), .dictionary = {}, .file = file.filename().string(), .languages = {}, .reads = {} };
 		// The character list travels inside the recognition model.
 		const std::string characters = recognizer.model->metadata( "character" );
 		std::size_t       start      = 0;
@@ -361,7 +387,7 @@ namespace lexiglance::ocr
 		return out;
 	}
 
-	std::vector<Box> PaddleOcr::detect( const Image& image )
+	std::vector<Box> PaddleOcr::detect( const Image& image, double zoom )
 	{
 		map_.clear();
 		if ( image.width < 8 || image.height < 8 )
@@ -370,7 +396,7 @@ namespace lexiglance::ocr
 		}
 		// Screen text is detected at its own size (half the work of enlarging it); only small regions are enlarged,
 		// to about 480 px, and nothing goes beyond 1600 px.
-		const double                      scale  = std::min( std::max( 480.0 / std::min( image.width, image.height ), 1.0 ), 1600.0 / std::max( image.width, image.height ) );
+		const double                      scale  = zoom > 0.0 ? zoom : std::min( std::max( 480.0 / std::min( image.width, image.height ), 1.0 ), 1600.0 / std::max( image.width, image.height ) );
 		const int                         width  = roundTo32( image.width * scale );
 		const int                         height = roundTo32( image.height * scale );
 		const View                        view{ .image = &image, .box = { .x = 0, .y = 0, .width = image.width, .height = image.height, .score = 0.0F }, .rotate = false };
@@ -420,15 +446,18 @@ namespace lexiglance::ocr
 
 	TextLine PaddleOcr::recognize( const Image& image, const Box& box, bool prefer_vertical )
 	{
-		// Each recogniser reads its scripts; the most confident reading is the text's.
-		const Recognizer* chosen = nullptr;
-		TextLine          best;
+		// Each recogniser reads its scripts; the reading worth most is the text's.
+		const Recognizer*       chosen = nullptr;
+		TextLine                best;
+		std::pair<float, float> most;
 		for ( const Recognizer& recognizer : recognizers_ )
 		{
-			if ( TextLine line = read( recognizer, image, box, prefer_vertical ); chosen == nullptr || meanConfidence( line ) > meanConfidence( best ) )
+			TextLine line = read( recognizer, image, box, prefer_vertical );
+			if ( const auto value = readingWorth( line, recognizer.reads ); chosen == nullptr || value > most )
 			{
 				best   = std::move( line );
 				chosen = &recognizer;
+				most   = value;
 			}
 		}
 		if ( chosen == nullptr || meanConfidence( best ) >= 0.9F )

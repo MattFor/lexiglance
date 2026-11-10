@@ -176,7 +176,7 @@ namespace lexiglance::translate
 		return model;
 	}
 
-	Result<std::string> Model::translate( std::string_view text )
+	Result<std::string> Model::translate( std::string_view text, const std::function<bool()>& given_up )
 	{
 		using ocr::Input;
 		auto ids = tokenizer_->encode( text );
@@ -216,6 +216,10 @@ namespace lexiglance::translate
 		const std::size_t         most = std::min<std::size_t>( max_input, ( ids.size() * 3 ) + 10 );
 		for ( std::size_t step = 0; step < most; ++step )
 		{
+			if ( given_up && given_up() )
+			{
+				return fail( "given up for a newer text" );
+			}
 			const std::int64_t                token = written.back();
 			const std::array<std::int64_t, 2> one{ 1, 1 };
 			const std::array<std::int64_t, 1> flag_shape{ 1 };

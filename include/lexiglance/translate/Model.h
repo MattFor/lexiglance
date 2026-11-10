@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -81,8 +82,9 @@ namespace lexiglance::translate
 		Model& operator=( Model&& )      = delete;
 
 		// The text in the model's target language (English); empty when there is nothing to translate. A sentence takes a
-		// few hundred milliseconds: worker threads only, one at a time.
-		[[nodiscard]] Result<std::string> translate( std::string_view text );
+		// few hundred milliseconds: worker threads only, one at a time. `given_up` is asked before every piece written,
+		// and ends the translation with an error once it says so.
+		[[nodiscard]] Result<std::string> translate( std::string_view text, const std::function<bool()>& given_up = {} );
 
 	private:
 		Model() = default;
