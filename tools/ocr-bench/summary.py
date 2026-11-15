@@ -14,7 +14,16 @@ def load(path):
 		for line in lines:
 			f = line.rstrip("\n").split("\t")
 			if len(f) >= 9:
-				rows[(f[0], f[7])] = {"picture": f[0], "lang": f[1], "font": f[2], "style": f[3], "size": int(f[4]), "error": float(f[5]), "want": f[7], "got": f[8]}
+				rows[(f[0], f[7])] = {
+					"picture": f[0],
+					"lang": f[1],
+					"font": f[2],
+					"style": f[3],
+					"size": int(f[4]),
+					"error": float(f[5]),
+					"want": f[7],
+					"got": f[8],
+				}
 	return rows
 
 
@@ -50,13 +59,17 @@ def main():
 	table("ALL", rows, lambda r: "all", earlier)
 	table("LANGUAGE", rows, lambda r: r["lang"], earlier)
 	table("STYLE", rows, lambda r: r["style"], earlier)
-	table("SIZE (plain style)", {at: r for at, r in rows.items() if r["style"] == "plain"}, lambda r: r["size"], earlier)
+	table(
+		"SIZE (plain style)", {at: r for at, r in rows.items() if r["style"] == "plain"}, lambda r: r["size"], earlier
+	)
 	if "--fonts" in sys.argv:
 		table("FONT", rows, lambda r: r["lang"] + ":" + r["font"], earlier)
 	if "--worse" in sys.argv:
 		for at, row in sorted(rows.items()):
 			if at in earlier and row["error"] > earlier[at]["error"]:
-				print(f"  WORSE {row['picture']}: {earlier[at]['error']:.2f} -> {row['error']:.2f}  wanted «{row['want']}», was «{earlier[at]['got']}», now «{row['got']}»")
+				print(
+					f"  WORSE {row['picture']}: {earlier[at]['error']:.2f} -> {row['error']:.2f}  wanted «{row['want']}», was «{earlier[at]['got']}», now «{row['got']}»"
+				)
 
 
 main()

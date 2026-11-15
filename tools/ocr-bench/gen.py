@@ -20,21 +20,41 @@ MAX_LINE = 760
 
 SENTENCES = {
 	"ja": [
-		"今日はいい天気ですね。", "図書館で本を借りました。", "彼女は毎朝コーヒーを飲む。", "冒険者よ、武器を選べ！",
-		"セーブデータを読み込みますか？", "夕焼けがとても綺麗だった。", "新しい仲間が加わりました。", "この道をまっすぐ進んでください。",
-		"魔王を倒すために旅に出る。", "食べ物を残してはいけません。", "電車が遅れているようです。", "約束の時間に間に合わない。",
+		"今日はいい天気ですね。",
+		"図書館で本を借りました。",
+		"彼女は毎朝コーヒーを飲む。",
+		"冒険者よ、武器を選べ！",
+		"セーブデータを読み込みますか？",
+		"夕焼けがとても綺麗だった。",
+		"新しい仲間が加わりました。",
+		"この道をまっすぐ進んでください。",
+		"魔王を倒すために旅に出る。",
+		"食べ物を残してはいけません。",
+		"電車が遅れているようです。",
+		"約束の時間に間に合わない。",
 	],
 	"ru": [
-		"Сегодня очень хорошая погода.", "Он взял книгу в библиотеке.", "Выберите оружие и начните игру.",
-		"Сохранить изменения перед выходом?", "Новый спутник присоединился к отряду.", "Мы должны идти дальше на север.",
-		"Эта дорога ведёт к старому замку.", "Спасибо за вашу помощь, друзья.",
+		"Сегодня очень хорошая погода.",
+		"Он взял книгу в библиотеке.",
+		"Выберите оружие и начните игру.",
+		"Сохранить изменения перед выходом?",
+		"Новый спутник присоединился к отряду.",
+		"Мы должны идти дальше на север.",
+		"Эта дорога ведёт к старому замку.",
+		"Спасибо за вашу помощь, друзья.",
 	],
 	"ko": [
-		"오늘은 날씨가 정말 좋네요.", "도서관에서 책을 빌렸습니다.", "새로운 동료가 합류했습니다.", "무기를 선택하고 모험을 떠나세요.",
-		"저장된 게임을 불러오시겠습니까?", "이 길을 따라 곧장 가세요.",
+		"오늘은 날씨가 정말 좋네요.",
+		"도서관에서 책을 빌렸습니다.",
+		"새로운 동료가 합류했습니다.",
+		"무기를 선택하고 모험을 떠나세요.",
+		"저장된 게임을 불러오시겠습니까?",
+		"이 길을 따라 곧장 가세요.",
 	],
 	"el": [
-		"Σήμερα έχει πολύ καλό καιρό.", "Πήρε ένα βιβλίο από τη βιβλιοθήκη.", "Διάλεξε όπλο και ξεκίνα το παιχνίδι.",
+		"Σήμερα έχει πολύ καλό καιρό.",
+		"Πήρε ένα βιβλίο από τη βιβλιοθήκη.",
+		"Διάλεξε όπλο και ξεκίνα το παιχνίδι.",
 		"Ο δρόμος οδηγεί στο παλιό κάστρο.",
 	],
 }
@@ -65,14 +85,21 @@ SIZES = [10, 12, 14, 16, 20, 24, 32, 48, 64, 96]
 STYLES = ["dark", "outline", "shadow", "lowcontrast", "panel", "colour"]
 STYLE_SIZES = [20, 36]
 FILL = {
-	"plain": (30, 30, 30), "dark": (230, 230, 230), "lowcontrast": (165, 165, 165), "colour": (255, 214, 80),
-	"shadow": (255, 255, 255), "panel": (240, 240, 240), "outline": (255, 255, 255),
+	"plain": (30, 30, 30),
+	"dark": (230, 230, 230),
+	"lowcontrast": (165, 165, 165),
+	"colour": (255, 214, 80),
+	"shadow": (255, 255, 255),
+	"panel": (240, 240, 240),
+	"outline": (255, 255, 255),
 }
 
 
 def system_font(pattern):
 	"""The file and face fontconfig has for a font, or nothing when it would hand out another one instead."""
-	found = subprocess.run(["fc-match", "-f", "%{family}|%{file}|%{index}", pattern], capture_output=True, text=True).stdout
+	found = subprocess.run(
+		["fc-match", "-f", "%{family}|%{file}|%{index}", pattern], capture_output=True, text=True
+	).stdout
 	family, _, rest = found.partition("|")
 	path, _, index = rest.rpartition("|")
 	return (path, int(index)) if pattern.split(":")[0] in family.split(",") else None
@@ -94,8 +121,12 @@ def covers(ranges, text):
 def busy(seed):
 	"""A scene of blurred colours, as behind a game's text."""
 	rng = np.random.default_rng(seed)
-	coarse = Image.fromarray(rng.integers(30, 226, (H // 60 + 2, W // 60 + 2, 3), dtype=np.uint8)).resize((W, H), Image.BICUBIC)
-	fine = Image.fromarray(rng.integers(0, 256, (H // 10 + 2, W // 10 + 2, 3), dtype=np.uint8)).resize((W, H), Image.BICUBIC)
+	coarse = Image.fromarray(rng.integers(30, 226, (H // 60 + 2, W // 60 + 2, 3), dtype=np.uint8)).resize(
+		(W, H), Image.BICUBIC
+	)
+	fine = Image.fromarray(rng.integers(0, 256, (H // 10 + 2, W // 10 + 2, 3), dtype=np.uint8)).resize(
+		(W, H), Image.BICUBIC
+	)
 	return Image.blend(coarse, fine, 0.25)
 
 
@@ -193,7 +224,23 @@ def main():
 						continue
 					x, y = 40, row * pitch + (pitch - mask.height) // 2
 					paint(canvas, mask, x, y, style, size)
-					rows.append((seed, [name, x + box[0], y + box[1], box[2] - box[0], box[3] - box[1], lang, key, style, size, text]))
+					rows.append(
+						(
+							seed,
+							[
+								name,
+								x + box[0],
+								y + box[1],
+								box[2] - box[0],
+								box[3] - box[1],
+								lang,
+								key,
+								style,
+								size,
+								text,
+							],
+						)
+					)
 				canvas.save(os.path.join(OUT, name), compress_level=1)
 				pictures += 1
 	for file, keep in (("truth.tsv", lambda seed: True), ("quick.tsv", lambda seed: seed % 5 == 0)):
