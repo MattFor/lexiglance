@@ -5,12 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![AppImageHub](https://img.shields.io/badge/AppImageHub-Lexiglance-blue?logo=appimage)](https://appimage.github.io/Lexiglance/)
 
-Ever tried learning a language and gotten frustrated because pop-up dictionaries only work inside your browser? Worry no
-more!
-
-Lexiglance is a system-wide pop-up dictionary for Linux (X11) and Windows. Hold a key combination and point at a word
-in any application to see its definitions. It supports Japanese, Russian, Ukrainian, Korean and Greek, and uses the
-same dictionary format as [Yomitan](https://yomitan.wiki/).
+System-wide pop-up dictionary for Linux (X11) and Windows.
 
 <p>
   <img src="docs/images/showcase-fill.png" width="32%" alt="図書館 highlighted with a fill; the popup shows its reading としょかん (dark theme)">
@@ -23,6 +18,12 @@ same dictionary format as [Yomitan](https://yomitan.wiki/).
 · [Other packages](https://github.com/MattFor/lexiglance/releases/latest)
 
 ## Features
+
+Ever tried learning a language and gotten frustrated because pop-up dictionaries only work inside your browser? Worry no
+more!
+
+Hold a key combination and point at a word in any application to see its definitions. It supports Japanese, Russian,
+Ukrainian, Korean and Greek, and uses the same dictionary format as [Yomitan](https://yomitan.wiki/).
 
 - Reads text through the accessibility interfaces (AT-SPI, UI Automation), or with OCR (PaddleOCR, Tesseract) in
   games, images and videos.
@@ -56,7 +57,7 @@ The [releases page](https://github.com/MattFor/lexiglance/releases) also has a p
 for Debian and Ubuntu, a `.rpm` for Fedora, and a `.tar.gz`. From then on Lexiglance keeps itself up to date
 (**Overview -> Updates**), in the background too while you are away from the computer.
 
-## Getting started
+## Usage
 
 1. Open **Dictionaries -> Get recommended dictionaries**, pick a language and install.
 2. Hold **Super + Left Alt** (on Windows **Win + Left Alt**) and point at a word.
@@ -68,7 +69,7 @@ for Debian and Ubuntu, a `.rpm` for Fedora, and a `.tar.gz`. From then on Lexigl
 For games, videos and other programs that expose no text, click **Scanning -> Download PaddleOCR** once. On Linux,
 Chromium and Electron apps need `--force-renderer-accessibility`.
 
-## Languages
+### Languages
 
 Each language is a small JSON file, and you can add your own without rebuilding. See
 [docs/languages.md](docs/languages.md).
@@ -88,9 +89,10 @@ Then run `build/release/apps/gui/lexiglance`. For Windows builds see [docs/porti
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately, see [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately through
+[GitHub security advisories](https://github.com/MattFor/lexiglance/security/advisories/new).
 
-## LLM Disclosure & My Own Notes
+## Disclosure
 
 Yes, this one was mostly written with the help of an LLM. I wanted to get the program up and running as quickly as
 possible so that my friends and I could start using it in our language-learning journeys. Writing everything by hand
@@ -105,6 +107,6 @@ I hope Lexiglance can be a useful tool to others and help everyone on their own 
 MIT, see [LICENSE](LICENSE). By [MattFor](https://github.com/MattFor).
 
 Dictionaries, OCR and translation models and recordings are downloaded separately and keep their own
-licenses. Lexiglance includes the ONNX Runtime headers (MIT), a kanji table
+licences. Lexiglance includes the ONNX Runtime headers (MIT), a kanji table
 from [OpenCC](https://github.com/BYVoid/OpenCC) (Apache 2.0) and
 [Breeze](https://invent.kde.org/frameworks/breeze-icons) icons (LGPL 3.0).

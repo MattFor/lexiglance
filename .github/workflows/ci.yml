@@ -29,6 +29,12 @@ jobs:
         run: pipx install clang-format==23.1.0
       - name: Check formatting
         run: git ls-files '*.cpp' '*.h' ':!:third_party/**' | xargs clang-format --dry-run --Werror
+      - name: Install ruff
+        run: pipx install ruff==0.16.5
+      - name: Ruff
+        run: |
+          ruff check --output-format=github .
+          ruff format --check .
 
   linux:
     name: Linux (${{ matrix.name }})

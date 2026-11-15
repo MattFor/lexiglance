@@ -98,7 +98,7 @@ FILL = {
 def system_font(pattern):
 	"""The file and face fontconfig has for a font, or nothing when it would hand out another one instead."""
 	found = subprocess.run(
-		["fc-match", "-f", "%{family}|%{file}|%{index}", pattern], capture_output=True, text=True
+		["fc-match", "-f", "%{family}|%{file}|%{index}", pattern], capture_output=True, text=True, check=False
 	).stdout
 	family, _, rest = found.partition("|")
 	path, _, index = rest.rpartition("|")
@@ -106,7 +106,9 @@ def system_font(pattern):
 
 
 def charset(path):
-	out = subprocess.run(["fc-query", "--format", "%{charset}\n", path], capture_output=True, text=True).stdout
+	out = subprocess.run(
+		["fc-query", "--format", "%{charset}\n", path], capture_output=True, text=True, check=False
+	).stdout
 	ranges = []
 	for part in out.split():
 		a, _, b = part.partition("-")
@@ -243,7 +245,7 @@ def main():
 					)
 				canvas.save(os.path.join(OUT, name), compress_level=1)
 				pictures += 1
-	for file, keep in (("truth.tsv", lambda seed: True), ("quick.tsv", lambda seed: seed % 5 == 0)):
+	for file, keep in (("truth.tsv", lambda _: True), ("quick.tsv", lambda seed: seed % 5 == 0)):
 		with open(os.path.join(OUT, file), "w", encoding="utf-8") as out:
 			out.writelines("\t".join(map(str, row)) + "\n" for seed, row in rows if keep(seed))
 	print(f"{pictures} pictures, {len(rows)} lines in {len({row[6] for _, row in rows})} fonts")

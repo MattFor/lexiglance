@@ -56,7 +56,7 @@ def main():
 		sys.exit(__doc__)
 	rows = load(files[0])
 	earlier = load(files[1]) if len(files) > 1 else {}
-	table("ALL", rows, lambda r: "all", earlier)
+	table("ALL", rows, lambda _: "all", earlier)
 	table("LANGUAGE", rows, lambda r: r["lang"], earlier)
 	table("STYLE", rows, lambda r: r["style"], earlier)
 	table(
