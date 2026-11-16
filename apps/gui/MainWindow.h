@@ -36,8 +36,9 @@ namespace lexiglance::gui
 		// What can be done and where, over the window; `first` on the first start.
 		void showHelp( bool first = false );
 
-		// What changed in `version`, over the window: once after an update, or from Help in dev builds.
-		void showChanges( const QString& version );
+		// What changed in `version`, over the window (since `since`, every version after it, the newest first): once after
+		// an update, or from Help.
+		void showChanges( const QString& version, const QString& since = {} );
 
 		// First-run setup wizard (also from Help). `lock_seconds` 0 when simulating from Help.
 		// `required`: first-run — the wizard cannot be skipped.

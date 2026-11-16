@@ -336,28 +336,33 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		activateWindow();
 		// Asked for, so in front, also when another program started this one.
 		bringToFront( this );
-		// Back from an update (UpdateGroup notes it): what changed, once, the first time the window is shown after it.
-		auto memory = applicationMemory();
-		if ( const QString updated = memory.value( QStringLiteral( "update/changes" ) ).toString(); !updated.isEmpty() )
+		// Back from one update or several, however they came (this program, in the background or not, a package, an
+		// AppImage put in place): what changed since the version the window was last shown as, once, the first time the
+		// window is shown after it. Up to 1.3.9 only an update made here was noted (UpdateGroup still notes it).
+		auto          memory  = applicationMemory();
+		const QString seen    = memory.value( QStringLiteral( "update/seen" ) ).toString();
+		const bool    updated = olderVersion( seen, qs( version ) ) || ( seen.isEmpty() && memory.contains( QStringLiteral( "update/changes" ) ) );
+		memory.remove( QStringLiteral( "update/changes" ) );
+		if ( seen != qs( version ) )
 		{
-			memory.remove( QStringLiteral( "update/changes" ) );
-			// Not over the first-run setup (welcome()), which an update before it was done still has to open.
-			const bool setup_pending = !memory.value( QStringLiteral( "setup/completed" ) ).toBool() && !memory.value( QStringLiteral( "help/shown" ) ).toBool();
-			if ( !setup_pending )
-			{
-				// After whatever else opens with the window, so it is on top.
-				QTimer::singleShot( 0, this, [this, updated] { showChanges( updated ); } );
-			}
+			memory.setValue( QStringLiteral( "update/seen" ), qs( version ) );
+		}
+		// Not over the first-run setup (welcome()), which an update before it was done still has to open.
+		const bool setup_pending = !memory.value( QStringLiteral( "setup/completed" ) ).toBool() && !memory.value( QStringLiteral( "help/shown" ) ).toBool();
+		if ( updated && !setup_pending )
+		{
+			// After whatever else opens with the window, so it is on top.
+			QTimer::singleShot( 0, this, [this, seen] { showChanges( qs( version ), seen ); } );
 		}
 	}
 
-	void MainWindow::showChanges( const QString& version )
+	void MainWindow::showChanges( const QString& version, const QString& since )
 	{
 		if ( changes_ == nullptr )
 		{
 			changes_ = new ChangesOverlay( this );
 		}
-		changes_->open( version );
+		changes_->open( version, since );
 	}
 
 	void MainWindow::showPage( const QString& name )
