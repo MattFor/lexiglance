@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.9] - 14:42 CET 16-11-2026
+
+### Fixed
+
+- Linux: the menu entry is filed under Utilities (Accessories in XFCE) as a dictionary, where it used to open a menu of
+  its own under Education. Moving it there by hand did not last: the entry is written again whenever its program path
+  stops resolving or the menu option is changed.
+
 ## [1.3.8] - 11:38 CEST 10-11-2026
 
 ### Added
@@ -242,6 +250,7 @@ First public release.
 - A health check that finds problems and offers fixes.
 - `lexiglancectl` for scripts, and service files for systemd, runit, OpenRC, dinit, s6 and XDG autostart.
 
+[1.3.9]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.9
 [1.3.8]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.8
 [1.3.7]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.7
 [1.3.6]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.6
