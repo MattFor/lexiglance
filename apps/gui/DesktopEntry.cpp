@@ -469,7 +469,7 @@ namespace lexiglance::gui::desktop
 						   "TryExec=%2\n"
 						   "Icon=%3\n"
 						   "Terminal=false\n"
-						   "Categories=Education;Languages;\n"
+						   "Categories=Utility;TextTools;Dictionary;\n"
 						   "Keywords=dictionary;japanese;russian;ukrainian;korean;greek;yomitan;popup;translate;\n"
 						   "StartupNotify=true\n"
 						   "Actions=health;search;\n"

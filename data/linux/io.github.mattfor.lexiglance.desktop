@@ -6,6 +6,6 @@ Comment=System-wide pop-up dictionary for Yomitan dictionaries
 Exec=lexiglance
 Icon=lexiglance
 Terminal=false
-Categories=Education;Languages;
+Categories=Utility;TextTools;Dictionary;
 Keywords=dictionary;japanese;russian;ukrainian;korean;greek;yomitan;popup;translate;
 StartupNotify=true
