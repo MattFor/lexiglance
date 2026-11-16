@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.4.0] - 15:28 CET 16-11-2026
+
+### Changed
+
+- After an update the window shows what changed in every version since the one it last showed, the newest at the top,
+  on a card that scrolls when that is long. This covers updates that came while the window was closed or in the
+  background, and those from a package or an AppImage put in place, where only the last of several updates used to
+  be shown, or none.
+
+### Fixed
+
+- Linux: a menu entry changed by hand keeps the changes. Pointing the entry at the copy just installed used to write
+  Lexiglance's own entry over it; now only the program it starts changes. An entry Lexiglance wrote and nobody changed
+  is still brought up to date.
+- Linux: Lexiglance finds its menu entry whatever the file is called and in whichever applications folder it is: one
+  made by AppImageLauncher or Gear Lever, one of your own, one that starts it through a wrapper (`env`, `ime-launch`).
+  It no longer adds a second entry beside one, points one at the copy installed once the program it starts is gone,
+  and the menu option on the Overview page hides it (yours in place) and brings it back.
+
 ## [1.3.9] - 14:42 CET 16-11-2026
 
 ### Fixed
@@ -250,6 +269,7 @@ First public release.
 - A health check that finds problems and offers fixes.
 - `lexiglancectl` for scripts, and service files for systemd, runit, OpenRC, dinit, s6 and XDG autostart.
 
+[1.4.0]: https://github.com/MattFor/lexiglance/releases/tag/v1.4.0
 [1.3.9]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.9
 [1.3.8]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.8
 [1.3.7]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.7
