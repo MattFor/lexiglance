@@ -18,6 +18,7 @@
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <ranges>
 
 namespace lexiglance::gui::desktop
 {
@@ -633,11 +634,11 @@ namespace lexiglance::gui::desktop
 					{
 						arguments.push_back( argument );
 					}
-					for ( auto argument = arguments.rbegin(); argument != arguments.rend(); ++argument )
+					for ( const auto& argument : std::views::reverse( arguments ) )
 					{
-						if ( lexiglanceProgram( argument->hasCaptured( 1 ) ? unescaped( argument->captured( 1 ) ) : argument->captured( 2 ) ) )
+						if ( lexiglanceProgram( argument.hasCaptured( 1 ) ? unescaped( argument.captured( 1 ) ) : argument.captured( 2 ) ) )
 						{
-							line.replace( argument->capturedStart(), argument->capturedLength(), quoted( target ) );
+							line.replace( argument.capturedStart(), argument.capturedLength(), quoted( target ) );
 						}
 					}
 				}

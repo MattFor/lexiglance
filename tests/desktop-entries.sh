@@ -143,8 +143,11 @@ has "$t/elsewhere/l.desktop" "Exec=/gone/lexiglance"
 absent "$user"
 
 fresh package
-cp "$source_dir/data/linux/io.github.mattfor.lexiglance.desktop" "$t/sys/applications/"
-chmod -R a-w "$t/sys"
+# Read-only, and a link as a Flatpak's export is: root (as in CI's containers) may write to anything read-only.
+mkdir -p "$t/package"
+cp "$source_dir/data/linux/io.github.mattfor.lexiglance.desktop" "$t/package/"
+ln -s "$t/package/io.github.mattfor.lexiglance.desktop" "$t/sys/applications/"
+chmod -R a-w "$t/package" "$t/sys"
 run "$a" --claim-entries
 absent "$user"
 run "$a" --menu-entry off
