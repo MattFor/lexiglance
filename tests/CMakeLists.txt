@@ -65,3 +65,12 @@ if(LEXIGLANCE_BUILD_DAEMON)
 endif()
 
 add_test(NAME lexiglance_tests COMMAND lexiglance_tests)
+
+# The settings application's menu entries (Linux): found under any name, hand edits kept.
+if(TARGET lexiglance
+   AND UNIX
+   AND NOT APPLE)
+    add_test(NAME desktop_entries
+             COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/desktop-entries.sh
+                     $<TARGET_FILE:lexiglance>)
+endif()

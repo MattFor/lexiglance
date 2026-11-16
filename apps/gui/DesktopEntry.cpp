@@ -6,11 +6,14 @@
 #include <lexiglance/core/Paths.h>
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 
@@ -35,10 +38,14 @@ namespace lexiglance::gui::desktop
 		}
 
 		// Nothing starts from a program that is gone, or from inside the mount of an AppImage (which earlier versions
-		// wrote, and which disappears when the AppImage ends).
+		// wrote, and which disappears when the AppImage ends). A bare name is looked up on the PATH.
 		bool startsNothing( const QString& program )
 		{
-			return program.isEmpty() || !QFileInfo::exists( program ) || program.contains( QStringLiteral( "/.mount_" ) );
+			if ( program.isEmpty() || program.contains( QStringLiteral( "/.mount_" ) ) )
+			{
+				return true;
+			}
+			return QFileInfo( program ).isRelative() ? QStandardPaths::findExecutable( program ).isEmpty() : !QFileInfo::exists( program );
 		}
 
 		// The entries that are files (not on Windows, which keeps them in the registry and a shortcut).
@@ -387,12 +394,19 @@ namespace lexiglance::gui::desktop
 	{
 
 		const QString entry_name = QStringLiteral( "io.github.mattfor.lexiglance.desktop" );
-		// Marks entries this program wrote (and may rewrite).
-		const QString generated_key = QStringLiteral( "X-Lexiglance-Generated=true" );
+		// Marks entries this program wrote, with a checksum of the rest: one that no longer matches was edited by hand.
+		// Up to 1.3.9 the value was "true".
+		const QString generated_key = QStringLiteral( "X-Lexiglance-Generated=" );
+		const QString categories    = QStringLiteral( "Categories=Utility;TextTools;Dictionary;\n" );
+
+		QString userApplications()
+		{
+			return QStandardPaths::writableLocation( QStandardPaths::GenericDataLocation ) + "/applications";
+		}
 
 		QString userEntry()
 		{
-			return QStandardPaths::writableLocation( QStandardPaths::GenericDataLocation ) + "/applications/" + entry_name;
+			return userApplications() + "/" + entry_name;
 		}
 
 		QString autostartFile()
@@ -405,15 +419,19 @@ namespace lexiglance::gui::desktop
 			return QStandardPaths::writableLocation( QStandardPaths::GenericConfigLocation ) + "/autostart/lexiglance-tray.desktop";
 		}
 
-		// Entries installed elsewhere (a package), which a user entry of the same name overrides.
-		bool installedEntry()
-		{
-			return std::ranges::any_of( QStandardPaths::locateAll( QStandardPaths::GenericDataLocation, "applications/" + entry_name ), []( const QString& path ) { return QFileInfo( path ) != QFileInfo( userEntry() ); } );
-		}
+		const QRegularExpression hiding_line( QStringLiteral( "^(?:NoDisplay|Hidden)=true\\n?" ), QRegularExpression::MultilineOption );
+		const QRegularExpression marker_line( QStringLiteral( "^X-Lexiglance-Generated=([^\\n]*)\\n?" ), QRegularExpression::MultilineOption );
+		// An argument of an Exec line: quoted (with backslash escapes) or not.
+		const QRegularExpression exec_argument( QStringLiteral( R"re("((?:[^"\\]|\\.)*)"|(\S+))re" ) );
 
 		bool hides( const QString& entry )
 		{
-			return entry.contains( QStringLiteral( "\nNoDisplay=true" ) ) || entry.contains( QStringLiteral( "\nHidden=true" ) );
+			return hiding_line.match( entry ).hasMatch();
+		}
+
+		bool generated( const QString& entry )
+		{
+			return marker_line.match( entry ).hasMatch();
 		}
 
 		// The program a desktop entry starts, from its (first) Exec line.
@@ -421,6 +439,87 @@ namespace lexiglance::gui::desktop
 		{
 			static const QRegularExpression exec( QStringLiteral( "^Exec=(.*)$" ), QRegularExpression::MultilineOption );
 			return commandProgram( exec.match( entry ).captured( 1 ) );
+		}
+
+		// A Lexiglance program, by its file name: the settings application, or an AppImage of it however it was renamed
+		// (Lexiglance-x86_64_1a2b.AppImage by AppImageLauncher, lexiglance.appimage by Gear Lever).
+		bool lexiglanceProgram( const QString& path )
+		{
+			static const QRegularExpression name( QStringLiteral( R"(^lexiglance$|^lexiglance(?:[-_. ][^/]*)?\.appimage$)" ), QRegularExpression::CaseInsensitiveOption );
+			return name.match( QFileInfo( path ).fileName() ).hasMatch();
+		}
+
+		QString unescaped( QString argument )
+		{
+			static const QRegularExpression escape( QStringLiteral( R"(\\(.))" ) );
+			return argument.replace( escape, QStringLiteral( "\\1" ) );
+		}
+
+		// The Lexiglance an entry starts, also through a wrapper (env, ime-launch ...): the first one its Exec lines name.
+		QString startedLexiglance( const QString& entry )
+		{
+			static const QRegularExpression exec( QStringLiteral( "^Exec=(.*)$" ), QRegularExpression::MultilineOption );
+			for ( const auto& line : exec.globalMatch( entry ) )
+			{
+				for ( const auto& argument : exec_argument.globalMatch( line.captured( 1 ) ) )
+				{
+					const QString value = argument.hasCaptured( 1 ) ? unescaped( argument.captured( 1 ) ) : argument.captured( 2 );
+					if ( lexiglanceProgram( value ) )
+					{
+						return value;
+					}
+				}
+			}
+			return {};
+		}
+
+		// A menu entry of Lexiglance's, whatever its file is called and wherever it is: one this program wrote, one named
+		// like the package's (and a Flatpak's), or any other that starts a Lexiglance.
+		bool lexiglanceEntry( const QString& file_name, const QString& entry )
+		{
+			return file_name == entry_name || generated( entry ) || !startedLexiglance( entry ).isEmpty();
+		}
+
+		struct MenuEntry
+		{
+			QString path;
+			QString relative; // below applications/, which makes its desktop file ID
+			QString text;
+		};
+
+		// Lexiglance's menu entries: of each desktop file ID the one the menu goes by, the first in the XDG data
+		// directories (the user's own before the system's), as the menu does.
+		std::vector<MenuEntry> menuEntries()
+		{
+			std::vector<MenuEntry> found;
+			QSet<QString>          ids;
+			for ( const QString& location : QStandardPaths::standardLocations( QStandardPaths::GenericDataLocation ) )
+			{
+				const QDir   applications( location + "/applications" );
+				QDirIterator files( applications.path(), { QStringLiteral( "*.desktop" ) }, QDir::Files, QDirIterator::Subdirectories );
+				while ( files.hasNext() )
+				{
+					const QString path     = files.next();
+					const QString relative = applications.relativeFilePath( path );
+					if ( !ids.contains( QString( relative ).replace( '/', '-' ) ) )
+					{
+						ids.insert( QString( relative ).replace( '/', '-' ) );
+						if ( QString text = read( path ); lexiglanceEntry( QFileInfo( path ).fileName(), text ) )
+						{
+							found.push_back( { path, relative, std::move( text ) } );
+						}
+					}
+				}
+			}
+			return found;
+		}
+
+		// Entries this program may change: the user's own files. A package's, or a link into one (a Flatpak's export), it
+		// leaves alone.
+		bool changeable( const QString& path )
+		{
+			const QFileInfo info( path );
+			return !info.isSymLink() && info.isWritable() && QFileInfo( info.absolutePath() ).isWritable();
 		}
 
 		// What to start: the AppImage file itself rather than its mount, which changes every run.
@@ -456,9 +555,9 @@ namespace lexiglance::gui::desktop
 			return QFile::exists( path ) ? path : QStringLiteral( "accessories-dictionary" );
 		}
 
-		QString entryText()
+		// The entry this program writes for `target`, with `marker` as its marker line (none when empty).
+		QString renderEntry( const QString& target, const QString& icon, const QString& marker )
 		{
-			const QString exec = quoted( program() );
 			return QStringLiteral(
 						   "[Desktop Entry]\n"
 						   "Type=Application\n"
@@ -469,11 +568,11 @@ namespace lexiglance::gui::desktop
 						   "TryExec=%2\n"
 						   "Icon=%3\n"
 						   "Terminal=false\n"
-						   "Categories=Utility;TextTools;Dictionary;\n"
+						   "%5"
 						   "Keywords=dictionary;japanese;russian;ukrainian;korean;greek;yomitan;popup;translate;\n"
 						   "StartupNotify=true\n"
 						   "Actions=health;search;\n"
-						   "%4\n"
+						   "%4"
 						   "\n"
 						   "[Desktop Action health]\n"
 						   "Name=Check health\n"
@@ -483,7 +582,67 @@ namespace lexiglance::gui::desktop
 						   "Name=Search\n"
 						   "Exec=%1 --page search\n"
 			)
-			        .arg( exec, program(), installIcon(), generated_key );
+			        .arg( quoted( target ), target, icon, marker, categories );
+		}
+
+		QString withoutMarker( QString entry )
+		{
+			return entry.remove( marker_line );
+		}
+
+		QString checksum( const QString& entry )
+		{
+			return QString::fromLatin1( QCryptographicHash::hash( withoutMarker( entry ).toUtf8(), QCryptographicHash::Sha256 ).toHex().left( 16 ) );
+		}
+
+		QString entryText()
+		{
+			const QString icon = installIcon();
+			return renderEntry( program(), icon, generated_key + checksum( renderEntry( program(), icon, {} ) ) + "\n" );
+		}
+
+		// Whether an entry this program wrote is still as it wrote it, so that a newer version may write it afresh. One
+		// changed by hand keeps the changes: only the program it starts is ever changed in it.
+		bool unedited( const QString& entry )
+		{
+			const QString marker = marker_line.match( entry ).captured( 1 );
+			if ( marker != QStringLiteral( "true" ) )
+			{
+				return marker == checksum( entry );
+			}
+			// Up to 1.3.9, without a checksum: unedited when it is what 1.3.9 (or, with its categories, 1.3.8) wrote.
+			const QString before = renderEntry( entryProgram( entry ), installIcon(), generated_key + "true\n" );
+			return entry == before || entry == QString( before ).replace( categories, QStringLiteral( "Categories=Education;Languages;\n" ) );
+		}
+
+		// The entry with the Lexiglance it starts (in Exec and TryExec lines) replaced by `target`, and nothing else changed.
+		QString repointed( const QString& entry, const QString& target )
+		{
+			QStringList lines = entry.split( '\n' );
+			for ( QString& line : lines )
+			{
+				if ( line.startsWith( QStringLiteral( "TryExec=" ) ) && lexiglanceProgram( line.mid( 8 ) ) )
+				{
+					line = QStringLiteral( "TryExec=" ) + target;
+				}
+				else if ( line.startsWith( QStringLiteral( "Exec=" ) ) )
+				{
+					// From the last argument back, so that the earlier ones stay where they were matched.
+					std::vector<QRegularExpressionMatch> arguments;
+					for ( const auto& argument : exec_argument.globalMatch( line, 5 ) )
+					{
+						arguments.push_back( argument );
+					}
+					for ( auto argument = arguments.rbegin(); argument != arguments.rend(); ++argument )
+					{
+						if ( lexiglanceProgram( argument->hasCaptured( 1 ) ? unescaped( argument->captured( 1 ) ) : argument->captured( 2 ) ) )
+						{
+							line.replace( argument->capturedStart(), argument->capturedLength(), quoted( target ) );
+						}
+					}
+				}
+			}
+			return lines.join( '\n' );
 		}
 
 		QString autostartText()
@@ -508,10 +667,34 @@ namespace lexiglance::gui::desktop
 			        .arg( quoted( program() ) );
 		}
 
-		// A menu entry this program wrote, and not one taking Lexiglance out of the menu: the one to keep pointing here.
-		bool ownMenuEntry( const QString& entry )
+		// Points the menu entries at this copy. One this program wrote follows a claim; any other (AppImageLauncher's, the
+		// user's own) is the user's, and changes only once the program it starts is gone, as do all on a mend. Of one this
+		// program wrote and nobody changed the newest form is written; of any other, only the program it starts changes.
+		void pointMenuEntries( bool claiming )
 		{
-			return entry.contains( generated_key ) && !hides( entry );
+			for ( const MenuEntry& entry : menuEntries() )
+			{
+				const QString started = startedLexiglance( entry.text );
+				const bool    own     = generated( entry.text );
+				if ( !changeable( entry.path ) || hides( entry.text ) || started.isEmpty() || !( startsNothing( started ) || ( claiming && own ) ) )
+				{
+					continue;
+				}
+				const QString wanted = own && unedited( entry.text ) ? entryText() : repointed( entry.text, program() );
+				if ( wanted == entry.text )
+				{
+					continue;
+				}
+				if ( startsNothing( started ) )
+				{
+					mended( "menu entry", started );
+				}
+				else if ( !sameCopy( started, program() ) )
+				{
+					claimed( "menu entry", started );
+				}
+				( void )save( entry.path, wanted );
+			}
 		}
 
 		void mend()
@@ -526,23 +709,24 @@ namespace lexiglance::gui::desktop
 				mended( "tray's autostart", entryProgram( entry ) );
 				( void )setTrayAutostart( true );
 			}
-			if ( const QString entry = read( userEntry() ); ownMenuEntry( entry ) && startsNothing( entryProgram( entry ) ) )
-			{
-				mended( "menu entry", entryProgram( entry ) );
-				( void )save( userEntry(), entryText() );
-			}
+			pointMenuEntries( false );
 			addMenuEntryOnce();
+		}
+
+		bool failed( QString* error, const QString& message, const QString& path )
+		{
+			if ( error != nullptr )
+			{
+				*error = message.arg( path );
+			}
+			return false;
 		}
 
 	} // namespace
 
 	bool menuEntryShown()
 	{
-		if ( QFile::exists( userEntry() ) )
-		{
-			return !hides( read( userEntry() ) );
-		}
-		return installedEntry();
+		return std::ranges::any_of( menuEntries(), []( const MenuEntry& entry ) { return !hides( entry.text ); } );
 	}
 
 	bool setMenuEntry( bool shown, QString* error )
@@ -551,22 +735,47 @@ namespace lexiglance::gui::desktop
 		settings.setValue( QStringLiteral( "menu/decided" ), true );
 		if ( shown )
 		{
-			return save( userEntry(), entryText(), error );
-		}
-		// An installed entry is hidden by one of the user's; otherwise there is only the user's to remove.
-		if ( installedEntry() )
-		{
-			return save( userEntry(), QStringLiteral( "[Desktop Entry]\nType=Application\nName=Lexiglance\nNoDisplay=true\nHidden=true\n%1\n" ).arg( generated_key ), error );
-		}
-		if ( QFile::exists( userEntry() ) && !QFile::remove( userEntry() ) )
-		{
-			if ( error != nullptr )
+			// Back in by undoing what took it out: the entries this program hid others with go, the user's own entries
+			// are shown again. A new entry only when that brings none back.
+			for ( const MenuEntry& entry : menuEntries() )
 			{
-				*error = QStringLiteral( "Cannot remove %1" ).arg( userEntry() );
+				if ( !hides( entry.text ) || !changeable( entry.path ) )
+				{
+					continue;
+				}
+				if ( generated( entry.text ) && entryProgram( entry.text ).isEmpty() ? !QFile::remove( entry.path ) : !save( entry.path, QString( entry.text ).remove( hiding_line ) ) )
+				{
+					return failed( error, QStringLiteral( "Cannot change %1" ), entry.path );
+				}
 			}
-			return false;
+			return menuEntryShown() || save( userEntry(), entryText(), error );
 		}
-		return true;
+		// Out: an entry this program wrote goes, unless it was changed by hand; that one and the user's own are hidden in
+		// place; an installed one is covered by a hiding entry of the user's with its desktop file ID. Again, as long as
+		// that uncovers another of the same ID.
+		for ( int round = 0; round < 8 && menuEntryShown(); ++round )
+		{
+			for ( const MenuEntry& entry : menuEntries() )
+			{
+				if ( hides( entry.text ) )
+				{
+					continue;
+				}
+				if ( !changeable( entry.path ) )
+				{
+					const QString cover = userApplications() + "/" + entry.relative;
+					if ( QFile::exists( cover ) || !save( cover, QStringLiteral( "[Desktop Entry]\nType=Application\nName=Lexiglance\nNoDisplay=true\nHidden=true\n%1true\n" ).arg( generated_key ), error ) )
+					{
+						return failed( error, QStringLiteral( "Cannot hide %1" ), entry.path );
+					}
+				}
+				else if ( generated( entry.text ) && unedited( entry.text ) ? !QFile::remove( entry.path ) : !save( entry.path, QString( entry.text ).replace( QStringLiteral( "[Desktop Entry]\n" ), QStringLiteral( "[Desktop Entry]\nNoDisplay=true\n" ) ) ) )
+				{
+					return failed( error, QStringLiteral( "Cannot change %1" ), entry.path );
+				}
+			}
+		}
+		return !menuEntryShown() || failed( error, QStringLiteral( "Cannot take %1 out of the menu" ), QStringLiteral( "Lexiglance" ) );
 	}
 
 	bool autostartEnabled()
@@ -610,11 +819,7 @@ namespace lexiglance::gui::desktop
 			claimed( "tray's autostart", entryProgram( entry ) );
 			( void )setTrayAutostart( true );
 		}
-		if ( const QString entry = read( userEntry() ); ownMenuEntry( entry ) && entry != entryText() )
-		{
-			claimed( "menu entry", entryProgram( entry ) );
-			( void )save( userEntry(), entryText() );
-		}
+		pointMenuEntries( true );
 		addMenuEntryOnce();
 	}
 

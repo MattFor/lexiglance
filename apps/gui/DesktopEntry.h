@@ -13,10 +13,12 @@
 namespace lexiglance::gui::desktop
 {
 
-	// Whether the menu shows Lexiglance: an entry of the user's, or an installed one the user has not hidden.
+	// Whether the menu shows Lexiglance: any entry that starts it (or that it wrote, or named like the package's), whatever
+	// it is called and in whichever XDG data directory, that is not hidden.
 	[[nodiscard]] bool menuEntryShown();
 
-	// Adds an entry that starts this program, or takes Lexiglance out of the menu. False (and `error`) on failure.
+	// Shows Lexiglance in the menu (by undoing how it was taken out; a new entry only when that brings none back), or takes
+	// it out (the entry it wrote goes, any other is hidden, the user's own in place). False (and `error`) on failure.
 	bool setMenuEntry( bool shown, QString* error = nullptr );
 
 	// The daemon at login.
@@ -39,8 +41,9 @@ namespace lexiglance::gui::desktop
 	// Whether this program runs in the tree it was built in, rather than from where it was installed.
 	[[nodiscard]] bool inBuildTree();
 
-	// Points the autostart entries there are, and the menu entry (unless Lexiglance was taken out of the menu), at this
-	// copy. The first time, the menu entry is added.
+	// Points the autostart entries there are, and the menu entry this program wrote (unless Lexiglance was taken out of
+	// the menu), at this copy; any other menu entry only once the Lexiglance it starts is gone. Of an entry changed by hand
+	// only the program changes. The first time, a menu entry is added unless there is one.
 	void claim();
 
 	// On start: a release copy claims the entries, and is the installed copy from then on (true); a build tree only mends
