@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.4.0] - 15:28 CET 16-11-2026
+## [1.4.1] - 15:47 CET 16-11-2026
 
 ### Changed
 
@@ -269,7 +269,7 @@ First public release.
 - A health check that finds problems and offers fixes.
 - `lexiglancectl` for scripts, and service files for systemd, runit, OpenRC, dinit, s6 and XDG autostart.
 
-[1.4.0]: https://github.com/MattFor/lexiglance/releases/tag/v1.4.0
+[1.4.1]: https://github.com/MattFor/lexiglance/releases/tag/v1.4.1
 [1.3.9]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.9
 [1.3.8]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.8
 [1.3.7]: https://github.com/MattFor/lexiglance/releases/tag/v1.3.7
