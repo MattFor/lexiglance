@@ -1,5 +1,7 @@
 #include "Capture.h"
 
+#include "ocr/OcrCapture.h"
+
 #include <lexiglance/core/Glob.h>
 #include <lexiglance/language/Language.h>
 #include <lexiglance/ocr/Onnx.h>
@@ -136,7 +138,7 @@ namespace lexiglance::platform
 					{ .id     = "accessibility",
 					  .title  = "Text in applications",
 					  .status = health::Severity::Warning,
-					  .detail = "This build cannot read text through the accessibility bus; only OCR and selections work." }
+					  .detail = "This build can't read text through the accessibility bus, so only OCR and selections work." }
 			);
 		}
 
@@ -146,21 +148,24 @@ namespace lexiglance::platform
 					{ .id     = "ocr",
 					  .title  = "Text in images, games and videos (OCR)",
 					  .status = health::Severity::Warning,
-					  .detail = "OCR is turned off, so text that applications do not expose (images, games, videos, Discord, Wine) is not read.",
+					  .detail = "OCR is turned off, so Lexiglance can't read text that applications don't expose (images, games, videos, Discord, Wine).",
 					  .fix    = "enable-ocr" }
 			);
 		}
 		else if ( !ocr_ )
 		{
 			// A Windows without Microsoft's runtime is the one reason the settings application can put right by
-			// itself; everything else is a download to choose on the Scanning page.
-			const bool runtime = ocr_state_.contains( ocr::vc_runtime_absent );
+			// itself, and a Mac without the permission to read the screen one it can open the page for; everything else
+			// is a download to choose on the Scanning page.
+			const bool runtime    = ocr_state_.contains( ocr::vc_runtime_absent );
+			const bool permission = ocr_state_.contains( screen_permission_absent );
 			out.push_back(
 					{ .id     = "ocr",
 					  .title  = "Text in images, games and videos (OCR)",
 					  .status = health::Severity::Error,
 					  .detail = ocr_state_,
-					  .fix    = runtime ? "install-vcredist" : "open-scanning" }
+					  .fix    = runtime ? "install-vcredist" : permission ? "open-privacy-screen-recording"
+					                                                      : "open-scanning" }
 			);
 		}
 		else

@@ -2,10 +2,16 @@
 
 #include "Common.h"
 
+#include <lexiglance/core/Version.h>
+
+#include <QDesktopServices>
 #include <QFile>
 #include <QHBoxLayout>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QTextBlock>
+#include <QTextCursor>
+#include <QTextList>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -42,34 +48,52 @@ namespace lexiglance::gui
 			return found;
 		}
 
+		// Markdown's headings come out poster-sized: versions a step larger than the text, their sections bold, and some
+		// air between the points.
+		void tidy( QTextDocument* document )
+		{
+			QTextCursor cursor( document );
+			for ( QTextBlock block = document->begin(); block.isValid(); block = block.next() )
+			{
+				QTextBlockFormat format = block.blockFormat();
+				if ( const int level = format.headingLevel(); level > 0 )
+				{
+					QTextCharFormat chars;
+					chars.setProperty( QTextFormat::FontSizeAdjustment, level <= 2 ? 1 : 0 );
+					chars.setFontWeight( QFont::Bold );
+					cursor.setPosition( block.position() );
+					cursor.setPosition( block.position() + block.length() - 1, QTextCursor::KeepAnchor );
+					cursor.mergeCharFormat( chars );
+					format.setTopMargin( block == document->begin() ? 0 : ( level <= 2 ? 18 : 10 ) );
+					format.setBottomMargin( 4 );
+				}
+				else if ( block.textList() != nullptr )
+				{
+					format.setBottomMargin( 6 );
+				}
+				cursor.setPosition( block.position() );
+				cursor.setBlockFormat( format );
+			}
+		}
+
 	} // namespace
 
 	ChangesOverlay::ChangesOverlay( QWidget* parent ) :
 		CardOverlay( 620, parent ),
-		title_( new QLabel() ),
-		text_( new QLabel() ),
-		scroll_( new QScrollArea() ),
-		close_( new QPushButton( QStringLiteral( "Okie dokie" ) ) )
+		title_( cardTitle() ),
+		text_( new QTextBrowser() ),
+		close_( new QPushButton( QStringLiteral( "Got it" ) ) )
 	{
-		auto* layout = new QVBoxLayout( card() );
-		layout->setContentsMargins( 26, 20, 26, 18 );
-		layout->setSpacing( 12 );
-		QFont title_font = title_->font();
-		title_font.setPointSizeF( title_font.pointSizeF() * 1.4 );
-		title_font.setBold( true );
-		title_->setFont( title_font );
+		auto* layout = cardLayout();
 		layout->addWidget( title_ );
-		text_->setTextFormat( Qt::MarkdownText );
-		text_->setWordWrap( true );
-		text_->setTextInteractionFlags( Qt::TextSelectableByMouse );
-		scroll_->setWidget( text_ );
-		scroll_->setWidgetResizable( true );
-		scroll_->setFrameShape( QFrame::NoFrame );
-		scroll_->setHorizontalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
-		// The card's background through it.
-		scroll_->viewport()->setAutoFillBackground( false );
-		text_->setAutoFillBackground( false );
-		layout->addWidget( scroll_ );
+		// On the card itself, not in a field.
+		text_->setStyleSheet( QStringLiteral( "QTextBrowser { background: transparent; border: none; padding: 0; }" ) );
+		text_->setFrameShape( QFrame::NoFrame );
+		text_->viewport()->setAutoFillBackground( false );
+		text_->setHorizontalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
+		text_->setFocusPolicy( Qt::NoFocus );
+		text_->setOpenLinks( false );
+		layout->addWidget( text_ );
 
 		auto* footer = new QHBoxLayout();
 		footer->addStretch( 1 );
@@ -78,6 +102,10 @@ namespace lexiglance::gui
 		layout->addLayout( footer );
 
 		connect( close_, &QPushButton::clicked, this, [this] { hide(); } );
+		// The changelog links its docs by their place in the repository.
+		connect( text_, &QTextBrowser::anchorClicked, this, []( const QUrl& link ) {
+			QDesktopServices::openUrl( link.isRelative() ? QUrl( qs( project_url ) + QStringLiteral( "/blob/master/" ) ).resolved( link ) : link );
+		} );
 	}
 
 	void ChangesOverlay::open( const QString& version, const QString& since )
@@ -110,11 +138,14 @@ namespace lexiglance::gui
 		{
 			title_->setText( shown.empty() ? QStringLiteral( "What's new" ) : QStringLiteral( "What's new in Lexiglance %1" ).arg( shown.front().version ) );
 		}
-		text_->setText( text.trimmed().isEmpty() ? QStringLiteral( "Lexiglance was updated to %1." ).arg( version ) : text.trimmed() );
+		text_->setMarkdown( text.trimmed().isEmpty() ? QStringLiteral( "Lexiglance is now version %1." ).arg( version ) : text.trimmed() );
+		tidy( text_->document() );
 		// As tall as the changes, up to most of the window; past that it scrolls, from the newest.
-		const int text_width = std::min( 620, parentWidget()->width() - 48 ) - 52 - scroll_->verticalScrollBar()->sizeHint().width();
-		scroll_->setMinimumHeight( std::min( text_->heightForWidth( text_width ), parentWidget()->height() * 3 / 5 ) );
-		scroll_->verticalScrollBar()->setValue( 0 );
+		const int text_width = std::min( 620, parentWidget()->width() - 48 ) - 56 - text_->verticalScrollBar()->sizeHint().width();
+		text_->document()->setTextWidth( text_width );
+		const int wanted = static_cast<int>( text_->document()->size().height() ) + 4;
+		text_->setFixedHeight( std::min( wanted, parentWidget()->height() * 3 / 5 ) );
+		text_->verticalScrollBar()->setValue( 0 );
 		popUp();
 		close_->setFocus();
 	}

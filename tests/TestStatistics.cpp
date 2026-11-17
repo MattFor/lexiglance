@@ -8,6 +8,8 @@
 #include <chrono>
 #include <format>
 #include <fstream>
+#include <span>
+#include <string>
 
 namespace
 {
@@ -106,6 +108,46 @@ namespace
 		}
 		const auto words = document->root()["words"].items();
 		test::expect( !words.empty() && words.front()["word"].asString() == "zz" && words.front()["count"].asInt() == 2 );
+	} );
+
+	// The recent words as stats.recent sends them, joined by spaces.
+	std::string recent( const Statistics& stats )
+	{
+		const auto  document = json::Document::parse( stats.recentJson() );
+		std::string joined;
+		for ( const json::Value& word : document ? document->root()["recent"].items() : std::span<const json::Value>() )
+		{
+			joined += ( joined.empty() ? "" : " " ) + std::string( word.asString() );
+		}
+		return joined;
+	}
+
+	const test::Registrar recent_words( "statistics keep the latest words found, newest first and each once, between runs", [] {
+		const auto file = test::scratch( "statistics-recent" ) / "statistics.json";
+		{
+			Statistics stats;
+			stats.load( file );
+			stats.recordLookup( "本", "ja", "ocr", 1, std::chrono::microseconds( 1 ) );
+			stats.recordLookup( "", "", "ocr", 3, std::chrono::microseconds( 1 ) );
+			stats.recordLookup( "книга", "ru", "at-spi", 5, std::chrono::microseconds( 1 ) );
+			stats.recordLookup( "本", "ja", "ocr", 1, std::chrono::microseconds( 1 ) );
+			test::expectEqual( recent( stats ), std::string( "本 книга" ) );
+			stats.setEnabled( false, true );
+			stats.recordLookup( "秘密", "ja", "ocr", 2, std::chrono::microseconds( 1 ) );
+			test::expectEqual( recent( stats ), std::string( "本 книга" ) );
+			stats.save();
+		}
+		Statistics again;
+		again.load( file );
+		test::expectEqual( recent( again ), std::string( "本 книга" ) );
+		for ( int i = 0; i < 40; ++i )
+		{
+			again.recordLookup( std::format( "w{:02}", i ), "en", "ocr", 3, std::chrono::microseconds( 1 ) );
+		}
+		const auto all = recent( again );
+		test::expect( all.starts_with( "w39 w38 " ) && all.ends_with( " w10" ) );
+		again.reset();
+		test::expectEqual( recent( again ), std::string() );
 	} );
 
 #ifdef __linux__

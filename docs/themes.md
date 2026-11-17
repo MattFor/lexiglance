@@ -44,7 +44,7 @@ file...** copies one in. They are easy to write by hand:
 ```
 
 Settings a theme leaves out take their defaults, so a theme looks the same whatever was set before it. The names are
-those of the `popup` section of `config.json`.
+those of the `popup` section of `config.json`, which the daemon applies within two seconds of an edit.
 
 | Setting                                                          | Values                                                                                                                                                 |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |

@@ -18,6 +18,7 @@ namespace lexiglance::uninstall
 		WindowsSetup,    // installed with the Windows setup: its Uninstall.exe removes it
 		WindowsPortable, // the portable .zip, unpacked into a folder
 		AppImage,        // the AppImage: one file
+		MacApp,          // the macOS app bundle, Lexiglance.app
 		Deb,             // the .deb package, removed with apt-get
 		Rpm,             // the .rpm package, removed with rpm
 		Prefix,          // installed into a prefix: cmake --install, or the .tar.gz unpacked
@@ -44,13 +45,15 @@ namespace lexiglance::uninstall
 	struct Plan
 	{
 		Kind kind = Kind::Prefix;
-		// The Windows uninstaller, the AppImage, the portable folder, the prefix or the build tree.
+		// The Windows uninstaller, the AppImage, the app bundle, the portable folder, the prefix or the build tree.
 		std::filesystem::path where;
-		// Lexiglance's own files: the programs and what came with them in the prefix, the AppImage, the portable folder's.
+		// Lexiglance's own files: the programs and what came with them in the prefix, the AppImage, the app bundle (unless
+		// this user cannot change its folder), the portable folder's.
 		std::vector<std::filesystem::path> programs;
 		// The command that removes the package (run as root), in place of `programs`.
 		std::vector<std::string> package;
-		// The user's autostart entries, menu entry and icon, and service definitions copied from the documentation.
+		// The user's autostart entries (a LaunchAgent on macOS), menu entry and icon, and service definitions copied from the
+		// documentation.
 		std::vector<std::filesystem::path> integration;
 		// Settings, dictionaries, downloaded models, logs and cache; empty when they are kept.
 		std::vector<std::filesystem::path> data;
@@ -66,8 +69,14 @@ namespace lexiglance::uninstall
 	[[nodiscard]] bool needsRoot( const std::filesystem::path& path );
 
 	// Stops the services that would start the daemon again once it ends (systemd, runit, dinit and OpenRC user
-	// services), then the daemon and the settings application themselves: asked to end, killed after `grace`.
+	// services), then the daemon and the settings application themselves: asked to end, killed after `grace`. With a
+	// home of its own (LEXIGLANCE_HOME), only that home's, as stopHome() does.
 	void stopPrograms( const Places& places, std::chrono::milliseconds grace );
+
+	// This home's daemon and settings window only, as `lexiglanced --replace` ends a daemon: asked over their sockets to
+	// quit, and the daemon holding the home's lock ended if it has not after `grace`. The settings window is left alone
+	// when it is the one asking (`places.executable`).
+	void stopHome( const Places& places, std::chrono::milliseconds grace );
 
 	// Deletes the paths, folders with everything in them (a link, not what it points at), then the Lexiglance folders
 	// they leave empty. What could not be deleted comes back, a line for each with why.

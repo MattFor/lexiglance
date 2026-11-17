@@ -76,6 +76,11 @@ namespace lexiglance::ocr
 	// both.
 	[[nodiscard]] std::pair<float, float> readingWorth( const TextLine& line, std::span<const lang::Language* const> languages );
 
+	// Whether a reading is sure and all in the scripts of `languages`, so that no other recogniser can read the line
+	// better and none need try. Not for a letter or three, which a letter of another script can pass for (a syllable of
+	// Hangul read as a kanji).
+	[[nodiscard]] bool readSurely( const TextLine& line, std::span<const lang::Language* const> languages );
+
 	// PaddleOCR (PP-OCR) text detection and recognition. Not thread-safe.
 	class PaddleOcr
 	{

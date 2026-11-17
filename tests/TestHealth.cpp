@@ -54,6 +54,24 @@ namespace
 		test::expect( second.held() );
 	} );
 
+	const test::Registrar temporary_lock( "a temporary lock leaves no file, and never two holders", [] {
+		const auto                               file = test::scratch( "temporary-lock" ) / "import.lock";
+		std::optional<lg::process::InstanceLock> first( std::in_place, file, true );
+		test::expect( first->held() && std::filesystem::exists( file ) );
+		// Opened before the holder let go and removed the file: what it then locks is a file no path names.
+		lg::process::InstanceLock second( file, true );
+		test::expect( !second.held() );
+		first.reset();
+		test::expect( second.retry() && std::filesystem::exists( file ) );
+		{
+			const lg::process::InstanceLock third( file, true );
+			test::expect( !third.held() );
+		}
+		// Windows may keep a removed file's name while anyone has it open.
+		second = lg::process::InstanceLock();
+		test::expect( !std::filesystem::exists( file ) );
+	} );
+
 	const test::Registrar process_lookup( "processes of this user by name", [] {
 #if defined( __linux__ ) || defined( _WIN32 )
 		const int self = currentPid();

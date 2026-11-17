@@ -107,6 +107,14 @@ namespace
 		test::expect( read > spelled && read > left_out );
 		// With no letter of anyone's script (digits), the reading with more to it.
 		test::expect( lg::ocr::readingWorth( line( { "1", "2", "3" }, 0.9F ), russian ) > lg::ocr::readingWorth( line( { "1" }, 0.99F ), japanese ) );
+
+		// Sure and in its own script: no other recogniser need read it. Not a look-alike spelling, an unsure reading, a
+		// line of another script's letters, or a lone letter however sure.
+		test::expect( lg::ocr::readSurely( line( { "図", "書", "館", "で", " ", "本" }, 0.97F ), japanese ) );
+		test::expect( !lg::ocr::readSurely( line( { "K", "H", "u", "r", "a" }, 0.99F ), japanese ) );
+		test::expect( !lg::ocr::readSurely( line( { "図", "書", "館", "で" }, 0.7F ), japanese ) );
+		test::expect( !lg::ocr::readSurely( line( { "к", "н", "и", "г", "а" }, 0.99F ), japanese ) );
+		test::expect( !lg::ocr::readSurely( line( { "異" }, 0.99F ), japanese ) );
 	} );
 
 	const test::Registrar ocr_not_set_up( "ocr not set up is not a fault", [] {

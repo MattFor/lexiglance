@@ -27,8 +27,8 @@ namespace lexiglance::lang
 
 	[[nodiscard]] TextVariant toVariant( const Units& units );
 
-	// Appends the spelling unless an equal one is there already.
-	void addVariant( std::vector<TextVariant>& out, const Units& units );
+	// Appends the spelling unless an equal one is there already; `folded` for one spelled otherwise than written.
+	void addVariant( std::vector<TextVariant>& out, const Units& units, bool folded = false );
 
 } // namespace lexiglance::lang
 

@@ -216,13 +216,16 @@ namespace lexiglance::dict
 		{
 			return std::string( declared->code() );
 		}
-		const auto                    terms = dictionary.terms();
-		const std::size_t             step  = std::max<std::size_t>( 1, terms.size() / 64 );
 		std::vector<std::string_view> headwords;
-		for ( std::size_t i = 0; i < terms.size(); i += step )
-		{
-			headwords.push_back( dictionary.string( terms[i].expression ) );
-		}
+		const auto                    sample = [&]( const auto& records ) {
+			const std::size_t step = std::max<std::size_t>( 1, records.size() / 64 );
+			for ( std::size_t i = 0; i < records.size(); i += step )
+			{
+				headwords.push_back( dictionary.string( records[i].expression ) );
+			}
+		};
+		// Frequency and pitch lists by the words they rank.
+		dictionary.terms().empty() ? sample( dictionary.meta() ) : sample( dictionary.terms() );
 		return headwordLanguage( headwords );
 	}
 
@@ -291,7 +294,7 @@ namespace lexiglance::dict
 	std::vector<std::size_t> smartOrder( std::span<const Profile> profiles )
 	{
 		std::vector<std::size_t> order( profiles.size() );
-		std::ranges::iota( order, std::size_t{ 0 } );
+		std::iota( order.begin(), order.end(), std::size_t{ 0 } ); // NOLINT(modernize-use-ranges): Apple's libc++ has no ranges::iota
 		std::vector<decltype( sortKey( Profile{} ) )> keys;
 		keys.reserve( profiles.size() );
 		for ( const auto& profile : profiles )

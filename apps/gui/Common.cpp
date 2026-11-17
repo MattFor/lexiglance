@@ -4,14 +4,26 @@
 #include <lexiglance/core/Paths.h>
 
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QUrl>
 #include <QVersionNumber>
+
+#ifdef Q_OS_MACOS
+	#include <objc/message.h>
+	#include <objc/runtime.h>
+
+// CoreGraphics' (CGEvent.h, CGWindow.h); its headers are not C++26-clean.
+extern "C" bool CGPreflightListenEventAccess( void );
+extern "C" bool CGPreflightScreenCaptureAccess( void );
+#endif
 
 namespace lexiglance::gui
 {
@@ -60,7 +72,8 @@ namespace lexiglance::gui
 		const QString name = QStringLiteral( "lexiglanced" );
 #endif
 		const QString here = QCoreApplication::applicationDirPath();
-		for ( const QString& candidate : { here + "/" + name, here + "/../daemon/" + name } )
+		// Beside it, in a build tree, or Lexiglance.app's helper app (see process::sibling).
+		for ( const QString& candidate : { here + "/" + name, here + "/../daemon/" + name, here + "/../Helpers/lexiglanced.app/Contents/MacOS/" + name } )
 		{
 			if ( QFileInfo( candidate ).isExecutable() )
 			{
@@ -104,6 +117,41 @@ namespace lexiglance::gui
 	QSettings applicationMemory()
 	{
 		return { qs( ( paths::configDir() / "settings-application.ini" ).string() ), QSettings::IniFormat };
+	}
+
+	void showInDock( [[maybe_unused]] bool shown )
+	{
+#ifdef Q_OS_MACOS
+		// [NSApp setActivationPolicy:] with Regular (0) or Accessory (1): Qt has no call for it.
+		id app = reinterpret_cast<id ( * )( Class, SEL )>( objc_msgSend )( objc_getClass( "NSApplication" ), sel_registerName( "sharedApplication" ) );
+		reinterpret_cast<void ( * )( id, SEL, long )>( objc_msgSend )( app, sel_registerName( "setActivationPolicy:" ), shown ? 0 : 1 );
+#endif
+	}
+
+	bool openPrivacySettings( const QString& action )
+	{
+		static const QHash<QString, QString> panes{
+			{ QStringLiteral( "open-privacy-accessibility" ), QStringLiteral( "Accessibility" ) },
+			{ QStringLiteral( "open-privacy-input-monitoring" ), QStringLiteral( "ListenEvent" ) },
+			{ QStringLiteral( "open-privacy-screen-recording" ), QStringLiteral( "ScreenCapture" ) },
+		};
+		const QString pane = panes.value( action );
+		return !pane.isEmpty() && QDesktopServices::openUrl( QUrl( QStringLiteral( "x-apple.systempreferences:com.apple.preference.security?Privacy_" ) + pane ) );
+	}
+
+	bool privacyAllowed( [[maybe_unused]] std::string_view fix )
+	{
+#ifdef Q_OS_MACOS
+		if ( fix == "open-privacy-input-monitoring" )
+		{
+			return CGPreflightListenEventAccess();
+		}
+		if ( fix == "open-privacy-screen-recording" )
+		{
+			return CGPreflightScreenCaptureAccess();
+		}
+#endif
+		return false;
 	}
 
 	QString diagnosisZipPath()

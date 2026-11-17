@@ -134,6 +134,9 @@ namespace lexiglance::config
 		std::string value;
 	};
 
+	// The smallest popup scale (PopupSettings::scale, where 0 follows the desktop) still readable.
+	inline constexpr double min_popup_scale = 0.5;
+
 	struct PopupSettings
 	{
 		int         width      = 400;
@@ -321,6 +324,8 @@ namespace lexiglance::config
 		AnkiSettings                      anki;
 		TranslationSettings               translation;
 		std::vector<DictionaryPreference> dictionaries;
+		// Developer mode: the settings application's Developer page (About -> the version, or lexiglance --developer).
+		bool developer = false;
 
 		// Missing or malformed fields keep their defaults; an invalid trigger is an error.
 		[[nodiscard]] static Result<Config> fromJson( const json::Value& root );
@@ -336,6 +341,18 @@ namespace lexiglance::config
 
 		[[nodiscard]] const DictionaryPreference* dictionary( std::string_view title ) const noexcept;
 	};
+
+	// A setting two configurations disagree on: its name in the file ("popup.theme") and its value in each, as JSON
+	// (empty where one has none).
+	struct Change
+	{
+		std::string setting;
+		std::string before;
+		std::string after;
+	};
+
+	// What changes from `from` to `to`, in the order of the file; a list is one setting.
+	[[nodiscard]] std::vector<Change> changes( const Config& from, const Config& to );
 
 } // namespace lexiglance::config
 

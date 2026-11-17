@@ -109,8 +109,18 @@ namespace
 		test::expect( store.install( test::fixtureDirectory(), {}, true ).has_value() );
 		test::expectEqual( store.loadAll().size(), std::size_t{ 1 } );
 		test::expect( store.fileFor( "Fixture Dictionary [2026-01-01]" ).filename().string().starts_with( "fixture-dictionary-2026-01-01-" ) );
+		// Imports leave no lock files; one a killed import left goes with the dictionary, or when the folder is read.
+		const auto locks = [&] { return std::ranges::count_if( std::filesystem::directory_iterator( store.directory() ), []( const auto& entry ) { return entry.path().extension() == ".lock"; } ); };
+		test::expectEqual( locks(), 0 );
+		const auto file = store.fileFor( "Fixture Dictionary [2026-01-01]" );
+		std::ofstream( std::filesystem::path( file ).concat( ".lock" ) ) << "1\n";
+		std::ofstream( store.directory() / "other.lgd.lock" ) << "1\n";
+		std::ofstream( store.directory() / "killed.lgd.tmp" ) << "half";
 		test::expect( store.remove( "Fixture Dictionary [2026-01-01]" ).has_value() );
+		test::expectEqual( locks(), 1 );
 		test::expect( store.loadAll().empty() );
+		test::expectEqual( locks(), 0 );
+		test::expect( !std::filesystem::exists( store.directory() / "killed.lgd.tmp" ) );
 	} );
 
 	void corruptFiles()

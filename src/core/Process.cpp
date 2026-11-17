@@ -1,6 +1,7 @@
 #include <lexiglance/core/Process.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <charconv>
 #include <cstdint>
@@ -26,6 +27,15 @@
 	#include <sys/stat.h>
 	#include <sys/wait.h>
 	#include <unistd.h>
+#endif
+#ifdef __APPLE__
+	#include <libproc.h>
+	#include <mach-o/dyld.h>
+	#include <sys/proc.h>
+	#include <sys/proc_info.h>
+
+	#include <cstring>
+	#include <optional>
 #endif
 
 namespace lexiglance::process
@@ -73,8 +83,9 @@ namespace lexiglance::process
 
 	} // namespace
 
-	InstanceLock::InstanceLock( fs::path file ) :
-		file_( std::move( file ) )
+	InstanceLock::InstanceLock( fs::path file, bool temporary ) :
+		file_( std::move( file ) ),
+		temporary_( temporary )
 	{
 		retry();
 	}
@@ -87,7 +98,8 @@ namespace lexiglance::process
 	InstanceLock::InstanceLock( InstanceLock&& other ) noexcept :
 		file_( std::move( other.file_ ) ),
 		fd_( std::exchange( other.fd_, -1 ) ),
-		held_( std::exchange( other.held_, false ) )
+		held_( std::exchange( other.held_, false ) ),
+		temporary_( other.temporary_ )
 	{
 	}
 
@@ -96,9 +108,10 @@ namespace lexiglance::process
 		if ( this != &other )
 		{
 			release();
-			file_ = std::move( other.file_ );
-			fd_   = std::exchange( other.fd_, -1 );
-			held_ = std::exchange( other.held_, false );
+			file_      = std::move( other.file_ );
+			fd_        = std::exchange( other.fd_, -1 );
+			held_      = std::exchange( other.held_, false );
+			temporary_ = other.temporary_;
 		}
 		return *this;
 	}
@@ -204,6 +217,11 @@ namespace lexiglance::process
 		{
 			if ( held_ )
 			{
+				// Removed while still locked, as on other systems.
+				if ( temporary_ )
+				{
+					DeleteFileW( file_.c_str() );
+				}
 				OVERLAPPED at{};
 				at.OffsetHigh = 1;
 				UnlockFileEx( handleOf( fd_ ), 0, 1, 0, &at );
@@ -220,22 +238,41 @@ namespace lexiglance::process
 		{
 			return true;
 		}
-		if ( fd_ == -1 )
-		{
-			// Not inherited (no security attributes): a program the daemon starts never keeps the lock.
-			HANDLE file = CreateFileW( file_.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr );
-			if ( file == INVALID_HANDLE_VALUE )
-			{
-				return false;
-			}
-			fd_ = descriptorOf( file );
-		}
 		// A byte far past the pid is locked, so the pid itself stays readable for whoever asks who holds the lock.
 		OVERLAPPED at{};
 		at.OffsetHigh = 1;
-		if ( LockFileEx( handleOf( fd_ ), LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &at ) == FALSE )
+		for ( int attempt = 0;; ++attempt )
 		{
-			return false;
+			if ( fd_ == -1 )
+			{
+				// Not inherited (no security attributes): a program the daemon starts never keeps the lock.
+				HANDLE file = CreateFileW( file_.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr );
+				if ( file == INVALID_HANDLE_VALUE )
+				{
+					return false;
+				}
+				fd_ = descriptorOf( file );
+			}
+			if ( LockFileEx( handleOf( fd_ ), LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &at ) == FALSE )
+			{
+				return false;
+			}
+			// Locked after its holder removed it (a temporary lock): the path names another file now, or none.
+			const Handle               named( CreateFileW( file_.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr ) );
+			BY_HANDLE_FILE_INFORMATION mine{};
+			BY_HANDLE_FILE_INFORMATION theirs{};
+			if ( named && GetFileInformationByHandle( handleOf( fd_ ), &mine ) != FALSE && GetFileInformationByHandle( named.get(), &theirs ) != FALSE &&
+			     mine.dwVolumeSerialNumber == theirs.dwVolumeSerialNumber && mine.nFileIndexHigh == theirs.nFileIndexHigh && mine.nFileIndexLow == theirs.nFileIndexLow )
+			{
+				break;
+			}
+			UnlockFileEx( handleOf( fd_ ), 0, 1, 0, &at );
+			CloseHandle( handleOf( fd_ ) );
+			fd_ = -1;
+			if ( attempt == 2 )
+			{
+				return false;
+			}
 		}
 		held_                   = true;
 		const std::string   pid = std::to_string( GetCurrentProcessId() ) + "\n";
@@ -367,6 +404,17 @@ namespace lexiglance::process
 	namespace
 	{
 
+	#ifdef __APPLE__
+		std::optional<proc_bsdinfo> bsdInfo( int pid )
+		{
+			proc_bsdinfo info{};
+			if ( ::proc_pidinfo( pid, PROC_PIDTBSDINFO, 0, &info, sizeof( info ) ) != static_cast<int>( sizeof( info ) ) )
+			{
+				return std::nullopt;
+			}
+			return info;
+		}
+	#else
 		// The fields of /proc/<pid>/stat after the command name, which may itself contain spaces and parentheses.
 		std::vector<std::string> statFields( int pid )
 		{
@@ -384,6 +432,7 @@ namespace lexiglance::process
 			}
 			return fields;
 		}
+	#endif
 
 	} // namespace
 
@@ -391,7 +440,12 @@ namespace lexiglance::process
 	{
 		if ( fd_ >= 0 )
 		{
-			// Closing the descriptor releases the lock; the file stays so the next holder reuses it.
+			// Removed while still locked: whoever opened it meanwhile and locks it next sees that it is gone (retry()).
+			if ( held_ && temporary_ )
+			{
+				::unlink( file_.c_str() );
+			}
+			// Closing the descriptor releases the lock; a lasting lock's file stays so the next holder reuses it.
 			::close( fd_ );
 			fd_ = -1;
 		}
@@ -404,18 +458,34 @@ namespace lexiglance::process
 		{
 			return true;
 		}
-		if ( fd_ < 0 )
+		for ( int attempt = 0;; ++attempt )
 		{
-			// Close-on-exec: an audio player started by the daemon must never keep holding the lock after it.
-			fd_ = ::open( file_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600 ); // NOLINT(cppcoreguidelines-pro-type-vararg): open(2) takes the mode as a variadic argument
 			if ( fd_ < 0 )
+			{
+				// Close-on-exec: an audio player started by the daemon must never keep holding the lock after it.
+				fd_ = ::open( file_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600 ); // NOLINT(cppcoreguidelines-pro-type-vararg): open(2) takes the mode as a variadic argument
+				if ( fd_ < 0 )
+				{
+					return false;
+				}
+			}
+			if ( ::flock( fd_, LOCK_EX | LOCK_NB ) != 0 )
 			{
 				return false;
 			}
-		}
-		if ( ::flock( fd_, LOCK_EX | LOCK_NB ) != 0 )
-		{
-			return false;
+			// Locked after its holder removed it (a temporary lock): the path names another file now, or none.
+			struct stat mine{};
+			struct stat theirs{};
+			if ( ::fstat( fd_, &mine ) == 0 && ::lstat( file_.c_str(), &theirs ) == 0 && mine.st_dev == theirs.st_dev && mine.st_ino == theirs.st_ino )
+			{
+				break;
+			}
+			::close( fd_ );
+			fd_ = -1;
+			if ( attempt == 2 )
+			{
+				return false;
+			}
 		}
 		held_                   = true;
 		const std::string pid   = std::to_string( ::getpid() ) + "\n";
@@ -424,6 +494,34 @@ namespace lexiglance::process
 		return true;
 	}
 
+	#ifdef __APPLE__
+	bool sameUser( int pid )
+	{
+		const auto info = pid > 0 ? bsdInfo( pid ) : std::nullopt;
+		return info && info->pbi_uid == ::getuid();
+	}
+
+	bool isRunning( int pid, std::string_view name )
+	{
+		const auto info = pid > 0 ? bsdInfo( pid ) : std::nullopt;
+		if ( !info || info->pbi_uid != ::getuid() || info->pbi_status == SZOMB )
+		{
+			return false;
+		}
+		// The kernel's name for a process is cut to 16 characters; its executable's file name is not.
+		std::array<char, PROC_PIDPATHINFO_MAXSIZE> path{};
+		return ::proc_pidpath( pid, path.data(), static_cast<std::uint32_t>( path.size() ) ) > 0 && fs::path( path.data() ).filename() == name;
+	}
+
+	std::vector<int> othersNamed( std::string_view name )
+	{
+		std::vector<int> pids( static_cast<std::size_t>( std::max( 0, ::proc_listallpids( nullptr, 0 ) ) ) + 64 );
+		const int        count = ::proc_listallpids( pids.data(), static_cast<int>( pids.size() * sizeof( int ) ) );
+		pids.resize( static_cast<std::size_t>( std::clamp( count, 0, static_cast<int>( pids.size() ) ) ) );
+		std::erase_if( pids, [&]( int pid ) { return pid == ::getpid() || !isRunning( pid, name ); } );
+		return pids;
+	}
+	#else
 	bool sameUser( int pid )
 	{
 		if ( pid <= 0 )
@@ -491,6 +589,7 @@ namespace lexiglance::process
 		}
 		return found;
 	}
+	#endif
 
 	bool terminate( int pid, std::string_view name, std::chrono::milliseconds grace )
 	{
@@ -510,6 +609,34 @@ namespace lexiglance::process
 		return waitFor( gone, std::chrono::seconds( 2 ) );
 	}
 
+	#ifdef __APPLE__
+	fs::path executable()
+	{
+		std::uint32_t size = 0;
+		( void )::_NSGetExecutablePath( nullptr, &size );
+		std::string path( size, '\0' );
+		if ( ::_NSGetExecutablePath( path.data(), &size ) != 0 )
+		{
+			return {};
+		}
+		path.resize( std::strlen( path.c_str() ) );
+		std::error_code ec;
+		auto            canonical = fs::canonical( path, ec );
+		return ec ? fs::path( path ) : canonical;
+	}
+
+	bool executableReplaced()
+	{
+		struct stat info{};
+		const auto  self = bsdInfo( ::getpid() );
+		if ( !self || ::stat( programFile().c_str(), &info ) != 0 )
+		{
+			return false;
+		}
+		// Its change time too: a file moved into place keeps when it was written, not when it was moved.
+		return std::max( info.st_mtimespec.tv_sec, info.st_ctimespec.tv_sec ) > static_cast<long long>( self->pbi_start_tvsec ) + 1;
+	}
+	#else
 	fs::path executable()
 	{
 		std::error_code            ec;
@@ -560,7 +687,7 @@ namespace lexiglance::process
 		// And its change time: a file moved into place keeps when it was written, not when it was moved.
 		return std::max( info.st_mtim.tv_sec, info.st_ctim.tv_sec ) > started + 1;
 	}
-
+	#endif
 #endif
 
 #ifdef _WIN32
@@ -817,7 +944,17 @@ namespace lexiglance::process
 		{
 			folder = "daemon";
 		}
-		for ( const fs::path& candidate : { here / file, here.parent_path() / folder / file } )
+		const std::vector<fs::path> candidates{
+			here / file,
+			here.parent_path() / folder / file,
+#ifdef __APPLE__
+			// In Lexiglance.app the daemon is an app of its own, Contents/Helpers/lexiglanced.app, so that opening Lexiglance
+			// starts the settings application even while the daemon runs: from there, and back.
+			here.parent_path() / "Helpers" / ( file + ".app" ) / "Contents" / "MacOS" / file,
+			here.parent_path().parent_path().parent_path().parent_path() / "MacOS" / file,
+#endif
+		};
+		for ( const fs::path& candidate : candidates )
 		{
 			if ( std::error_code ec; fs::is_regular_file( candidate, ec ) )
 			{

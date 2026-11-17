@@ -160,7 +160,7 @@ namespace lexiglance::gui
 		}
 		controls->addWidget( figure_ );
 		controls->addStretch( 1 );
-		auto* hint = new QLabel( QStringLiteral( "Point at a day to see all of it" ) );
+		auto* hint = new QLabel( QStringLiteral( "Point at a day to see all its figures" ) );
 		hint->setEnabled( false );
 		controls->addWidget( hint );
 		controls->addSpacing( 12 );
@@ -183,9 +183,9 @@ namespace lexiglance::gui
 		layout->addStretch( 1 );
 
 		auto*         row  = new QHBoxLayout();
-		const QString kept = QStringLiteral( "The tally is kept in this computer's state directory and is never sent anywhere. Turning this off stops counting them; what was counted stays until it is forgotten." );
-		counting_->setToolTip( QStringLiteral( "Lookups, the words found, the popups shown, sounds played and Anki cards made. " ) + kept );
-		counting_translations_->setToolTip( QStringLiteral( "The sentences translated, their languages and how long the translations took. " ) + kept );
+		const QString kept = QStringLiteral( "The counts stay on this computer and are never sent anywhere. Turning this off stops counting; what's already counted stays until you click Forget everything." );
+		counting_->setToolTip( QStringLiteral( "Counts lookups, words found, popups shown, pronunciations played and Anki notes added. " ) + kept );
+		counting_translations_->setToolTip( QStringLiteral( "Counts the sentences translated, their languages and how long each translation took. " ) + kept );
 		row->addWidget( counting_ );
 		row->addSpacing( 16 );
 		row->addWidget( counting_translations_ );
@@ -237,7 +237,7 @@ namespace lexiglance::gui
 			update();
 		} );
 		connect( forget, &QPushButton::clicked, this, [this] {
-			if ( !confirm( this, QStringLiteral( "Forget the statistics" ), QStringLiteral( "Everything counted so far is forgotten: the words, the languages, the translations, the days. The dictionaries and settings are untouched." ), QStringLiteral( "Forget" ) ) )
+			if ( !confirm( this, QStringLiteral( "Forget the statistics" ), QStringLiteral( "This deletes everything counted so far: words, languages, translations and days. Your dictionaries and settings stay as they are." ), QStringLiteral( "Forget" ) ) )
 			{
 				return;
 			}
@@ -284,11 +284,11 @@ namespace lexiglance::gui
 				// A daemon from before this page knows no such request; it counts nothing until it is restarted.
 				if ( error.contains( QStringLiteral( "unknown method" ) ) )
 				{
-					note_->setText( QStringLiteral( "The running daemon is older than this window and counts nothing yet. Restart Lexiglance (Overview → Restart) to start the tally." ) );
+					note_->setText( QStringLiteral( "The running Lexiglance is older than this window and doesn't count anything yet. Restart it (Overview → Restart) to start counting." ) );
 				}
 				else
 				{
-					note_->setText( error.isEmpty() ? QStringLiteral( "Lexiglance is not running, so there is nothing to count with." ) : error );
+					note_->setText( error.isEmpty() ? QStringLiteral( "Lexiglance isn't running, so nothing is being counted." ) : error );
 				}
 				return;
 			}
@@ -425,11 +425,11 @@ namespace lexiglance::gui
 		QString summary;
 		if ( !loaded_ )
 		{
-			summary = QStringLiteral( "Asking Lexiglance for its tally..." );
+			summary = QStringLiteral( "Loading the statistics..." );
 		}
 		else if ( tally_.totals[static_cast<std::size_t>( Figure::Lookups )] == 0 && tally_.totals[static_cast<std::size_t>( Figure::Translations )] == 0 )
 		{
-			summary = QStringLiteral( "Nothing has been looked up yet. Hold the trigger over a word and this page fills itself." );
+			summary = QStringLiteral( "Nothing looked up yet. Hold the trigger over a word and this page starts filling up." );
 		}
 		else
 		{
@@ -437,23 +437,23 @@ namespace lexiglance::gui
 		}
 		if ( loaded_ && !tally_.enabled && !tally_.translations_enabled )
 		{
-			summary += QStringLiteral( " Counting is off, so these figures stand still." );
+			summary += QStringLiteral( " Counting is off, so these figures won't change." );
 		}
 		else if ( loaded_ && !tally_.enabled )
 		{
-			summary += QStringLiteral( " Lookups are not counted, so their figures stand still." );
+			summary += QStringLiteral( " Lookups aren't being counted, so their figures won't change." );
 		}
 		else if ( loaded_ && !tally_.translations_enabled )
 		{
-			summary += QStringLiteral( " Translations are not counted, so their figures stand still." );
+			summary += QStringLiteral( " Translations aren't being counted, so their figures won't change." );
 		}
 		note_->setText( summary );
 
 		chart_->setPeriods( chosen, static_cast<Figure>( std::max( 0, figure_->currentIndex() ) ), static_cast<ActivityChart::Style>( std::max( 0, style_->checkedId() ) ) );
-		words_->setRows( std::vector<BarList::Row>( tally_.words.begin(), tally_.words.begin() + static_cast<std::ptrdiff_t>( std::min<std::size_t>( tally_.words.size(), 15 ) ) ), QColor( 0x5b, 0x8d, 0xef ), QStringLiteral( "No word has been found yet." ) );
-		languages_->setRows( tally_.languages, QColor( 0x3f, 0xa4, 0x5b ), QStringLiteral( "Nothing has been found in any language yet." ) );
-		translated_->setRows( tally_.translated, QColor( 0xd0, 0x6a, 0x9c ), QStringLiteral( "Nothing has been translated yet." ) );
-		sources_->setRows( tally_.sources, QColor( 0xd1, 0x9a, 0x1f ), QStringLiteral( "Nothing has been read from the screen yet." ) );
+		words_->setRows( std::vector<BarList::Row>( tally_.words.begin(), tally_.words.begin() + static_cast<std::ptrdiff_t>( std::min<std::size_t>( tally_.words.size(), 15 ) ) ), QColor( 0x5b, 0x8d, 0xef ), QStringLiteral( "No words found yet." ) );
+		languages_->setRows( tally_.languages, QColor( 0x3f, 0xa4, 0x5b ), QStringLiteral( "Nothing found in any language yet." ) );
+		translated_->setRows( tally_.translated, QColor( 0xd0, 0x6a, 0x9c ), QStringLiteral( "Nothing translated yet." ) );
+		sources_->setRows( tally_.sources, QColor( 0xd1, 0x9a, 0x1f ), QStringLiteral( "No text read yet." ) );
 	}
 
 } // namespace lexiglance::gui

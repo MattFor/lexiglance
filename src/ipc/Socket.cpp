@@ -21,6 +21,7 @@
 
 	#include <vector>
 #else
+	#include <fcntl.h>
 	#include <sys/socket.h>
 	#include <sys/stat.h>
 	#include <sys/time.h>
@@ -333,6 +334,26 @@ namespace lexiglance::ipc
 			return addr;
 		}
 
+		// macOS has no SOCK_CLOEXEC, and SO_NOSIGPIPE is its sure way to keep send() from raising SIGPIPE.
+		int prepared( int fd )
+		{
+	#ifdef __APPLE__
+			if ( fd >= 0 )
+			{
+				const int on = 1;
+				( void )::fcntl( fd, F_SETFD, FD_CLOEXEC );
+				( void )::setsockopt( fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof( on ) );
+			}
+	#endif
+			return fd;
+		}
+
+	#ifdef SOCK_CLOEXEC
+		constexpr int cloexec = SOCK_CLOEXEC;
+	#else
+		constexpr int cloexec = 0;
+	#endif
+
 	} // namespace
 
 	void Socket::close() noexcept
@@ -406,7 +427,7 @@ namespace lexiglance::ipc
 			return std::unexpected( addr.error() );
 		}
 
-		Socket socket( ::socket( AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0 ) );
+		Socket socket( prepared( ::socket( AF_UNIX, SOCK_STREAM | cloexec, 0 ) ) );
 		if ( !socket.valid() )
 		{
 			return fail( "socket: {}", errorText( errno ) );
@@ -467,7 +488,7 @@ namespace lexiglance::ipc
 			std::filesystem::remove( endpoint, ec );
 		}
 
-		Socket socket( ::socket( AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0 ) );
+		Socket socket( prepared( ::socket( AF_UNIX, SOCK_STREAM | cloexec, 0 ) ) );
 		if ( !socket.valid() )
 		{
 			return fail( "socket: {}", errorText( errno ) );
@@ -491,7 +512,11 @@ namespace lexiglance::ipc
 
 	Result<Socket> acceptFrom( const Socket& server )
 	{
+	#ifdef SOCK_CLOEXEC
 		const int fd = ::accept4( server.fd(), nullptr, nullptr, SOCK_CLOEXEC );
+	#else
+		const int fd = prepared( ::accept( server.fd(), nullptr, nullptr ) );
+	#endif
 		if ( fd < 0 )
 		{
 			return fail( "accept: {}", errorText( errno ) );
@@ -520,7 +545,16 @@ namespace lexiglance::ipc
 		{
 			return std::unexpected( sent.error() );
 		}
+		return receive( id, on_event );
+	}
 
+	Result<json::Document> Client::listen( const EventHandler& on_event )
+	{
+		return receive( 0, on_event );
+	}
+
+	Result<json::Document> Client::receive( std::int64_t id, const EventHandler& on_event )
+	{
 		std::array<char, 64UL * 1024UL> chunk{};
 		while ( true )
 		{

@@ -1,11 +1,14 @@
 #include "SearchPage.h"
 
 #include "DaemonClient.h"
+#include "Settings.h"
 
 #include <lexiglance/language/Language.h>
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QScrollBar>
 #include <QUrlQuery>
 #include <QVBoxLayout>
 
@@ -16,6 +19,9 @@ namespace lexiglance::gui
 
 	namespace
 	{
+
+		// Characters looked up from the start of the text; anki.add looks the text up the same way, so its entries match.
+		constexpr int search_length = 32;
 
 		QString categoryColor( std::string_view category )
 		{
@@ -73,7 +79,7 @@ namespace lexiglance::gui
 		auto* layout = new QVBoxLayout( this );
 		layout->setContentsMargins( 24, 20, 24, 20 );
 		auto* row = new QHBoxLayout();
-		query_->setPlaceholderText( QStringLiteral( "Type or paste a word or a sentence (inflected forms work too)" ) );
+		query_->setPlaceholderText( QStringLiteral( "Type or paste a word or sentence (inflected forms work too)" ) );
 		query_->setClearButtonEnabled( true );
 		QFont font = query_->font();
 		font.setPointSizeF( font.pointSizeF() * 1.4 );
@@ -81,28 +87,36 @@ namespace lexiglance::gui
 		row->addWidget( query_, 1 );
 		timing_->setEnabled( false );
 		row->addWidget( timing_ );
-		watch_->setToolTip( QStringLiteral( "Look up text as soon as it is copied, e.g. from a text hooker" ) );
+		watch_->setToolTip( QStringLiteral( "Looks up text as soon as it's copied, for example by a text hooker" ) );
+		watch_->setChecked( applicationMemory().value( QStringLiteral( "search/watch_clipboard" ) ).toBool() );
 		row->addWidget( watch_ );
 		layout->addLayout( row );
 		results_->setOpenLinks( false );
-		results_->setPlaceholderText( QStringLiteral( "Results appear as you type." ) );
+		results_->setPlaceholderText( QStringLiteral( "Results appear as you type. Words you look up on screen show up here too." ) );
 		layout->addWidget( results_, 1 );
+		query_->installEventFilter( this );
 
 		debounce_->setSingleShot( true );
 		debounce_->setInterval( 120 );
 		connect( debounce_, &QTimer::timeout, this, [this] { search(); } );
 		connect( query_, &QLineEdit::textChanged, debounce_, qOverload<>( &QTimer::start ) );
 
+		connect( watch_, &QCheckBox::toggled, this, []( bool on ) { applicationMemory().setValue( QStringLiteral( "search/watch_clipboard" ), on ); } );
 		connect( QGuiApplication::clipboard(), &QClipboard::dataChanged, this, [this] {
 			const QString text = QGuiApplication::clipboard()->text().trimmed();
-			if ( watch_->isChecked() && text.size() <= 400 && inKnownScript( text ) && text != query_->text() )
+			if ( watch_->isChecked() && text.size() <= 400 && inKnownScript( text ) && text != query_->text() && text != copied_ )
 			{
 				query_->setText( text );
 			}
 		} );
 
-		// Cross references in dictionaries link to "?query=word".
+		// Cross references in dictionaries and the recent words link to "?query=word".
 		connect( results_, &QTextBrowser::anchorClicked, this, [this]( const QUrl& url ) {
+			if ( url.scheme() == QStringLiteral( "lexiglance" ) )
+			{
+				act( url );
+				return;
+			}
 			const QString word = QUrlQuery( url.query() ).queryItemValue( QStringLiteral( "query" ), QUrl::FullyDecoded );
 			if ( !word.isEmpty() )
 			{
@@ -116,40 +130,150 @@ namespace lexiglance::gui
 		query_->setFocus();
 	}
 
+	// Audio or Anki turned on or off, dictionaries changed: the entries on show follow.
+	void SearchPage::refresh()
+	{
+		search();
+	}
+
 	void SearchPage::setQuery( const QString& text )
 	{
 		query_->setText( text.trimmed() );
 		query_->setFocus();
 	}
 
-	void SearchPage::search()
+	void SearchPage::setRecent( QStringList words )
 	{
+		recent_ = std::move( words );
 		if ( query_->text().trimmed().isEmpty() )
 		{
-			results_->clear();
+			showRecent();
+		}
+	}
+
+	bool SearchPage::eventFilter( QObject* watched, QEvent* event )
+	{
+		if ( const auto* pressed = dynamic_cast<QKeyEvent*>( event ); watched == query_ && pressed != nullptr && event->type() == QEvent::KeyPress )
+		{
+			// The results scroll from the search box, which keeps the focus for the next word.
+			const int  key    = pressed->key();
+			const auto action = key == Qt::Key_Down     ? QAbstractSlider::SliderSingleStepAdd
+			                  : key == Qt::Key_Up       ? QAbstractSlider::SliderSingleStepSub
+			                  : key == Qt::Key_PageDown ? QAbstractSlider::SliderPageStepAdd
+			                  : key == Qt::Key_PageUp   ? QAbstractSlider::SliderPageStepSub
+			                                            : QAbstractSlider::SliderNoAction;
+			if ( action != QAbstractSlider::SliderNoAction )
+			{
+				results_->verticalScrollBar()->triggerAction( action );
+				return true;
+			}
+			if ( key == Qt::Key_Escape && !query_->text().isEmpty() )
+			{
+				query_->clear();
+				return true;
+			}
+		}
+		return Page::eventFilter( watched, event );
+	}
+
+	void SearchPage::search()
+	{
+		const QString text = query_->text().trimmed();
+		if ( text.isEmpty() )
+		{
+			terms_.clear();
+			shown_query_.clear();
 			timing_->clear();
+			showRecent();
 			return;
 		}
 		json::Writer params;
-		params.beginObject().field( "text", ss( query_->text().trimmed() ) ).field( "markup", "html" ).field( "max_length", 32 ).endObject();
-		client().call( "lookup", params.take(), [this]( const json::Value* result, const QString& error ) {
+		params.beginObject().field( "text", ss( text ) ).field( "markup", "html" ).field( "max_length", search_length ).endObject();
+		client().call( "lookup", params.take(), [this, text]( const json::Value* result, const QString& error ) {
+			// Typed on (or cleared) meanwhile: the next answer is the one to show.
+			if ( text != query_->text().trimmed() )
+			{
+				return;
+			}
 			if ( result == nullptr )
 			{
 				results_->setHtml( "<p>" + error.toHtmlEscaped() + "</p>" );
 				return;
 			}
-			show( *result );
+			show( *result, text );
 		} );
 	}
 
-	void SearchPage::show( const json::Value& result )
+	void SearchPage::showRecent()
 	{
+		if ( recent_.isEmpty() )
+		{
+			results_->clear();
+			return;
+		}
+		QStringList links;
+		for ( const QString& word : recent_ )
+		{
+			links << QStringLiteral( "<a href=\"?query=%1\" style=\"text-decoration:none;\">%2</a>" ).arg( QString::fromLatin1( QUrl::toPercentEncoding( word ) ), word.toHtmlEscaped() );
+		}
+		results_->setHtml( QStringLiteral( "<p style=\"color:#8a8d94;\">Recently looked up</p><p style=\"font-size:18pt;\">%1</p>" ).arg( links.join( QStringLiteral( "&emsp; " ) ) ) );
+	}
+
+	void SearchPage::act( const QUrl& url )
+	{
+		const auto entry = QUrlQuery( url.query() ).queryItemValue( QStringLiteral( "entry" ) ).toULongLong();
+		if ( entry >= terms_.size() )
+		{
+			return;
+		}
+		const Term&   term   = terms_[entry];
+		const QString action = url.path();
+		json::Writer  params;
+		if ( action == QStringLiteral( "copy" ) )
+		{
+			copied_ = term.expression;
+			QGuiApplication::clipboard()->setText( term.expression );
+			timing_->setText( QStringLiteral( "Copied %1" ).arg( term.expression ) );
+		}
+		else if ( action == QStringLiteral( "audio" ) )
+		{
+			params.beginObject().field( "expression", ss( term.expression ) ).field( "reading", ss( term.reading ) ).endObject();
+			timing_->setText( QStringLiteral( "Playing %1…" ).arg( term.expression ) );
+			client().call(
+					"audio.play",
+					params.take(),
+					[this, word = term.expression]( const json::Value* result, const QString& error ) { timing_->setText( result != nullptr ? QStringLiteral( "Played %1" ).arg( word ) : error ); },
+					25000
+			);
+		}
+		else if ( action == QStringLiteral( "anki" ) )
+		{
+			params.beginObject().field( "text", ss( shown_query_ ) ).field( "entry", entry ).field( "max_length", search_length ).endObject();
+			timing_->setText( QStringLiteral( "Adding %1 to Anki…" ).arg( term.expression ) );
+			client().call(
+					"anki.add",
+					params.take(),
+					[this, word = term.expression]( const json::Value* result, const QString& error ) { timing_->setText( result != nullptr ? QStringLiteral( "Added %1 to Anki" ).arg( word ) : error ); },
+					35000
+			);
+		}
+	}
+
+	void SearchPage::show( const json::Value& result, const QString& text )
+	{
+		// The same text again (the settings changed): it stays scrolled where it was.
+		const int scrolled = text == shown_query_ ? results_->verticalScrollBar()->value() : 0;
+		shown_query_       = text;
+		terms_.clear();
 		timing_->setText( QStringLiteral( "%1 µs" ).arg( result["elapsed_us"].asInt() ) );
-		QString html;
+		const auto& config = settings().config();
+		QString     html;
 		for ( const json::Value& term : result["terms"].items() )
 		{
 			const QString expression = qs( term["expression"].asString() );
 			const QString reading    = qs( term["reading"].asString() );
+			const auto    entry      = terms_.size();
+			terms_.push_back( { .expression = expression, .reading = reading } );
 
 			html += QStringLiteral( "<div style=\"margin-bottom:18px;\">" );
 			if ( reading != expression )
@@ -161,6 +285,18 @@ namespace lexiglance::gui
 			{
 				html += QStringLiteral( "<div style=\"color:#8a8d94; font-style:italic;\">« %1</div>" ).arg( inflections.toHtmlEscaped() );
 			}
+			QStringList actions;
+			const auto  link = [entry]( const QString& action, const QString& label ) { return QStringLiteral( "<a href=\"lexiglance:%1?entry=%2\">%3</a>" ).arg( action ).arg( entry ).arg( label ); };
+			if ( config.audio.enabled )
+			{
+				actions << link( QStringLiteral( "audio" ), QStringLiteral( "Play" ) );
+			}
+			actions << link( QStringLiteral( "copy" ), QStringLiteral( "Copy" ) );
+			if ( config.anki.enabled )
+			{
+				actions << link( QStringLiteral( "anki" ), QStringLiteral( "Add to Anki" ) );
+			}
+			html += QStringLiteral( "<div style=\"margin:2px 0 4px 0;\">%1</div>" ).arg( actions.join( QStringLiteral( "&nbsp;&nbsp;·&nbsp;&nbsp;" ) ) );
 
 			QString badges;
 			for ( const json::Value& f : term["frequencies"].items() )
@@ -216,6 +352,7 @@ namespace lexiglance::gui
 		}
 
 		results_->setHtml( html.isEmpty() ? QStringLiteral( "<p>No results.</p>" ) : html );
+		results_->verticalScrollBar()->setValue( scrolled );
 	}
 
 } // namespace lexiglance::gui

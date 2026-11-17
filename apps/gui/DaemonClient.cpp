@@ -37,7 +37,7 @@ namespace lexiglance::gui
 			notifyConnection( true );
 		} );
 		connect( socket_, &QLocalSocket::disconnected, this, [this] {
-			failPending( QStringLiteral( "the daemon disconnected" ) );
+			failPending( QStringLiteral( "Lost the connection to Lexiglance" ) );
 			notifyConnection( false );
 			retry_->start();
 		} );
@@ -106,7 +106,7 @@ namespace lexiglance::gui
 					const Reply late = std::move( it->second );
 					pending_.erase( it );
 					log::warn( "the daemon did not answer {} within {} ms", method, timeout_ms );
-					late( nullptr, QStringLiteral( "The daemon did not answer in time" ) );
+					late( nullptr, QStringLiteral( "Lexiglance didn't answer in time" ) );
 				}
 			} );
 		}

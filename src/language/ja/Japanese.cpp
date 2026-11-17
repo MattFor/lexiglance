@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace lexiglance::lang::ja
 {
@@ -480,6 +482,100 @@ namespace lexiglance::lang::ja
 			return out;
 		}
 
+		// The vowel each hiragana from U+3041 to U+3096 ends in (n for ん).
+		constexpr std::string_view hiragana_vowels = "aaiiuueeooaaiiuueeooaaiiuueeooaaiiuuueeooaiueoaaaiiiuuueeeoooaiueoaauuooaiueoaaieonuae";
+		static_assert( hiragana_vowels.size() == 0x3096 - 0x3041 + 1 );
+
+		char vowelOf( char32_t c ) noexcept
+		{
+			return c >= 0x3041 && c <= 0x3096 ? hiragana_vowels[c - 0x3041] : '\0';
+		}
+
+		bool isSmallVowel( char32_t c ) noexcept
+		{
+			return c == U'ぁ' || c == U'ぃ' || c == U'ぅ' || c == U'ぇ' || c == U'ぉ';
+		}
+
+		// Whether hiragana `c` is written for emphasis after `before`: a long vowel mark, a small vowel lengthening the
+		// vowel before it as long vowels are spelled (ああ, いい, うう, ええ or えい, おお or おう), or a small つ that
+		// doubles nothing (after ん or emphasis, or before a vowel, n, m, y, r, w or voiced sound: すっごい, ほんっと).
+		bool emphatic( char32_t before, char32_t c, char32_t after ) noexcept
+		{
+			if ( !isHiragana( before ) && before != U'ー' )
+			{
+				return false;
+			}
+			if ( c == U'ー' )
+			{
+				return true;
+			}
+			if ( isSmallVowel( c ) )
+			{
+				const char was = vowelOf( before );
+				const char is  = vowelOf( c );
+				return was == is || ( was == 'e' && is == 'i' ) || ( was == 'o' && is == 'u' ) || isSmallVowel( before );
+			}
+			constexpr std::u32string_view doubled = U"かきくけこさしすせそたちつてとぱぴぷぺぽ";
+			return c == U'っ' && ( before == U'ん' || before == U'っ' || before == U'ー' || isSmallVowel( before ) || ( isHiragana( after ) && !doubled.contains( after ) ) );
+		}
+
+		// The vowel a long vowel mark after hiragana stands for, as long vowels are spelled: いーよ, だめー and ありがとー
+		// as いいよ, だめえ, ありがとう (an え lengthened as えい would make だめー a longer word than it is: 駄名).
+		char32_t longVowel( char32_t before ) noexcept
+		{
+			switch ( vowelOf( before ) )
+			{
+				case 'a':
+					return U'あ';
+				case 'i':
+					return U'い';
+				case 'u':
+				case 'o':
+					return U'う';
+				case 'e':
+					return U'え';
+				default:
+					return 0;
+			}
+		}
+
+		// The spelling with emphasis written into hiragana left out (うまーい, すごぉい and すっごい as うまい, すごい), or
+		// with its small vowels made full and its long vowel marks spelled out instead (`full`: かわいぃ, すごぃ and いーよ
+		// as かわいい, すごい, いいよ). Katakana keeps its long vowels and small letters, with which loanwords are spelled
+		// (コーヒー, バッグ), and the first and last letter stay but for a vowel made full. `counted` gets, for each length
+		// of the spelling, how many of its letters count when it is ranked: not a long vowel mark spelled out, any more
+		// than one left out, so it never makes a word longer than one written so (おーきい: おー before 嘔気 and 沖).
+		Units dropEmphasis( const Units& in, bool full, std::vector<std::uint32_t>& counted )
+		{
+			Units out;
+			out.reserve( in.size() );
+			counted.assign( 1, 0 );
+			for ( std::size_t i = 0; i < in.size(); ++i )
+			{
+				const char32_t c = in[i].first;
+				if ( full && i > 0 && isSmallVowel( c ) && isHiragana( in[i - 1].first ) )
+				{
+					out.emplace_back( c + 1, in[i].second );
+					counted.push_back( counted.back() + 1 );
+				}
+				else if ( const char32_t vowel = full && i > 0 && c == U'ー' ? longVowel( in[i - 1].first ) : 0; vowel != 0 )
+				{
+					out.emplace_back( vowel, in[i].second );
+					counted.push_back( counted.back() );
+				}
+				else if ( i == 0 || i + 1 == in.size() || !emphatic( in[i - 1].first, c, in[i + 1].first ) )
+				{
+					out.push_back( in[i] );
+					counted.push_back( counted.back() + 1 );
+				}
+				else
+				{
+					out.back().second = in[i].second;
+				}
+			}
+			return out;
+		}
+
 	} // namespace
 
 	std::string toHiragana( std::string_view text )
@@ -559,6 +655,18 @@ namespace lexiglance::lang::ja
 		for ( const Units& units : candidates )
 		{
 			addVariant( out, units );
+		}
+		// Searched last, and what they find comes after what is spelled as written.
+		for ( const bool full : { false, true } )
+		{
+			std::vector<std::uint32_t> counted;
+			const Units                emphasis = dropEmphasis( base, full, counted );
+			const std::size_t          before   = out.size();
+			addVariant( out, emphasis, true );
+			if ( out.size() > before )
+			{
+				out.back().ranked_length = std::move( counted );
+			}
 		}
 	}
 

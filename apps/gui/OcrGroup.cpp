@@ -134,8 +134,8 @@ namespace lexiglance::gui
 		progress_( new QProgressBar() )
 	{
 		auto* layout = new QVBoxLayout( this );
-		layout->addWidget( note( QStringLiteral( "Reads the pixels around the pointer when an application exposes no text: games, images, videos, "
-		                                         "Wine programs and some terminals. Only a region around the pointer is read, and only while the trigger is held." ) ) );
+		layout->addWidget( note( QStringLiteral( "Reads text from the picture of the screen when an application exposes none: games, images, videos, "
+		                                         "Wine programs and some terminals. It reads only a small area around the pointer, and only while you hold the trigger." ) ) );
 
 		auto* form = new QFormLayout();
 		mode_->addItems( { QStringLiteral( "Off" ), QStringLiteral( "When an application exposes no text" ), QStringLiteral( "Always" ) } );
@@ -157,7 +157,7 @@ namespace lexiglance::gui
 		status_->setTextInteractionFlags( Qt::TextSelectableByMouse );
 		row->addWidget( status_, 1 );
 		// Only on a Windows that has no Visual C++ Redistributable, which PaddleOCR's runtime imports (updateDownloadButton).
-		runtime_->setToolTip( QStringLiteral( "Microsoft's runtime, which their build of ONNX Runtime needs and PaddleOCR cannot read anything without. Windows will ask for permission, and Lexiglance starts again on it." ) );
+		runtime_->setToolTip( QStringLiteral( "Microsoft's runtime, which ONNX Runtime needs: without it PaddleOCR can't read anything. Windows will ask for permission, then Lexiglance restarts to use it." ) );
 		runtime_->hide();
 		row->addWidget( runtime_ );
 		row->addWidget( download_ );
@@ -375,7 +375,7 @@ namespace lexiglance::gui
 							return;
 						}
 						// The daemon rebuilds its text capture with the new files, and says so when it is ready (status.changed).
-						status_->setText( QStringLiteral( "Text capture: loading what was downloaded..." ) );
+						status_->setText( QStringLiteral( "Text capture: loading the new files..." ) );
 						context_.client->call( "capture.reset", "{}", [this]( const json::Value*, const QString& reset_error ) {
 							if ( !reset_error.isEmpty() )
 							{
@@ -431,7 +431,7 @@ namespace lexiglance::gui
 	void OcrGroup::installRedist()
 	{
 		const QString installer = std::exchange( redist_, QString() );
-		status_->setText( QStringLiteral( "Installing the Microsoft Visual C++ Redistributable; Windows asks for permission." ) );
+		status_->setText( QStringLiteral( "Installing the Microsoft Visual C++ Redistributable. Windows will ask for permission." ) );
 		download_->setEnabled( false );
 		runtime_->setEnabled( false );
 		log::info( "installing the Visual C++ Redistributable ({})", ss( installer ) );
@@ -442,11 +442,11 @@ namespace lexiglance::gui
 			if ( !error.isEmpty() )
 			{
 				log::error( "the Visual C++ Redistributable was not installed: {}", ss( error ) );
-				status_->setText( QStringLiteral( "Download failed: " ) + error );
+				status_->setText( QStringLiteral( "Not installed: " ) + error );
 				return;
 			}
 			log::info( "the Visual C++ Redistributable is installed; starting the daemon again" );
-			status_->setText( QStringLiteral( "Text capture: starting Lexiglance again on the new runtime..." ) );
+			status_->setText( QStringLiteral( "Text capture: restarting Lexiglance to use the new runtime..." ) );
 			context_.client->startDaemon( true );
 		} );
 	}

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <format>
+#include <optional>
 #include <utility>
 
 #include <ole2.h>
@@ -195,6 +196,19 @@ namespace lexiglance::platform
 			return out;
 		}
 
+		// The bounds of the character a range holds, when the point is on it (give or take 2 px).
+		std::optional<Rect> characterUnder( IUIAutomationTextRange* range, Point point )
+		{
+			const auto boxes = rectanglesOf( range );
+			if ( boxes.empty() )
+			{
+				return std::nullopt;
+			}
+			const Rect character = boxes.front();
+			const Rect slack{ .x = character.x - 2, .y = character.y - 2, .width = character.width + 4, .height = character.height + 4 };
+			return slack.contains( point ) ? std::optional<Rect>( character ) : std::nullopt;
+		}
+
 		Rect unite( const std::vector<Rect>& rects )
 		{
 			Rect area = rects.front();
@@ -330,18 +344,17 @@ namespace lexiglance::platform
 					return std::nullopt;
 				}
 				// Providers report the nearest character even past the end of a line or in an empty area; require the pointer
-				// to be on it.
-				const auto boxes = rectanglesOf( range.get() );
-				if ( boxes.empty() )
+				// to be on it. Win32 edit controls (Notepad's, dialogs') report the one whose leading edge is nearest, which over
+				// the right half of a character is the next one: the one before is tried too.
+				auto character = characterUnder( range.get(), point );
+				int  back      = 0;
+				if ( !character && SUCCEEDED( range->Move( TextUnit_Character, -1, &back ) ) && back == -1 )
 				{
-					log::debug( "uia: the character at {},{} in {} has no bounds", point.x, point.y, elementName( element.get() ) );
-					return std::nullopt;
+					character = characterUnder( range.get(), point );
 				}
-				const Rect character = boxes.front();
-				const Rect slack{ .x = character.x - 2, .y = character.y - 2, .width = character.width + 4, .height = character.height + 4 };
-				if ( !slack.contains( point ) )
+				if ( !character )
 				{
-					log::debug( "uia: {},{} is beside the nearest character ({},{} {}x{})", point.x, point.y, character.x, character.y, character.width, character.height );
+					log::debug( "uia: {},{} is beside the nearest character in {}", point.x, point.y, elementName( element.get() ) );
 					return std::nullopt;
 				}
 
@@ -369,7 +382,7 @@ namespace lexiglance::platform
 					return std::nullopt;
 				}
 
-				CapturedText captured{ .text = std::string( utf8::prefix( text, max_chars ) ), .offset = 0, .character = character };
+				CapturedText captured{ .text = std::string( utf8::prefix( text, max_chars ) ), .offset = 0, .character = *character };
 				sentenceOf( range.get(), captured );
 				captured.handle = std::shared_ptr<void>( range.release(), []( void* object ) { static_cast<IUIAutomationTextRange*>( object )->Release(); } );
 				return captured;
@@ -419,8 +432,8 @@ namespace lexiglance::platform
 				if ( !automation_ )
 				{
 					check.status = health::Severity::Error;
-					check.detail = "UI Automation could not be started, so text in ordinary applications is not read (only OCR and selections work). Restarting "
-								   "Lexiglance tries again.";
+					check.detail = "UI Automation couldn't start, so text in ordinary applications isn't read (only OCR and selections work). Restart "
+								   "Lexiglance to try again.";
 					check.fix    = "restart";
 					out.push_back( std::move( check ) );
 					return;
@@ -437,10 +450,10 @@ namespace lexiglance::platform
 				const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>( Clock::now() - started ).count();
 				check.status       = !answered || elapsed > 250 ? health::Severity::Warning : health::Severity::Ok;
 				check.detail       = answered ? std::format( "UI Automation answered in {} ms. Text is read from applications that support its text pattern (Office, browsers, Qt, WPF, WinUI, consoles); OCR reads the rest.", elapsed )
-				                              : std::string( "The application with the keyboard focus did not answer UI Automation; its text is read with OCR." );
+				                              : std::string( "The application with the keyboard focus didn't answer UI Automation, so OCR reads its text." );
 				if ( answered && elapsed > 250 )
 				{
-					check.detail += " That is slow: lookups in applications will lag.";
+					check.detail += " That's slow, so lookups in applications will lag.";
 				}
 				out.push_back( std::move( check ) );
 			}

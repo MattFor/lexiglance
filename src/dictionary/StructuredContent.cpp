@@ -7,12 +7,31 @@
 #include <charconv>
 #include <cmath>
 #include <format>
+#ifndef __cpp_lib_to_chars
+	#include <cstdlib>
+	#include <xlocale.h>
+#endif
 
 namespace lexiglance::dict
 {
 
 	namespace
 	{
+
+		// The number at the start of `text` and where it ends.
+		std::from_chars_result leadingFloat( std::string_view text, float& number )
+		{
+#ifdef __cpp_lib_to_chars
+			return std::from_chars( text.data(), text.data() + text.size(), number );
+#else
+			// Apple's libc++ has no floating-point from_chars; strtof in the C locale reads the same numbers.
+			static const locale_t c_locale = ::newlocale( LC_ALL_MASK, "C", nullptr );
+			const std::string     copy( text );
+			char*                 end = nullptr;
+			number                    = ::strtof_l( copy.c_str(), &end, c_locale );
+			return { .ptr = text.data() + ( end - copy.c_str() ), .ec = end == copy.c_str() ? std::errc::invalid_argument : std::errc{} };
+#endif
+		}
 
 		constexpr std::uint8_t prop_foreground = 1U << 0U;
 		constexpr std::uint8_t prop_background = 1U << 1U;
@@ -82,7 +101,7 @@ namespace lexiglance::dict
 			}
 
 			float      number = 0.0F;
-			const auto parsed = std::from_chars( value.data(), value.data() + value.size(), number );
+			const auto parsed = leadingFloat( value, number );
 			if ( parsed.ec != std::errc{} || !std::isfinite( number ) || number <= 0.0F )
 			{
 				return 1.0F;

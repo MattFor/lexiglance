@@ -196,7 +196,7 @@ namespace lexiglance::gui
 		if ( periods_.empty() || largest == 0 )
 		{
 			painter.setPen( muted );
-			painter.drawText( rect(), Qt::AlignCenter, QStringLiteral( "Nothing counted in this time yet" ) );
+			painter.drawText( rect(), Qt::AlignCenter, QStringLiteral( "Nothing counted in this period yet" ) );
 			return;
 		}
 

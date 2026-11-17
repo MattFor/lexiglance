@@ -163,15 +163,15 @@ namespace lexiglance::daemon
 			}
 			if ( message.contains( "Couldn't connect" ) || message.contains( "Could not connect" ) || message.contains( "Connection refused" ) )
 			{
-				return "Anki is not running (AnkiConnect)";
+				return "Anki isn't running (AnkiConnect didn't answer)";
 			}
 			if ( message.contains( "deck was not found" ) )
 			{
-				return "Anki deck not found";
+				return "That deck isn't in Anki. Choose another on the Anki page.";
 			}
 			if ( message.contains( "model was not found" ) )
 			{
-				return "Anki note type not found";
+				return "That note type isn't in Anki. Choose another on the Anki page.";
 			}
 			return std::string( message );
 		}
@@ -187,7 +187,7 @@ namespace lexiglance::daemon
 			auto document = json::Document::parse( std::move( response->body ) );
 			if ( !document || !document->root().isObject() )
 			{
-				return fail( "Unexpected reply from AnkiConnect (HTTP {})", response->status );
+				return fail( "AnkiConnect sent a reply Lexiglance can't read (HTTP {})", response->status );
 			}
 			if ( const auto& error = document->root()["error"]; error.isString() )
 			{
@@ -423,7 +423,7 @@ namespace lexiglance::daemon
 	{
 		if ( settings.deck.empty() || settings.model.empty() || settings.fields.empty() )
 		{
-			return fail( "Anki is not set up" );
+			return fail( "Anki isn't set up" );
 		}
 		// AnkiConnect judges duplicates by the first field only.
 		const auto& first = settings.fields.front();
@@ -458,7 +458,7 @@ namespace lexiglance::daemon
 	{
 		if ( settings.deck.empty() || settings.model.empty() || settings.fields.empty() )
 		{
-			return fail( "Choose a deck and note type in Settings -> Anki" );
+			return fail( "Choose a deck and a note type on the Anki page first" );
 		}
 		const Markers markers = noteMarkers( result, entry, context );
 

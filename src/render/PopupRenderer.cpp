@@ -29,11 +29,24 @@ namespace lexiglance::render
 #ifdef _WIN32
 		// Windows' own Japanese fonts after Noto, which may have been installed.
 		constexpr std::string_view default_family = "Noto Sans CJK JP, Noto Sans JP, Yu Gothic UI, Meiryo UI, Yu Gothic, Meiryo, MS Gothic, sans-serif";
+#elifdef __APPLE__
+		// macOS's own fonts; kana and kanji come from Hiragino Sans through japaneseFallback().
+		constexpr std::string_view default_family = "Helvetica Neue, Hiragino Sans, sans-serif";
 #else
 		// Noto Sans first for Latin and Cyrillic: the CJK fonts put combining marks (the stress in кни́га) over the next
 		// letter. Kana and kanji fall through to the Japanese fonts.
 		constexpr std::string_view default_family = "Noto Sans, Noto Sans CJK JP, Noto Sans JP, IPAGothic, sans-serif";
 #endif
+
+		// Core Text takes only the first family and falls back by language: Japanese gives kanji Hiragino's forms, not
+		// PingFang SC's Chinese ones.
+		PangoContext* japaneseFallback( PangoContext* context ) noexcept
+		{
+#ifdef __APPLE__
+			pango_context_set_language( context, pango_language_from_string( "ja" ) );
+#endif
+			return context;
+		}
 
 		struct LayoutDeleter
 		{
@@ -408,7 +421,7 @@ namespace lexiglance::render
 	{
 		Impl() :
 			font_map( pango_cairo_font_map_new() ),
-			context( pango_font_map_create_context( font_map.get() ) )
+			context( japaneseFallback( pango_font_map_create_context( font_map.get() ) ) )
 		{
 			cairo_font_options_t* options = cairo_font_options_create();
 			cairo_font_options_set_antialias( options, CAIRO_ANTIALIAS_GRAY );
@@ -1603,10 +1616,18 @@ namespace lexiglance::render
 
 	void PopupRenderer::warmUp()
 	{
-		const auto layout = impl_->layout( impl_->headword.get(), "漢字かなカナ abc 123 ꜜ «" );
-		( void )Impl::size( layout.get() );
-		const auto body = impl_->layout( impl_->body.get(), "<b>warm</b> up", 200, true );
-		( void )Impl::size( body.get() );
+		// Every font of the popup, in the scripts it shows, laid out and drawn once: finding the fonts and drawing their
+		// first glyphs otherwise falls on the first popup (some 50 ms).
+		cairo_surface_t*                             surface = cairo_image_surface_create( CAIRO_FORMAT_ARGB32, 64, 64 );
+		const std::unique_ptr<cairo_t, CairoDeleter> cr( cairo_create( surface ) );
+		const Impl&                                  i = *impl_;
+		for ( const PangoFontDescription* font : { i.body.get(), i.bold.get(), i.headword.get(), i.ruby.get(), i.small.get(), i.italic.get(), i.pill.get(), i.kanji.get(), i.caption.get(), i.chip.get(), i.number.get() } )
+		{
+			const auto layout = impl_->layout( font, "漢字かなカナ Abc 123 Слово ꜜ «»", 200 );
+			pango_cairo_update_layout( cr.get(), layout.get() );
+			pango_cairo_show_layout( cr.get(), layout.get() );
+		}
+		cairo_surface_destroy( surface );
 	}
 
 	namespace
@@ -1617,7 +1638,7 @@ namespace lexiglance::render
 		{
 			StandaloneLayout( std::string_view text, double pixel_size, std::string_view family ) :
 				map( pango_cairo_font_map_new() ),
-				context( pango_font_map_create_context( map.get() ) ),
+				context( japaneseFallback( pango_font_map_create_context( map.get() ) ) ),
 				layout( pango_layout_new( context.get() ) )
 			{
 				const FontPtr     font( pango_font_description_new() );

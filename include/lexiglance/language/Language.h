@@ -26,6 +26,11 @@ namespace lexiglance::lang
 		std::string                text;
 		std::vector<std::uint32_t> offsets;
 		std::vector<std::uint32_t> source_length;
+		// Spelled otherwise than written (emphasis left out): what it finds ranks after what the text as written does.
+		bool folded = false;
+		// As source_length, how much of the text each length of it counts for when ranked, without what it left out or
+		// spelled out; empty: source_length.
+		std::vector<std::uint32_t> ranked_length;
 	};
 
 	// A piece of a headword and the reading shown above it (empty: none), e.g. 食(た) べ 物(もの).

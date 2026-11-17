@@ -15,7 +15,7 @@ namespace
 	namespace lg   = lexiglance;
 	namespace test = lexiglance::test;
 
-	void touch( const fs::path& path )
+	[[maybe_unused]] void touch( const fs::path& path )
 	{
 		fs::create_directories( path.parent_path() );
 		std::ofstream( path ) << "x";

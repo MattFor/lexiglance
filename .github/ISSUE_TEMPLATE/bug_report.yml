@@ -2,6 +2,17 @@ name: Bug report
 description: Something does not work as it should
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        The quickest way to a fix: **Report a problem** in Lexiglance (Overview -> Health, About, or the tray menu),
+        or `lexiglancectl report` in a terminal. It saves a `lexiglance-report-....zip` on your computer, without your
+        AnkiConnect key or other secrets, and opens this form filled in. Nothing is sent until you send this issue.
+  - type: textarea
+    id: report
+    attributes:
+      label: Report
+      description: Drag the lexiglance-report zip here. Lexiglance does not start at all? Leave this empty and fill in the fields below.
   - type: textarea
     id: what
     attributes:
@@ -10,31 +21,33 @@ body:
     validations:
       required: true
   - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Filled in by Report a problem; the zip holds the rest.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Lexiglance version
+      description: Filled in by Report a problem; otherwise About shows it, or `lexiglancectl status`.
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: >-
+        Filled in by Report a problem. Otherwise: Windows or macOS and its version; on Linux the distribution, the
+        desktop or window manager, X11 or Wayland, and the compositor on or off.
+  - type: textarea
     id: steps
     attributes:
       label: Steps to reproduce
       placeholder: |
         1. Open ...
         2. Hold the trigger over ...
-    validations:
-      required: true
-  - type: input
-    id: version
-    attributes:
-      label: Lexiglance version
-      description: Shown by `lexiglancectl status` or `lexiglanced --version`.
-    validations:
-      required: true
-  - type: input
-    id: system
-    attributes:
-      label: System
-      description: Distribution, desktop or window manager, X11 or Wayland, compositor on or off.
-    validations:
-      required: true
   - type: textarea
     id: log
     attributes:
       label: Daemon log
-      description: Run `lexiglanced --replace --verbose` and reproduce the problem; paste the relevant lines.
+      description: Only without a report zip. Run `lexiglanced --replace --verbose`, reproduce the problem and paste the relevant lines.
       render: text

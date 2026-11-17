@@ -2,6 +2,7 @@
 #define LEXIGLANCE_PLATFORM_PLATFORM_H
 
 #include <lexiglance/config/Config.h>
+#include <lexiglance/core/Compat.h>
 #include <lexiglance/core/Error.h>
 #include <lexiglance/core/Health.h>
 #include <lexiglance/render/Highlight.h>
@@ -101,6 +102,23 @@ namespace lexiglance::platform
 		TextCapture* origin = nullptr;
 	};
 
+	// What a capture that reads pixels saw around a point, for developer mode's capture inspector: the screen there (RGB,
+	// row by row) and the text lines it found in it, in the region's coordinates.
+	struct Snapshot
+	{
+		struct Line
+		{
+			Rect        box;
+			std::string text;
+			// Found by the looser second look, used only right under the pointer.
+			bool loose = false;
+		};
+
+		Rect                      region;
+		std::vector<std::uint8_t> rgb;
+		std::vector<Line>         lines;
+	};
+
 	// Reads the text under the pointer. Created, used and destroyed on the capture thread only.
 	class TextCapture
 	{
@@ -144,6 +162,12 @@ namespace lexiglance::platform
 
 		// Self-checks for the health report.
 		virtual void diagnose( std::vector<health::Check>& /*out*/ ) {}
+
+		// What a capture just made at `point` read its text from; nullopt for captures that read no pixels.
+		[[nodiscard]] virtual std::optional<Snapshot> snapshot( Point /*point*/, const WindowInfo& /*window*/ )
+		{
+			return std::nullopt;
+		}
 	};
 
 	// Callbacks, all invoked on the UI thread.
@@ -192,7 +216,7 @@ namespace lexiglance::platform
 		virtual void quit() = 0;
 
 		// Thread-safe; the task runs on the UI thread.
-		virtual void post( std::move_only_function<void()> task ) = 0;
+		virtual void post( Task task ) = 0;
 
 		// UI thread only from here on.
 		virtual void               configure( const config::Config& config ) = 0;

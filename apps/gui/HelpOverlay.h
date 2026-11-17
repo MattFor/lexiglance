@@ -12,7 +12,8 @@ namespace lexiglance::gui
 {
 
 	// What can be done and where, on a rounded card over the window, which dims behind it. The pages it names are links
-	// to them. Escape, a click beside the card or its button closes it. Dev builds can open the first-run setup, or what follows an update, again.
+	// to them. Escape, a click beside the card or its button closes it. It also opens the first-run setup again, and what
+	// changed in this version.
 	class HelpOverlay final : public CardOverlay
 	{
 	public:

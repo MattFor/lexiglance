@@ -3,6 +3,7 @@
 #include <lexiglance/core/Utf8.h>
 #include <lexiglance/dictionary/WordRules.h>
 
+#include <algorithm>
 #include <array>
 #include <string>
 

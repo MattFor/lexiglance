@@ -2,6 +2,7 @@
 
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Process.h>
+#include <lexiglance/ipc/Socket.h>
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <iterator>
 #include <string_view>
 #include <system_error>
+#include <thread>
 
 #ifndef _WIN32
 	#include <fcntl.h>
@@ -64,12 +66,47 @@ namespace lexiglance::uninstall
 			return out;
 		}
 
+		// The settings window's single-instance socket, named after the daemon's as apps/gui/main.cpp does.
+		std::string windowEndpoint()
+		{
+			const std::string daemon = paths::ipcEndpoint();
+#ifdef _WIN32
+			constexpr std::string_view prefix = "lexiglance-";
+			return "\\\\.\\pipe\\lexiglance-gui-" + daemon.substr( daemon.find( prefix ) + prefix.size() );
+#else
+			return ( fs::path( daemon ).parent_path() / "gui.sock" ).string();
+#endif
+		}
+
+		// Waits, at most `limit`, until `done`.
+		template <typename F>
+		bool waitUntil( F done, std::chrono::milliseconds limit )
+		{
+			const auto deadline = std::chrono::steady_clock::now() + limit;
+			while ( !done() )
+			{
+				if ( std::chrono::steady_clock::now() >= deadline )
+				{
+					return false;
+				}
+				std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
+			}
+			return true;
+		}
+
 		bool isBuildTree( const fs::path& directory )
 		{
 			return directory.parent_path().filename() == "apps" && present( directory.parent_path().parent_path() / "CMakeCache.txt" );
 		}
 
 #ifndef _WIN32
+		// The app bundle whose Contents/MacOS `directory` is; empty when it is not one.
+		fs::path bundleOf( const fs::path& directory )
+		{
+			const fs::path bundle = directory.parent_path().parent_path();
+			return directory.filename() == "MacOS" && directory.parent_path().filename() == "Contents" && bundle.extension() == ".app" ? bundle : fs::path();
+		}
+
 		// Whether dpkg installed `file` as part of the lexiglance package.
 		bool debOwns( const fs::path& file )
 		{
@@ -154,6 +191,10 @@ namespace lexiglance::uninstall
 		places.config_home = baseDirectory( "XDG_CONFIG_HOME", places.home, ".config" );
 		places.data_home   = baseDirectory( "XDG_DATA_HOME", places.home, ".local/share" );
 		places.data        = { paths::configDir(), paths::dataDir(), paths::cacheDir(), paths::stateDir() };
+#ifdef __APPLE__
+		// Beside the settings in Application Support, which it would keep from going.
+		places.data.push_back( paths::runtimeDir() );
+#endif
 		return places;
 	}
 
@@ -184,6 +225,19 @@ namespace lexiglance::uninstall
 			}
 		}
 #else
+		else if ( const fs::path bundle = bundleOf( directory ); !bundle.empty() )
+		{
+			out.kind  = Kind::MacApp;
+			out.where = bundle;
+			// In /Applications of an account that is not an administrator, or run from the disk image: Finder asks for a
+			// password, or it is moved to the Bin from there.
+			if ( !needsRoot( bundle ) )
+			{
+				add( out.programs, bundle );
+			}
+			// An update that did not finish.
+			add( out.programs, fs::path( bundle.string() + ".update" ) );
+		}
 		else if ( !places.appimage.empty() )
 		{
 			out.kind  = Kind::AppImage;
@@ -236,6 +290,7 @@ namespace lexiglance::uninstall
 		add( out.integration, config / "autostart/lexiglance-tray.desktop" );
 		add( out.integration, places.data_home / "applications/io.github.mattfor.lexiglance.desktop" );
 		add( out.integration, places.data_home / "icons/hicolor/scalable/apps/lexiglance.svg" );
+		add( out.integration, places.home / "Library/LaunchAgents/io.github.mattfor.lexiglance.plist" );
 		addServices( places, out.integration );
 		// A prefix of the user's (~/.local) has its menu entry and icon where the user's own are.
 		std::erase_if( out.integration, [&]( const fs::path& path ) { return std::ranges::contains( out.programs, path ); } );
@@ -258,12 +313,12 @@ namespace lexiglance::uninstall
 		switch ( plan.kind )
 		{
 			case Kind::WindowsSetup:
-				lines.push_back( std::format( "Lexiglance, by its uninstaller {}", where ) );
+				lines.push_back( std::format( "Lexiglance itself, through its uninstaller ({})", where ) );
 				break;
 			case Kind::WindowsPortable:
 				if ( !plan.programs.empty() )
 				{
-					lines.push_back( std::format( "Lexiglance's folders in {}", where ) );
+					lines.push_back( std::format( "The program folders in {}", where ) );
 				}
 				break;
 			case Kind::AppImage:
@@ -271,6 +326,9 @@ namespace lexiglance::uninstall
 				{
 					lines.push_back( std::format( "The AppImage {}", where ) );
 				}
+				break;
+			case Kind::MacApp:
+				lines.push_back( std::ranges::contains( plan.programs, plan.where ) ? std::format( "The app {}", where ) : std::format( "Not the app {}: this account can't change it, so drag it to the Bin yourself", where ) );
 				break;
 			case Kind::Deb:
 			case Kind::Rpm:
@@ -280,20 +338,35 @@ namespace lexiglance::uninstall
 				if ( !plan.programs.empty() )
 				{
 					const bool root = std::ranges::any_of( plan.programs, needsRoot );
-					lines.push_back( std::format( "Lexiglance's programs and files in {}{}", where, root ? " (as root)" : "" ) );
+					lines.push_back( std::format( "The programs and files in {}{}", where, root ? " (as root)" : "" ) );
 				}
 				break;
 			case Kind::BuildTree:
-				lines.push_back( std::format( "Not the build in {}, which stays", where ) );
+				lines.push_back( std::format( "Not the build in {}: it stays", where ) );
 				break;
 		}
+#ifdef _WIN32
+		// Registry values, a shortcut and a scheduled task, which the plan's paths don't hold.
+		if ( plan.kind == Kind::WindowsSetup )
+		{
+			lines.emplace_back( "The autostart, the Start menu entry, the Installed apps entry and the Run as administrator task" );
+		}
+		else if ( plan.kind == Kind::WindowsPortable )
+		{
+			lines.emplace_back( "The autostart and the Start menu entry, if they start this copy, and the Run as administrator task" );
+		}
+#endif
 		if ( !plan.integration.empty() )
 		{
-			lines.emplace_back( "Lexiglance's autostart, menu entry and icon" );
+#ifdef __APPLE__
+			lines.emplace_back( "The autostart (a LaunchAgent)" );
+#else
+			lines.emplace_back( "The autostart, the menu entry and the icon" );
+#endif
 		}
 		if ( plan.data.empty() )
 		{
-			lines.emplace_back( "Not your settings, dictionaries and downloaded models, which are kept" );
+			lines.emplace_back( "Not your settings, dictionaries and downloaded models: they're kept" );
 		}
 		else
 		{
@@ -315,8 +388,46 @@ namespace lexiglance::uninstall
 #endif
 	}
 
-	void stopPrograms( [[maybe_unused]] const Places& places, std::chrono::milliseconds grace )
+	void stopHome( const Places& places, std::chrono::milliseconds grace )
 	{
+		using std::chrono::milliseconds;
+		if ( places.executable.stem() != "lexiglance" )
+		{
+			const std::string window = windowEndpoint();
+			if ( auto socket = ipc::connectTo( window, milliseconds( 300 ) ); socket && socket->writeAll( "quit\n" ) )
+			{
+				( void )waitUntil( [&] { return !ipc::connectTo( window, milliseconds( 100 ) ).has_value(); }, grace );
+			}
+		}
+
+		const fs::path file = paths::runtimeDir() / "daemon.lock";
+		if ( !present( file ) )
+		{
+			return;
+		}
+		process::InstanceLock lock( file );
+		if ( lock.held() )
+		{
+			return;
+		}
+		if ( auto client = ipc::Client::connect( paths::ipcEndpoint(), milliseconds( 1500 ) ) )
+		{
+			( void )client->call( "shutdown" );
+		}
+		if ( !waitUntil( [&] { return lock.retry(); }, grace ) && lock.holder() > 0 )
+		{
+			( void )process::terminate( lock.holder(), "lexiglanced", grace );
+		}
+	}
+
+	void stopPrograms( const Places& places, std::chrono::milliseconds grace )
+	{
+		// The user's other copies (another home, or the one tests run beside) keep running, and their services stay up.
+		if ( !environment( "LEXIGLANCE_HOME" ).empty() )
+		{
+			stopHome( places, grace );
+			return;
+		}
 #ifndef _WIN32
 		// First whatever would bring the daemon back.
 		if ( !process::findProgram( "systemctl" ).empty() )

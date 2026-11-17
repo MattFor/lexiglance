@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lexiglance::platform
@@ -34,6 +35,10 @@ namespace lexiglance::platform
 		// compared with earlier reads (its pixels are read as they are).
 		std::chrono::steady_clock::time_point until;
 	};
+
+	// What the permission to read other applications' windows (macOS's Screen Recording) is called in the message that
+	// says it is missing; the health report looks for it to offer the settings page that grants it.
+	inline constexpr std::string_view screen_permission_absent = "the Screen Recording permission";
 
 	// The screen as OCR reads it, from the desktop backend (XGetImage on X11, BitBlt on Windows). Created for and used on
 	// the capture thread only.

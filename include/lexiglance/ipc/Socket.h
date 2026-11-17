@@ -92,7 +92,13 @@ namespace lexiglance::ipc
 		// Returns the whole response document; the payload is root()["result"].
 		[[nodiscard]] Result<json::Document> call( std::string_view method, std::string_view params_json = "{}", const EventHandler& on_event = {} );
 
+		// Hands the events that come to `on_event` until the connection ends (that error is returned).
+		[[nodiscard]] Result<json::Document> listen( const EventHandler& on_event );
+
 	private:
+		// Reads until the answer to request `id` (0: none, only events) and returns it.
+		[[nodiscard]] Result<json::Document> receive( std::int64_t id, const EventHandler& on_event );
+
 		Socket       socket_;
 		LineBuffer   buffer_;
 		std::int64_t next_id_ = 1;

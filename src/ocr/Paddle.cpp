@@ -153,6 +153,15 @@ namespace lexiglance::ocr
 		return { own, all };
 	}
 
+	bool readSurely( const TextLine& line, std::span<const lang::Language* const> languages )
+	{
+		const auto letters = std::ranges::count_if( line.characters, []( const Character& c ) {
+			const char32_t letter = utf8::first( c.text );
+			return letter != U' ' && letter != 0x3000;
+		} );
+		return letters >= 4 && readingWorth( line, languages ).first >= 0.9F * static_cast<float>( letters );
+	}
+
 	std::vector<Box> textBoxes( std::span<const float> map, int width, int height, float threshold, float box_threshold, double unclip )
 	{
 		const auto index = [&]( int x, int y ) { return ( static_cast<std::size_t>( y ) * static_cast<std::size_t>( width ) ) + static_cast<std::size_t>( x ); };
@@ -458,6 +467,10 @@ namespace lexiglance::ocr
 				best   = std::move( line );
 				chosen = &recognizer;
 				most   = value;
+			}
+			if ( readSurely( best, chosen->reads ) )
+			{
+				break;
 			}
 		}
 		if ( chosen == nullptr || meanConfidence( best ) >= 0.9F )

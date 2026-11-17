@@ -70,7 +70,7 @@ namespace lexiglance::gui::administrator
 			if ( ShellExecuteExW( &info ) == FALSE || info.hProcess == nullptr )
 			{
 				const DWORD error = GetLastError();
-				done( -1, error == ERROR_CANCELLED ? QStringLiteral( "Windows did not give administrator rights, so nothing was changed." ) : QStringLiteral( "Cannot start %1 as administrator (error %2)." ).arg( daemonExecutable() ).arg( error ) );
+				done( -1, error == ERROR_CANCELLED ? QStringLiteral( "Windows didn't grant administrator rights, so nothing changed." ) : QStringLiteral( "Couldn't start %1 as administrator (error %2)." ).arg( daemonExecutable() ).arg( error ) );
 				return;
 			}
 			// Waited for without blocking the window; it takes a moment.
@@ -86,7 +86,7 @@ namespace lexiglance::gui::administrator
 				DWORD      code  = 0;
 				const bool ended = GetExitCodeProcess( process, &code ) != FALSE && code != STILL_ACTIVE;
 				CloseHandle( process );
-				done( ended ? static_cast<int>( code ) : -1, ended ? QString() : QStringLiteral( "It did not finish within a minute." ) );
+				done( ended ? static_cast<int>( code ) : -1, ended ? QString() : QStringLiteral( "The change didn't finish within a minute." ) );
 			} );
 			timer->start( 100 );
 		}
@@ -113,11 +113,11 @@ namespace lexiglance::gui::administrator
 				QString message = problem;
 				if ( code == 3 )
 				{
-					message = QStringLiteral( "Windows gave the administrator rights to another account. Run as administrator needs this account to be an administrator." );
+					message = QStringLiteral( "Windows gave administrator rights to a different account. Run as administrator only works when this account is an administrator." );
 				}
 				else if ( message.isEmpty() )
 				{
-					message = QStringLiteral( "Setting it up failed (exit code %1)." ).arg( code );
+					message = QStringLiteral( "Couldn't set up Run as administrator (exit code %1)." ).arg( code );
 				}
 				log::warn( "run as administrator: not set up: {}", ss( message ) );
 				done( message );
@@ -129,7 +129,7 @@ namespace lexiglance::gui::administrator
 			if ( error == QProcess::FailedToStart )
 			{
 				process->deleteLater();
-				done( QStringLiteral( "Cannot start %1." ).arg( daemonExecutable() ) );
+				done( QStringLiteral( "Couldn't start %1." ).arg( daemonExecutable() ) );
 			}
 		} );
 		QObject::connect( process, &QProcess::finished, owner, [owner, process, done]( int code, QProcess::ExitStatus status ) {
@@ -148,7 +148,7 @@ namespace lexiglance::gui::administrator
 					done( {} );
 					return;
 				}
-				done( problem.isEmpty() ? QStringLiteral( "Removing it failed (exit code %1)." ).arg( elevated_code ) : problem );
+				done( problem.isEmpty() ? QStringLiteral( "Couldn't turn off Run as administrator (exit code %1)." ).arg( elevated_code ) : problem );
 			} );
 		} );
 		process->start( daemonExecutable(), { QStringLiteral( "--run-as-administrator" ), QStringLiteral( "off" ) } );
@@ -173,7 +173,7 @@ namespace lexiglance::gui::administrator
 
 	void set( QWidget*, bool, const std::function<void( const QString& )>& done )
 	{
-		done( QStringLiteral( "Run as administrator is there only on Windows." ) );
+		done( QStringLiteral( "Run as administrator is only available on Windows." ) );
 	}
 
 	void removeNow() {}

@@ -19,7 +19,7 @@ namespace lexiglance::gui
 {
 
 	// Keeps Lexiglance up to date from its GitHub releases: finds the newest one and installs the build of it made for
-	// this copy (the Windows setup, the portable .zip, the AppImage, the .deb or the .rpm) in its place, checked against the
+	// this copy (the Windows setup, the portable .zip, the AppImage, the .deb, the .rpm or the macOS disk image) in its place, checked against the
 	// release's SHA256SUMS, then opens it again. Copies that cannot replace themselves are told where the newest is.
 	class UpdateGroup : public QGroupBox
 	{
@@ -30,6 +30,7 @@ namespace lexiglance::gui
 			WindowsSetup,    // installed with lexiglance-windows-setup.exe
 			WindowsPortable, // unpacked from lexiglance-windows-portable.zip
 			AppImage,        // Lexiglance-x86_64.AppImage
+			MacApp,          // Lexiglance.app, from Lexiglance-macos.dmg
 			Deb,             // the lexiglance-amd64.deb package
 			Rpm,             // the lexiglance-x86_64.rpm package
 			Source,          // a build tree
@@ -39,6 +40,10 @@ namespace lexiglance::gui
 		// `background`: never shown (lexiglance --background-update): installs a newer version if updates are automatic,
 		// starts the daemon of the new version, and quits the application when there is nothing (more) to do.
 		explicit UpdateGroup( QWidget* parent = nullptr, bool background = false );
+
+		// Developer mode: shows `latest` as if a check had found it (an update when it is newer), or with `installed` the
+		// note after an update to this version. Nothing is downloaded.
+		void simulate( const QString& latest, bool installed );
 
 	private:
 		// The end of a background update, whatever became of it.

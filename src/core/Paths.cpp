@@ -99,6 +99,9 @@ namespace lexiglance::paths
 		}
 #ifdef _WIN32
 		return cacheDir() / "run";
+#elifdef __APPLE__
+		// Not in $TMPDIR, which macOS clears of files older than three days every night, a running daemon's socket included.
+		return home() / "Library" / "Application Support" / "Lexiglance" / "run";
 #else
 		if ( auto runtime = env( "XDG_RUNTIME_DIR" ); !runtime.empty() )
 		{
@@ -132,7 +135,15 @@ namespace lexiglance::paths
 	{
 #ifdef _WIN32
 		const auto user = env( "USERNAME" );
-		return "\\\\.\\pipe\\lexiglance-" + user.string();
+		// A home of its own (LEXIGLANCE_HOME) has a daemon of its own, as its socket below that home does elsewhere.
+		// Hashed the way Windows compares paths: C:\x, c:\X\ and C:/x are one home and one daemon.
+		std::string root = portableRoot().lexically_normal().generic_string();
+		while ( root.size() > 3 && root.ends_with( '/' ) )
+		{
+			root.pop_back();
+		}
+		std::ranges::transform( root, root.begin(), []( unsigned char c ) { return static_cast<char>( std::tolower( c ) ); } );
+		return "\\\\.\\pipe\\lexiglance-" + user.string() + ( root.empty() ? std::string() : std::format( "-{:08x}", static_cast<std::uint32_t>( hash64( root ) ) ) );
 #else
 		// sockaddr_un holds at most 107 bytes; deep runtime directories fall back to a short, stable temp path.
 		auto socket = runtimeDir() / "daemon.sock";

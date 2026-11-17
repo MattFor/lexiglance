@@ -45,9 +45,8 @@ namespace lexiglance::gui
 		void refresh() override;
 		void activated() override;
 
-	protected:
-		void dragEnterEvent( QDragEnterEvent* event ) override;
-		void dropEvent( QDropEvent* event ) override;
+		// Yomitan dictionaries (zips or unpacked folders), and each zip in a folder of them.
+		void importFiles( const QStringList& files );
 
 	private:
 		struct Download
@@ -60,7 +59,6 @@ namespace lexiglance::gui
 		void reload();
 		void rebuildTable();
 		void updateSummary();
-		void importFiles( const QStringList& files );
 		void showRecommended();
 		void checkUpdates();
 		void enqueueDownload( Download download );
@@ -86,6 +84,8 @@ namespace lexiglance::gui
 		std::deque<Download>             downloads_;
 		bool                             downloading_ = false;
 		bool                             rebuilding_  = false;
+		// The daemon's job importing the current download; other imports finishing do not start the next one.
+		std::int64_t import_job_ = -1;
 	};
 
 } // namespace lexiglance::gui

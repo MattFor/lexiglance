@@ -17,8 +17,10 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLocale>
@@ -30,6 +32,8 @@
 #include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace lexiglance::gui
 {
@@ -137,6 +141,10 @@ namespace lexiglance::gui
 			{
 				return QStringLiteral( "Run as administrator" );
 			}
+			if ( action.startsWith( QStringLiteral( "open-privacy-" ) ) )
+			{
+				return QStringLiteral( "Open System Settings" );
+			}
 			return QStringLiteral( "Fix" );
 		}
 
@@ -157,13 +165,13 @@ namespace lexiglance::gui
 			}
 			if ( set_up )
 			{
-				return QStringLiteral( "<span style=\"color:#d19a1f\">It is set up, but Lexiglance does not run as administrator: see Health.</span>" );
+				return QStringLiteral( "<span style=\"color:#d19a1f\">It's on, but Lexiglance isn't running as administrator. See Health.</span>" );
 			}
 			if ( elevated )
 			{
-				return QStringLiteral( "Lexiglance runs as administrator now, as it was started so." );
+				return QStringLiteral( "Lexiglance runs as administrator right now, because it was started that way." );
 			}
-			return QStringLiteral( "Only needed for games and programs that run as administrator. Windows asks once, when it is turned on." );
+			return QStringLiteral( "Only needed for games and programs that run as administrator. Windows asks once, when you turn it on." );
 		}
 
 		// The capture summary for its tile: what reads the screen on one line, what it is made of ("(PaddleOCR:
@@ -192,6 +200,81 @@ namespace lexiglance::gui
 				}
 			}
 			return found;
+		}
+
+		// Said on the button for a moment: done, or why not.
+		void tell( QPushButton* button, const QString& text )
+		{
+			const QString label = button->text();
+			button->setText( text );
+			QTimer::singleShot( 2500, button, [button, label] { button->setText( label ); } );
+		}
+
+		// Every setting in a file, for another computer; the dictionaries stay out, as they are not copied with it.
+		void exportSettings( QPushButton* button, config::Config config )
+		{
+			const QString path = QFileDialog::getSaveFileName( button, QStringLiteral( "Export settings" ), QStandardPaths::writableLocation( QStandardPaths::DownloadLocation ) + QStringLiteral( "/lexiglance-settings.json" ), QStringLiteral( "Lexiglance settings (*.json)" ) );
+			if ( path.isEmpty() )
+			{
+				return;
+			}
+			config.dictionaries.clear();
+			const std::string text = config.toJson( true );
+			QFile             file( path );
+			if ( !file.open( QIODevice::WriteOnly | QIODevice::Truncate ) || file.write( text.data(), static_cast<qint64>( text.size() ) ) != static_cast<qint64>( text.size() ) )
+			{
+				QMessageBox::warning( button, QStringLiteral( "Export settings" ), QStringLiteral( "%1 could not be written: %2" ).arg( QDir::toNativeSeparators( path ), file.errorString() ) );
+				return;
+			}
+			tell( button, QStringLiteral( "Exported" ) );
+		}
+
+		// The settings of an exported file, once what they change was shown and accepted.
+		void importSettings( QPushButton* button, Settings& settings )
+		{
+			const QString path = QFileDialog::getOpenFileName( button, QStringLiteral( "Import settings" ), QStandardPaths::writableLocation( QStandardPaths::DownloadLocation ), QStringLiteral( "Lexiglance settings (*.json)" ) );
+			if ( path.isEmpty() )
+			{
+				return;
+			}
+			QFile file( path );
+			auto  imported = file.open( QIODevice::ReadOnly ) ? config::Config::parse( file.readAll().toStdString() ) : std::unexpected( Error{ ss( file.errorString() ) } );
+			if ( !imported )
+			{
+				QMessageBox::warning( button, QStringLiteral( "Import settings" ), QStringLiteral( "%1 cannot be read as Lexiglance's settings: %2" ).arg( QDir::toNativeSeparators( path ), qs( imported.error().message ) ) );
+				return;
+			}
+			// What belongs to this computer: its dictionaries, the pause, developer mode.
+			const auto& here       = settings.config();
+			imported->dictionaries = here.dictionaries;
+			imported->paused       = here.paused;
+			imported->developer    = here.developer;
+			const auto changed     = config::changes( here, *imported );
+			if ( changed.empty() )
+			{
+				tell( button, QStringLiteral( "Nothing changes" ) );
+				return;
+			}
+			const auto shown = []( const std::string& value ) {
+				const QString text = value.empty() ? QStringLiteral( "none" ) : qs( value );
+				return text.size() > 40 ? text.left( 39 ) + QStringLiteral( "…" ) : text;
+			};
+			constexpr std::size_t listed = 15;
+			QStringList           lines;
+			for ( std::size_t i = 0; i < std::min( changed.size(), listed ); ++i )
+			{
+				lines << QStringLiteral( "%1: %2 → %3" ).arg( qs( changed[i].setting ), shown( changed[i].before ), shown( changed[i].after ) );
+			}
+			if ( changed.size() > listed )
+			{
+				lines << QStringLiteral( "and %1 more" ).arg( changed.size() - listed );
+			}
+			if ( !confirm( button, QStringLiteral( "Import settings" ), QStringLiteral( "These settings change:\n\n%1" ).arg( lines.join( '\n' ) ), QStringLiteral( "Import" ) ) )
+			{
+				return;
+			}
+			settings.replace( std::move( *imported ) );
+			tell( button, QStringLiteral( "Imported" ) );
 		}
 
 	} // namespace
@@ -261,7 +344,7 @@ namespace lexiglance::gui
 
 		auto* buttons = new QHBoxLayout();
 		buttons->addWidget( pause_ );
-		restart_->setToolTip( QStringLiteral( "Starts a new daemon that takes over from the running one, ending it if it does not answer." ) );
+		restart_->setToolTip( QStringLiteral( "Starts Lexiglance again: a new copy takes over and ends the old one if it doesn't answer." ) );
 		buttons->addWidget( restart_ );
 		buttons->addStretch( 1 );
 		status_layout->addLayout( buttons );
@@ -272,11 +355,15 @@ namespace lexiglance::gui
 		auto* check_row     = new QHBoxLayout();
 		check_->setProperty( "primary", true );
 		check_row->addWidget( check_ );
-		fix_all_->setToolTip( QStringLiteral( "Carries out every fix below that needs no decision: resuming scanning, turning a setting on, installing what is missing, restarting Lexiglance." ) );
+		fix_all_->setToolTip( QStringLiteral( "Applies every fix below that doesn't need a choice from you: resuming scanning, turning a setting on, installing what's missing, restarting Lexiglance." ) );
 		fix_all_->hide();
 		check_row->addWidget( fix_all_ );
 		health_summary_->setWordWrap( true );
 		check_row->addWidget( health_summary_, 1 );
+		auto* report = new QPushButton( QStringLiteral( "Report a problem..." ) );
+		report->setToolTip( QStringLiteral( "Saves a report on your computer (no secrets, nothing is sent) and opens a GitHub issue filled in for you to attach it to" ) );
+		connect( report, &QPushButton::clicked, this, [this] { showPage( QStringLiteral( "report" ) ); } );
+		check_row->addWidget( report, 0, Qt::AlignTop );
 		health_layout->addLayout( check_row );
 		health_progress_->hide();
 		health_layout->addWidget( health_progress_ );
@@ -295,13 +382,13 @@ namespace lexiglance::gui
 
 		auto* test_box    = new QGroupBox( QStringLiteral( "Try it" ) );
 		auto* test_layout = new QVBoxLayout( test_box );
-		auto* hint        = new QLabel( QStringLiteral( "Hold the trigger keys and point at a word in any application; the popup goes when you let go. To scroll it with the wheel or click an "
-		                                                "entry to copy the word, move onto it before letting go. Or show a popup for this text:" ) );
+		auto* hint        = new QLabel( QStringLiteral( "Hold the trigger and point at a word in any program. The popup closes when you let go, so to scroll it or click an "
+		                                                "entry, move onto it first. Or show a popup for this text:" ) );
 		hint->setWordWrap( true );
 		test_layout->addWidget( hint );
 		auto* test_row  = new QHBoxLayout();
 		auto* show_test = new QPushButton( QStringLiteral( "Show popup" ) );
-		test_text_->setPlaceholderText( QStringLiteral( "A word or a sentence (empty: a word from your dictionaries)" ) );
+		test_text_->setPlaceholderText( QStringLiteral( "A word or a sentence (leave empty for a word from your dictionaries)" ) );
 		test_row->addWidget( test_text_, 1 );
 		test_row->addWidget( show_test );
 		test_layout->addLayout( test_row );
@@ -320,6 +407,7 @@ namespace lexiglance::gui
 		startup_layout->addLayout( tray_row );
 #ifdef Q_OS_MACOS
 		autostart_tray_->hide();
+		autostart_->setToolTip( QStringLiteral( "Lexiglance starts in the menu bar when you log in. Its icon there opens these settings or pauses scanning." ) );
 #else
 		// Without the daemon's autostart this window's would start the daemon anyway, so it goes too.
 		if ( !autostart_->isChecked() && desktop::trayAutostartEnabled() )
@@ -328,14 +416,14 @@ namespace lexiglance::gui
 		}
 		autostart_tray_->setChecked( autostart_->isChecked() && desktop::trayAutostartEnabled() );
 		autostart_tray_->setEnabled( autostart_->isChecked() );
-		autostart_tray_->setToolTip( QStringLiteral( "At login this window starts as a tray icon: click the icon to open it, right-click it to pause scanning." ) );
+		autostart_tray_->setToolTip( QStringLiteral( "This window starts as a tray icon when you log in. Click the icon to open it, right-click it to pause scanning." ) );
 #endif
 		if ( administrator::available() )
 		{
 			administrator_      = new QCheckBox( QStringLiteral( "Run as administrator" ) );
 			administrator_note_ = new QLabel( administratorNote( false, false ) );
-			administrator_->setToolTip( QStringLiteral( "While a program that runs as administrator is in front (many games and their launchers do), Windows keeps its keys and clicks from "
-			                                            "programs that do not, so the trigger does nothing over it. With this on, Lexiglance runs as administrator too." ) );
+			administrator_->setToolTip( QStringLiteral( "While a program that runs as administrator is in front (many games and their launchers do), Windows hides its keys and clicks from "
+			                                            "programs that don't, so the trigger does nothing over it. With this on, Lexiglance runs as administrator too." ) );
 			// Until the daemon says how it runs.
 			administrator_->setEnabled( false );
 			administrator_note_->setWordWrap( true );
@@ -350,7 +438,7 @@ namespace lexiglance::gui
 #if !defined( Q_OS_WIN ) && !defined( Q_OS_MACOS )
 		auto* menu_entry = new QCheckBox( QStringLiteral( "Show Lexiglance in the applications menu" ) );
 		menu_entry->setChecked( desktop::menuEntryShown() );
-		menu_entry->setToolTip( QStringLiteral( "A menu entry that opens these settings (with Check health and Search in its right-click menu)" ) );
+		menu_entry->setToolTip( QStringLiteral( "A menu entry that opens these settings, with Check health and Search in its right-click menu" ) );
 		startup_layout->addWidget( menu_entry );
 		connect( menu_entry, &QCheckBox::toggled, this, [this, menu_entry]( bool shown ) {
 			QString error;
@@ -367,19 +455,37 @@ namespace lexiglance::gui
 
 		auto* reset_box    = new QGroupBox( QStringLiteral( "Settings" ) );
 		auto* reset_layout = new QHBoxLayout( reset_box );
-		auto* reset_note   = new QLabel( QStringLiteral( "Every setting back to its default: the trigger, scanning, OCR, the popup's look, audio and Anki. Installed dictionaries and their order are kept." ) );
+		auto* reset_note   = new QLabel( QStringLiteral( "Export saves all your settings in a file to import on another computer (dictionaries aren't included). Reset puts every setting back to "
+		                                                 "its default: the trigger, scanning, OCR, the popup's look, audio and Anki. Your dictionaries and their order stay." ) );
 		reset_note->setWordWrap( true );
 		reset_note->setEnabled( false );
+		auto* export_settings = new QPushButton( QStringLiteral( "Export..." ) );
+		auto* import_settings = new QPushButton( QStringLiteral( "Import..." ) );
+		import_settings->setToolTip( QStringLiteral( "Takes the settings of an exported file, after showing what changes. This computer's dictionaries stay as they are." ) );
 		reset_all_ = new QPushButton( QStringLiteral( "Reset all settings..." ) );
 		// Until the daemon's settings are here there are no dictionaries to keep (refresh() enables it).
 		reset_all_->setEnabled( false );
 		reset_layout->addWidget( reset_note, 1 );
+		reset_layout->addWidget( export_settings );
+		reset_layout->addWidget( import_settings );
 		reset_layout->addWidget( reset_all_ );
 		layout->addWidget( reset_box );
+		connect( export_settings, &QPushButton::clicked, this, [this, export_settings] {
+			if ( settings().loaded() )
+			{
+				exportSettings( export_settings, settings().config() );
+			}
+		} );
+		connect( import_settings, &QPushButton::clicked, this, [this, import_settings] {
+			if ( settings().loaded() )
+			{
+				importSettings( import_settings, settings() );
+			}
+		} );
 
 		auto* uninstall_box    = new QGroupBox( QStringLiteral( "Uninstall" ) );
 		auto* uninstall_layout = new QHBoxLayout( uninstall_box );
-		auto* uninstall_note   = new QLabel( QStringLiteral( "Removes Lexiglance from this computer, with its autostart and menu entry, and unless you untick it your settings, dictionaries and downloaded models." ) );
+		auto* uninstall_note   = new QLabel( QStringLiteral( "Removes Lexiglance and what it set up on this computer, such as the autostart. Your settings, dictionaries and downloaded models go too, unless you untick that." ) );
 		uninstall_note->setWordWrap( true );
 		uninstall_note->setEnabled( false );
 		auto* uninstall = new QPushButton( QStringLiteral( "Uninstall Lexiglance..." ) );
@@ -398,7 +504,7 @@ namespace lexiglance::gui
 			{
 				return;
 			}
-			if ( !confirm( this, QStringLiteral( "Reset all settings" ), QStringLiteral( "Every setting goes back to its default: the trigger, scanning, OCR, the popup's look, audio and Anki. Installed dictionaries and their order are kept." ), QStringLiteral( "Reset all" ) ) )
+			if ( !confirm( this, QStringLiteral( "Reset all settings" ), QStringLiteral( "Every setting goes back to its default: the trigger, scanning, OCR, the popup's look, audio and Anki. Your dictionaries and their order stay." ), QStringLiteral( "Reset all" ) ) )
 			{
 				return;
 			}
@@ -448,9 +554,10 @@ namespace lexiglance::gui
 
 		restart_timer_->setInterval( 300 );
 		connect( restart_timer_, &QTimer::timeout, this, [this] {
-			if ( QDateTime::currentMSecsSinceEpoch() - restart_started_ > 15000 )
+			// Longer than a daemon waits for Run as administrator's task (20 s) before it runs without those rights.
+			if ( QDateTime::currentMSecsSinceEpoch() - restart_started_ > 30000 )
 			{
-				finishRestart( false, QStringLiteral( "No new daemon answered within 15 seconds." ) );
+				finishRestart( false, QStringLiteral( "Lexiglance didn't start within 30 seconds." ) );
 				return;
 			}
 			if ( !client().connected() )
@@ -470,7 +577,7 @@ namespace lexiglance::gui
 						if ( pid != 0 && pid != restart_from_ )
 						{
 							client().setDaemonPid( pid );
-							finishRestart( true, QStringLiteral( "Restarted: the daemon now runs as process %1." ).arg( pid ) );
+							finishRestart( true, QStringLiteral( "Restarted: Lexiglance now runs as process %1." ).arg( pid ) );
 							setStatus( *status );
 						}
 					},
@@ -491,6 +598,13 @@ namespace lexiglance::gui
 		connect( test_text_, &QLineEdit::returnPressed, this, show );
 
 		client().onEvent( [this]( std::string_view name, const json::Value& params ) { onDaemonEvent( name, params ); } );
+		// Back from System Settings with a permission granted (macOS): checked again.
+		connect( qApp, &QGuiApplication::applicationStateChanged, this, [this]( Qt::ApplicationState state ) {
+			if ( state == Qt::ApplicationActive && isVisible() && std::ranges::any_of( checks_, []( const health::Check& check ) { return check.fix.starts_with( "open-privacy-" ); } ) )
+			{
+				health_timer_->start();
+			}
+		} );
 		health_timer_->setSingleShot( true );
 		health_timer_->setInterval( 1200 );
 		connect( health_timer_, &QTimer::timeout, this, [this] {
@@ -508,7 +622,7 @@ namespace lexiglance::gui
 			if ( !connected && !restarting_ )
 			{
 				showState( state_, QStringLiteral( "⏻  Not running" ), QStringLiteral( "#4a4c52" ), QStringLiteral( "#e4e5e8" ) );
-				details_->setText( QStringLiteral( "The daemon is not running: nothing is looked up. Start it with the Restart button or the one in the status bar." ) );
+				details_->setText( QStringLiteral( "Lexiglance isn't running, so nothing is looked up. Start it with the Start button here or in the status bar." ) );
 				QTimer::singleShot( 2500, this, [this] {
 					if ( !client().connected() && !restarting_ )
 					{
@@ -627,7 +741,7 @@ namespace lexiglance::gui
 				return;
 			}
 			// The daemon keeps the rights it started with: the one that takes over from it starts as now set up.
-			administrator_note_->setText( on ? QStringLiteral( "Set up. Lexiglance starts again as administrator..." ) : QStringLiteral( "Turned off. Lexiglance starts again without administrator rights..." ) );
+			administrator_note_->setText( on ? QStringLiteral( "Turned on. Lexiglance is restarting as administrator..." ) : QStringLiteral( "Turned off. Lexiglance is restarting without administrator rights..." ) );
 			restart();
 		} );
 	}
@@ -692,11 +806,20 @@ namespace lexiglance::gui
 					if ( result == nullptr )
 					{
 						auto checks = localChecks();
-						checks.insert( checks.begin(), { .id = "health", .title = "Health check", .status = health::Severity::Error, .detail = ss( QStringLiteral( "The daemon did not answer the health check (%1)." ).arg( error ) ), .fix = "restart" } );
+						checks.insert( checks.begin(), { .id = "health", .title = "Health check", .status = health::Severity::Error, .detail = ss( QStringLiteral( "Lexiglance didn't answer the health check (%1)." ).arg( error ) ), .fix = "restart" } );
 						showChecks( checks );
 						return;
 					}
 					auto checks = health::read( *result );
+					// Allowed since this daemon started (macOS's own Quit & Reopen restarts only this window): a new one gets
+					// it. Once a run, in case the daemon was started some other way.
+					// A simulated one only looks like it (developer mode): the restart would end the simulation.
+					if ( !privacy_restart_ && std::ranges::any_of( checks, []( const health::Check& check ) { return !check.simulated && privacyAllowed( check.fix ); } ) )
+					{
+						privacy_restart_ = true;
+						restart();
+						return;
+					}
 					if ( lexiglance::channel != "stable" && !applicationMemory().value( QStringLiteral( "setup/completed" ) ).toBool() )
 					{
 						checks.push_back(
@@ -712,7 +835,7 @@ namespace lexiglance::gui
 								{ .id     = "application-log",
 								  .title  = "Application log",
 								  .status = health::Severity::Warning,
-								  .detail = ss( QStringLiteral( "The settings application cannot write logs under %1." ).arg( qs( paths::stateDir().string() ) ) ) }
+								  .detail = ss( QStringLiteral( "The settings window can't write its log to %1." ).arg( qs( paths::stateDir().string() ) ) ) }
 						);
 					}
 					showChecks( checks );
@@ -734,23 +857,20 @@ namespace lexiglance::gui
 					  .detail = ss( QStringLiteral( "lexiglanced was not found next to the settings application or on PATH (%1)." ).arg( program ) ) }
 			);
 		}
-		const auto running = process::othersNamed( "lexiglanced" );
-		if ( running.empty() )
+		// This home's daemon is the one holding its lock, whose file names it; other homes' daemons are not this window's.
+		QFile     lock( qs( ( paths::runtimeDir() / "daemon.lock" ).string() ) );
+		const int pid = lock.open( QIODevice::ReadOnly ) ? lock.readAll().trimmed().toInt() : 0;
+		if ( !process::isRunning( pid, "lexiglanced" ) )
 		{
-			checks.push_back( { .id = "daemon", .title = "Lexiglance daemon", .status = health::Severity::Error, .detail = "Lexiglance is not running, so nothing is looked up.", .fix = "restart" } );
+			checks.push_back( { .id = "daemon", .title = "Lexiglance", .status = health::Severity::Error, .detail = "Lexiglance isn't running, so nothing is looked up.", .fix = "restart" } );
 		}
 		else
 		{
-			QStringList pids;
-			for ( const int pid : running )
-			{
-				pids << QString::number( pid );
-			}
 			checks.push_back(
 					{ .id     = "daemon",
-					  .title  = "Lexiglance daemon",
+					  .title  = "Lexiglance",
 					  .status = health::Severity::Error,
-					  .detail = ss( QStringLiteral( "Lexiglance is running (process %1) but does not answer. Restarting ends it and starts a new one." ).arg( pids.join( QStringLiteral( ", " ) ) ) ),
+					  .detail = ss( QStringLiteral( "Lexiglance is running (process %1) but doesn't answer. Restart ends it and starts a new one." ).arg( pid ) ),
 					  .fix    = "restart" }
 			);
 		}
@@ -774,7 +894,7 @@ namespace lexiglance::gui
 					{ .id     = "cache",
 					  .title  = "Download cache",
 					  .status = health::Severity::Warning,
-					  .detail = ss( QStringLiteral( "Cannot write downloads under %1." ).arg( qs( paths::cacheDir().string() ) ) ) }
+					  .detail = ss( QStringLiteral( "Can't save downloads to %1." ).arg( qs( paths::cacheDir().string() ) ) ) }
 			);
 		}
 		return checks;
@@ -912,7 +1032,7 @@ namespace lexiglance::gui
 				administrator_->setChecked( true );
 			}
 		}
-		else if ( action.startsWith( QStringLiteral( "open-" ) ) )
+		else if ( action.startsWith( QStringLiteral( "open-" ) ) && !openPrivacySettings( action ) )
 		{
 			showPage( action.mid( 5 ) );
 		}
@@ -1064,7 +1184,7 @@ namespace lexiglance::gui
 							return;
 						}
 						// Windows lets a program find the new libraries only as it starts, so the daemon starts again.
-						health_summary_->setText( QStringLiteral( "The Visual C++ Redistributable is installed; starting Lexiglance again..." ) );
+						health_summary_->setText( QStringLiteral( "The Visual C++ Redistributable is installed. Restarting Lexiglance..." ) );
 						check_->setEnabled( true );
 						fixing_ = false;
 						restart();
@@ -1084,10 +1204,10 @@ namespace lexiglance::gui
 		restart_started_ = QDateTime::currentMSecsSinceEpoch();
 		restart_->setEnabled( false );
 		showState( state_, QStringLiteral( "⟳  Restarting..." ), QStringLiteral( "#5a4320" ), QStringLiteral( "#ffd79a" ) );
-		details_->setText( QStringLiteral( "A new daemon is starting; it takes over from the running one." ) );
+		details_->setText( QStringLiteral( "Restarting: a new Lexiglance is taking over from the running one." ) );
 		if ( !client().startDaemon( true ) )
 		{
-			finishRestart( false, QStringLiteral( "The daemon program could not be started (%1)." ).arg( daemonExecutable() ) );
+			finishRestart( false, QStringLiteral( "Couldn't start Lexiglance (%1)." ).arg( daemonExecutable() ) );
 			return;
 		}
 		restart_timer_->start();

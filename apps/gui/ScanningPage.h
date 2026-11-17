@@ -31,6 +31,8 @@ namespace lexiglance::gui
 		void storeTrigger();
 		// Keeps at least one language on, and Preferred limited to those that are on.
 		void updateLanguages();
+		// Offers the window of the latest lookup to ignore, unless it already is.
+		void updateAddWindow();
 
 		std::array<QComboBox*, 3> keys_{};
 		QPushButton*              record_;
@@ -50,6 +52,8 @@ namespace lexiglance::gui
 		QCheckBox*                                      wheel_lock_;
 		QComboBox*                                      selection_;
 		QPlainTextEdit*                                 ignored_;
+		QPushButton*                                    add_window_;
+		QString                                         last_window_;
 		OcrGroup*                                       ocr_;
 		bool                                            recording_ = false;
 		bool                                            loading_   = false;

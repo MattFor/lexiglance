@@ -28,7 +28,7 @@ jobs:
       - name: Install clang-format
         run: pipx install clang-format==23.1.0
       - name: Check formatting
-        run: git ls-files '*.cpp' '*.h' ':!:third_party/**' | xargs clang-format --dry-run --Werror
+        run: git ls-files '*.cpp' '*.h' '*.mm' ':!:third_party/**' | xargs clang-format --dry-run --Werror
       - name: Install ruff
         run: pipx install ruff==0.16.5
       - name: Ruff
@@ -104,8 +104,6 @@ jobs:
           pipx install clang-tidy==21.1.1
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-      - name: Generate sources
-        run: cmake --build build --target lexiglance_autogen || true
       - name: Run clang-tidy
         # Same-OS platform sources only: tidying X11 on a machine without X headers (or Windows sources on Linux)
         # fails the first missing include and then reports a cascade of false positives.
@@ -209,3 +207,96 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           # Without the settings window: the daemon and lexiglancectl must not miss what was left out with it.
           ./.github/scripts/smoke-test-windows.ps1 (Get-ChildItem build/*-setup.exe | Select-Object -First 1).FullName -NoGui
+
+  macos:
+    name: macOS (${{ matrix.arch }})
+    # Lexiglance.app for one architecture, on a Mac of that architecture; macos-universal merges the two. Pango, Cairo
+    # and the libraries they use are built for macOS 13.3 by macos-deps.sh (cached until it changes): Homebrew's and
+    # MacPorts' builds need the runner's macOS (15). Qt's own build is universal and needs macOS 12.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    env:
+      QT_VERSION: '6.8.3'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the build tools
+        run: |
+          pipx install ninja==1.13.2
+          pipx environment --value PIPX_BIN_DIR >> "$GITHUB_PATH"
+          pipx run --spec aqtinstall aqt install-qt mac desktop "$QT_VERSION" clang_64 -O "$RUNNER_TEMP/Qt"
+          echo "QT_DIR=$RUNNER_TEMP/Qt/$QT_VERSION/macos" >> "$GITHUB_ENV"
+      - name: Restore the libraries
+        id: deps
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/deps
+          key: macos-deps-${{ matrix.arch }}-${{ hashFiles('.github/scripts/macos-deps.sh') }}
+      - name: Build the libraries
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: |
+          pipx install meson==1.12.1
+          bash .github/scripts/macos-deps.sh "$RUNNER_TEMP/deps"
+      - name: Cache the libraries
+        # Saved now, so a failing build below does not throw them away.
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/deps
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+      - name: Configure
+        # Homebrew's libraries stay out (the runners have some): zlib and libcurl are the system's, pkg-config is the
+        # one in deps (it looks only there). The deployment target is CMakeLists.txt's, 13.3.
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEXIGLANCE_WARNINGS_AS_ERRORS=ON
+          -DCMAKE_PREFIX_PATH="$QT_DIR;$RUNNER_TEMP/deps" -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local"
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Bundle
+        # Archived: an artifact keeps neither the symbolic links in Qt's frameworks nor the programs' executable bits.
+        run: |
+          bash .github/scripts/macos-package.sh bundle build bundle/Lexiglance.app
+          tar -C bundle -czf "lexiglance-macos-${{ matrix.arch }}.tar.gz" Lexiglance.app
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-${{ matrix.arch }}
+          path: lexiglance-macos-${{ matrix.arch }}.tar.gz
+          retention-days: 1
+
+  macos-universal:
+    name: macOS (universal disk image)
+    # The release publishes this disk image (release.yml downloads package-*).
+    needs: macos
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: macos-*
+          merge-multiple: true
+      - name: Disk image
+        run: |
+          for arch in arm64 x86_64; do
+            mkdir -p "$arch" && tar -C "$arch" -xzf "lexiglance-macos-$arch.tar.gz"
+          done
+          bash .github/scripts/macos-package.sh dmg dist arm64/Lexiglance.app x86_64/Lexiglance.app
+      - name: Install Rosetta
+        # For the x86_64 half of the smoke test.
+        run: arch -x86_64 /usr/bin/true || sudo softwareupdate --install-rosetta --agree-to-license
+      - name: Smoke test the disk image
+        # On a Mac without the libraries or Qt, in both architectures: everything the programs load must be in the app,
+        # and built for the macOS the app says it needs.
+        run: bash .github/scripts/macos-package.sh test dist/Lexiglance-macos.dmg
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-macos
+          path: dist/Lexiglance-macos.dmg
+          retention-days: 7

@@ -44,7 +44,7 @@ namespace lexiglance::gui
 	// "JMdict [2026-09-12]" -> "JMdict".
 	[[nodiscard]] QString shortTitle( const QString& title );
 
-	// lexiglanced next to this executable, in the build tree, or on PATH.
+	// lexiglanced next to this executable, in the build tree, in Lexiglance.app's helper app, or on PATH.
 	[[nodiscard]] QString daemonExecutable();
 
 	// Asks before something that cannot be undone; true when `action` (the button's text) was chosen.
@@ -55,6 +55,18 @@ namespace lexiglance::gui
 
 	// The settings application's own memory, apart from the daemon's configuration: what it decided or showed once.
 	[[nodiscard]] QSettings applicationMemory();
+
+	// macOS: an icon in the Dock (and a menu bar of its own) while the window is open, only the menu bar icon otherwise.
+	// Nothing elsewhere.
+	void showInDock( bool shown );
+
+	// An "open-privacy-" fix of the health report (macOS): opens its pane of System Settings' Privacy & Security. False for
+	// any other action.
+	bool openPrivacySettings( const QString& action );
+
+	// Whether the permission an "open-privacy-" fix asks for is allowed now (macOS), as a program started now gets it:
+	// Input Monitoring and Screen Recording reach a running program only once it restarts. False for any other fix.
+	[[nodiscard]] bool privacyAllowed( std::string_view fix );
 
 	// Bug-report zip under the Lexiglance cache; deleted when all settings are reset.
 	[[nodiscard]] QString diagnosisZipPath();

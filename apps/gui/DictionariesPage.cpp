@@ -9,13 +9,14 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QMessageBox>
-#include <QMimeData>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -111,7 +112,7 @@ namespace lexiglance::gui
 			}
 		}
 
-		// The priority list: rows are dragged to another place. Files dragged in from elsewhere are left to the page,
+		// The priority list: rows are dragged to another place. Files dragged in from elsewhere are left to the window,
 		// which imports them.
 		class DictionaryTree final : public QTreeWidget
 		{
@@ -173,13 +174,12 @@ namespace lexiglance::gui
 		down_( new QPushButton( QIcon::fromTheme( QStringLiteral( "go-down" ) ), QString() ) ),
 		sort_( new QPushButton( QIcon::fromTheme( QStringLiteral( "view-sort-ascending" ) ), QStringLiteral( "Sort automatically..." ) ) )
 	{
-		setAcceptDrops( true );
 		auto* layout = new QVBoxLayout( this );
 		layout->setContentsMargins( 24, 20, 24, 20 );
 		layout->setSpacing( 10 );
 
-		auto* intro = new QLabel( QStringLiteral( "Lexiglance reads Yomitan dictionaries. Results are shown in the order below: drag a dictionary up or down to change it, "
-		                                          "or let Sort automatically put word dictionaries first, then names, kanji and frequency lists. Drag .zip files here to import them." ) );
+		auto* intro = new QLabel( QStringLiteral( "Lexiglance reads Yomitan dictionaries. The popup shows results in the order below: drag a dictionary up or down to change it, "
+		                                          "or click Sort automatically to put word dictionaries first, then names, kanji and frequency lists. To import, drop .zip files (or folders of them) anywhere on this window." ) );
 		intro->setWordWrap( true );
 		layout->addWidget( intro );
 
@@ -187,13 +187,13 @@ namespace lexiglance::gui
 		auto* recommended = new QPushButton( QIcon::fromTheme( QStringLiteral( "folder-download" ) ), QStringLiteral( "Get recommended dictionaries..." ) );
 		auto* import      = new QPushButton( QIcon::fromTheme( QStringLiteral( "document-open" ) ), QStringLiteral( "Import from file..." ) );
 		auto* updates     = new QPushButton( QIcon::fromTheme( QStringLiteral( "view-refresh" ) ), QStringLiteral( "Check for updates" ) );
-		up_->setToolTip( QStringLiteral( "Higher priority" ) );
-		down_->setToolTip( QStringLiteral( "Lower priority" ) );
+		up_->setToolTip( QStringLiteral( "Move up: its results show earlier" ) );
+		down_->setToolTip( QStringLiteral( "Move down: its results show later" ) );
 		toolbar->addWidget( recommended );
 		toolbar->addWidget( import );
 		toolbar->addWidget( updates );
 		toolbar->addStretch( 1 );
-		sort_->setToolTip( QStringLiteral( "Word dictionaries first (the best-known ones leading), then names, grammar, specialised and monolingual ones, kanji, frequency and pitch lists" ) );
+		sort_->setToolTip( QStringLiteral( "Puts word dictionaries first (the best-known at the top), then names, grammar, specialised and monolingual ones, kanji, and frequency and pitch lists. Shows you the new order first." ) );
 		toolbar->addWidget( sort_ );
 		toolbar->addWidget( up_ );
 		toolbar->addWidget( down_ );
@@ -311,7 +311,11 @@ namespace lexiglance::gui
 				{
 					setBusy( QStringLiteral( "Import failed: %1" ).arg( qs( params["error"].asString() ) ), -1, 0 );
 				}
-				startNextDownload();
+				if ( import_job_ >= 0 && params["job"].asInt( -1 ) == import_job_ )
+				{
+					import_job_ = -1;
+					startNextDownload();
+				}
 			}
 			else if ( name == "dictionaries.changed" )
 			{
@@ -469,38 +473,30 @@ namespace lexiglance::gui
 
 	void DictionariesPage::importFiles( const QStringList& files )
 	{
+		QStringList paths;
 		for ( const QString& file : files )
+		{
+			const auto zips = QFileInfo( file ).isDir() && !QFileInfo::exists( file + QStringLiteral( "/index.json" ) ) ? QDir( file ).entryInfoList( { QStringLiteral( "*.zip" ) }, QDir::Files, QDir::Name ) : QFileInfoList();
+			if ( zips.isEmpty() )
+			{
+				paths << file;
+			}
+			for ( const QFileInfo& zip : zips )
+			{
+				paths << zip.filePath();
+			}
+		}
+		for ( const QString& file : paths )
 		{
 			json::Writer params;
 			params.beginObject().field( "path", ss( file ) ).endObject();
 			client().call( "dictionaries.import", params.take(), [this]( const json::Value*, const QString& error ) {
 				if ( !error.isEmpty() )
 				{
-					QMessageBox::warning( this, QStringLiteral( "Import" ), error );
+					QMessageBox::warning( this, QStringLiteral( "Couldn't import" ), error );
 				}
 			} );
 		}
-	}
-
-	void DictionariesPage::dragEnterEvent( QDragEnterEvent* event )
-	{
-		if ( event->mimeData()->hasUrls() )
-		{
-			event->acceptProposedAction();
-		}
-	}
-
-	void DictionariesPage::dropEvent( QDropEvent* event )
-	{
-		QStringList files;
-		for ( const QUrl& url : event->mimeData()->urls() )
-		{
-			if ( url.isLocalFile() )
-			{
-				files << url.toLocalFile();
-			}
-		}
-		importFiles( files );
 	}
 
 	void DictionariesPage::move( int delta )
@@ -571,7 +567,7 @@ namespace lexiglance::gui
 			{
 				list += QStringLiteral( "%1. %2  —  %3\n" ).arg( ++number ).arg( qs( entry["title"].asString() ), qs( entry["kind"].asString() ) );
 			}
-			QMessageBox question( QMessageBox::Question, QStringLiteral( "Sort automatically" ), QStringLiteral( "Put the dictionaries in this order? Which are enabled does not change." ), QMessageBox::Yes | QMessageBox::Cancel, this );
+			QMessageBox question( QMessageBox::Question, QStringLiteral( "Sort automatically" ), QStringLiteral( "Put the dictionaries in this order? This doesn't enable or disable any of them." ), QMessageBox::Yes | QMessageBox::Cancel, this );
 			question.setDetailedText( list );
 			question.setInformativeText( list.section( QLatin1Char( '\n' ), 0, 7 ) + ( number > 8 ? QStringLiteral( "..." ) : QString() ) );
 			if ( question.exec() != QMessageBox::Yes )
@@ -642,18 +638,20 @@ namespace lexiglance::gui
 				[this, target, next]( const QString& error ) {
 					if ( !error.isEmpty() )
 					{
-						setBusy( QStringLiteral( "Download of %1 failed: %2" ).arg( next.name, error ), -1, 0 );
+						setBusy( QStringLiteral( "Couldn't download %1: %2" ).arg( next.name, error ), -1, 0 );
 						startNextDownload();
 						return;
 					}
 					json::Writer params;
 					params.beginObject().field( "path", ss( target ) ).field( "delete_source", true ).field( "replace", true ).field( "replaces", ss( next.replaces ) ).endObject();
-					client().call( "dictionaries.import", params.take(), [this, next]( const json::Value*, const QString& import_error ) {
-						if ( !import_error.isEmpty() )
+					client().call( "dictionaries.import", params.take(), [this, next]( const json::Value* result, const QString& import_error ) {
+						if ( result == nullptr )
 						{
-							setBusy( QStringLiteral( "Import of %1 failed: %2" ).arg( next.name, import_error ), -1, 0 );
+							setBusy( QStringLiteral( "Couldn't import %1: %2" ).arg( next.name, import_error ), -1, 0 );
 							startNextDownload();
+							return;
 						}
+						import_job_ = ( *result )["job"].asInt( -1 );
 					} );
 				}
 		);
@@ -665,7 +663,7 @@ namespace lexiglance::gui
 		dialog.setWindowTitle( QStringLiteral( "Recommended dictionaries" ) );
 		dialog.resize( 760, 480 );
 		auto* layout = new QVBoxLayout( &dialog );
-		auto* intro  = new QLabel( QStringLiteral( "Select the dictionaries to download and install. They are fetched from their authors' official releases." ) );
+		auto* intro  = new QLabel( QStringLiteral( "Select the dictionaries to install. Each one downloads from its author's official release." ) );
 		intro->setWordWrap( true );
 		layout->addWidget( intro );
 

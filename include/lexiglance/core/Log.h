@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,6 +37,10 @@ namespace lexiglance::log
 	void setFile( const std::filesystem::path& path );
 
 	void write( Level lvl, std::string_view message );
+
+	// Also hands every line written (without its line break) to `tap`, for a live view of the log; empty to stop. It
+	// runs under the log's lock, so it must not write to the log itself.
+	void setTap( std::function<void( Level, std::string_view line )> tap );
 
 	// A moment as the clock on the wall shows it ("2026-09-16 20:14:30.123"), which is how log lines are stamped and
 	// how the statistics count a day; UTC on a system without a time zone database.

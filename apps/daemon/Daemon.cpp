@@ -17,7 +17,9 @@
 #include <cstdlib>
 #include <exception>
 #include <format>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <span>
 
@@ -44,23 +46,6 @@ namespace lexiglance::daemon
 			}
 #endif
 			return process::startDetached( program, arguments );
-		}
-
-		std::string base64( std::string_view data )
-		{
-			static constexpr std::string_view alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-			std::string                       out;
-			out.reserve( ( ( data.size() + 2 ) / 3 ) * 4 );
-			for ( std::size_t i = 0; i < data.size(); i += 3 )
-			{
-				const auto          byte = [&]( std::size_t k ) { return k < data.size() ? static_cast<std::uint32_t>( static_cast<unsigned char>( data[k] ) ) : 0U; };
-				const std::uint32_t n    = ( byte( i ) << 16U ) | ( byte( i + 1 ) << 8U ) | byte( i + 2 );
-				out.push_back( alphabet[( n >> 18U ) & 63U] );
-				out.push_back( alphabet[( n >> 12U ) & 63U] );
-				out.push_back( i + 1 < data.size() ? alphabet[( n >> 6U ) & 63U] : '=' );
-				out.push_back( i + 2 < data.size() ? alphabet[n & 63U] : '=' );
-			}
-			return out;
 		}
 
 		cairo_status_t appendPng( void* closure, const unsigned char* data, unsigned int length )
@@ -381,9 +366,11 @@ namespace lexiglance::daemon
 		backend_( std::move( backend ) ),
 		store_( paths::dictionariesDir() ),
 		config_path_( paths::configFile() ),
-		config_( std::make_shared<const config::Config>( std::move( config ) ) )
+		config_( std::make_shared<const config::Config>( std::move( config ) ) ),
+		config_watch_( config_path_ )
 	{
-		actions_ = std::make_unique<ThreadPool>( 2, false, "lg-actions" );
+		actions_       = std::make_unique<ThreadPool>( 2, false, "lg-actions" );
+		audio_actions_ = std::make_unique<ThreadPool>( 2, false, "lg-audio" );
 		stats_.setEnabled( this->config()->statistics, this->config()->statistics_translations );
 		stats_.load( paths::stateDir() / "statistics.json" );
 		if ( lang::findLanguage( this->config()->language ) == nullptr )
@@ -394,10 +381,22 @@ namespace lexiglance::daemon
 
 	Daemon::~Daemon()
 	{
+		// It applies settings through everything below.
+		config_thread_ = {};
 		// Whatever was counted since the last write is kept.
 		stats_.save();
+		log::setTap( {} );
 		// The socket goes first: a new daemon can take over at once, and no request reaches a half torn down one.
 		ipc_.stop();
+#ifndef _WIN32
+		// So does the short folder a deep runtime directory gets for it (run() made it); removed only when empty.
+		if ( const auto folder = std::filesystem::path( paths::ipcEndpoint() ).parent_path(); folder != paths::runtimeDir() )
+		{
+			std::error_code ec;
+			std::filesystem::remove( folder, ec );
+		}
+#endif
+		audio_actions_.reset();
 		actions_.reset();
 		capture_thread_ = {};
 		render_thread_  = {};
@@ -434,7 +433,7 @@ namespace lexiglance::daemon
 	int Daemon::run()
 	{
 		reloadDictionaries();
-		// Before the IPC server starts: its thread serves "translate" and "translation.reload", and a daemon
+		// Before the IPC server starts: it serves "translate" and "translation.reload", and a daemon
 		// without desktop integration returns below without reaching the rest of the startup.
 		translation_ = std::make_unique<TranslationService>( [this]( std::uint64_t ticket, Result<std::string> translated, std::chrono::microseconds took ) { translationDone( ticket, std::move( translated ), took ); } );
 		translation_->setPrecisions( precisions( config()->translation ), translate::precisionNamed( config()->translation.model ) );
@@ -457,6 +456,7 @@ namespace lexiglance::daemon
 		log::info( "listening on {}", paths::ipcEndpoint() );
 
 		import_thread_ = std::jthread( [this]( const std::stop_token& stop ) { importLoop( stop ); } );
+		config_thread_ = std::jthread( [this]( const std::stop_token& stop ) { watchConfig( stop ); } );
 
 		if ( !backend_ )
 		{
@@ -473,17 +473,7 @@ namespace lexiglance::daemon
 		// Turns of the wheel kept for a popup that never came go with the trigger, and so does the popup, with any lookup
 		// still on its way to one: unless the pointer was taken onto it to use it (an entry to copy, a word to hear or
 		// send to Anki), which a click elsewhere closes as before.
-		events.trigger_released = [this] {
-			pending_wheel_   = 0;
-			translation_off_ = false;
-			sentence_key_.on = false;
-			awaiting_        = false;
-			if ( !backend_->pointerOnPopup() )
-			{
-				++generation_;
-				dismiss();
-			}
-		};
+		events.trigger_released = [this] { onTriggerReleased(); };
 		// The settings application shows whether the trigger is seen (Overview, Health).
 		events.trigger_changed = [this]( bool held ) {
 			// The trigger going down is a sentence key press waiting to happen: the model loads now, so the translation
@@ -616,6 +606,7 @@ namespace lexiglance::daemon
 
 	Result<> Daemon::applyConfig( config::Config config, bool save )
 	{
+		const std::scoped_lock applying( apply_mutex_ );
 		// An import's reloadDictionaries() must not store its older copy over this one; released before calling it.
 		std::unique_lock reload_lock( reload_mutex_ );
 		if ( save )
@@ -624,6 +615,7 @@ namespace lexiglance::daemon
 			{
 				return saved;
 			}
+			config_watch_.own();
 		}
 		// Only an actual change applies, so --verbose survives unrelated edits.
 		const auto previous = this->config();
@@ -665,13 +657,17 @@ namespace lexiglance::daemon
 				}
 			} );
 		}
-		reloadDictionaries();
+		// Settings read from the file are not written back: the file may be another computer's, with other dictionaries.
+		reloadDictionaries( save );
 		ipc_.broadcast( "config.changed", "{}" );
 		return {};
 	}
 
-	void Daemon::reloadDictionaries()
+	// `save`: a dictionary new here is written to the settings file; `removed`: a dictionary just removed (or replaced by
+	// a newer revision) leaves the settings too.
+	void Daemon::reloadDictionaries( bool save, std::string_view removed )
 	{
+		const std::scoped_lock applying( apply_mutex_ );
 		const std::scoped_lock lock( reload_mutex_ );
 
 		std::vector<Error> errors;
@@ -686,14 +682,10 @@ namespace lexiglance::daemon
 			}
 		}
 
-		// Keep the configured order; newly installed dictionaries go to the end, uninstalled ones are forgotten.
+		// Keep the configured order, those not installed here included: forgetting them, a computer sharing the settings
+		// file with another that has other dictionaries would write it back and forth for ever.
 		auto cfg     = *config();
-		bool changed = false;
-		std::erase_if( cfg.dictionaries, [&]( const config::DictionaryPreference& preference ) {
-			const bool missing = std::ranges::none_of( *installed, [&]( const auto& d ) { return d->info().title == preference.title; } );
-			changed            = changed || missing;
-			return missing;
-		} );
+		bool changed = !removed.empty() && std::erase_if( cfg.dictionaries, [&]( const config::DictionaryPreference& preference ) { return preference.title == removed; } ) > 0;
 		// A newly installed dictionary goes where it belongs (a word dictionary before names, kanji and frequency lists),
 		// not simply last.
 		if ( std::ranges::any_of( *installed, [&]( const auto& d ) { return cfg.dictionary( d->info().title ) == nullptr; } ) )
@@ -733,9 +725,14 @@ namespace lexiglance::daemon
 
 		if ( changed )
 		{
-			if ( auto saved = cfg.save( config_path_ ); !saved )
+			// Never over a hand edit the watcher has yet to apply.
+			if ( save && !config_watch_.pending() )
 			{
-				log::warn( "{}", saved.error().message );
+				if ( auto saved = cfg.save( config_path_ ); !saved )
+				{
+					log::warn( "{}", saved.error().message );
+				}
+				config_watch_.own();
 			}
 			config_.store( std::make_shared<const config::Config>( std::move( cfg ) ) );
 		}
@@ -930,6 +927,19 @@ namespace lexiglance::daemon
 		capture_requests_.post( { .generation = ++generation_, .point = point, .text = std::move( text ) } );
 	}
 
+	void Daemon::onTriggerReleased()
+	{
+		pending_wheel_   = 0;
+		translation_off_ = false;
+		sentence_key_.on = false;
+		awaiting_        = false;
+		if ( !backend_->pointerOnPopup() )
+		{
+			++generation_;
+			dismiss();
+		}
+	}
+
 	void Daemon::onClickOutside()
 	{
 		if ( backend_->popupVisible() )
@@ -947,7 +957,9 @@ namespace lexiglance::daemon
 		}
 		backend_->hidePopup();
 		backend_->hideHighlight();
-		current_         = {};
+		current_ = {};
+		// The text the wheel chose goes with its popup: pressing the trigger there again looks it up afresh.
+		forced_length_   = 0;
 		sentence_key_.on = false;
 		awaiting_        = false;
 		shown_key_.store( 0 );
@@ -1021,11 +1033,16 @@ namespace lexiglance::daemon
 
 	void Daemon::playAudio( std::shared_ptr<const Shown> shown, std::size_t entry, bool report )
 	{
-		( void )actions_->submit( [this, shown = std::move( shown ), entry, settings = config()->audio, report] {
+		( void )audio_actions_->submit( [this, shown = std::move( shown ), entry, settings = config()->audio, report, asked = ++audio_asked_] {
 			const auto& term    = shown->result.terms[entry];
 			const auto  started = std::chrono::steady_clock::now();
-			auto        played  = audio_.play( term.expression, term.reading, shown->result.language, settings );
-			const auto  took    = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started );
+			auto        clip    = audio_.find( term.expression, term.reading, shown->result.language, settings );
+			if ( clip && asked != audio_asked_.load() )
+			{
+				return;
+			}
+			auto       played = clip ? audio_.play( term.expression, term.reading, shown->result.language, settings ) : Result<>( std::unexpected( clip.error() ) );
+			const auto took   = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started );
 			if ( played )
 			{
 				log::info( "audio: played {} in {} ms", term.expression, took.count() );
@@ -1202,8 +1219,8 @@ namespace lexiglance::daemon
 			const BusyMark busy( capture_busy_since_ );
 			captured = state.capture->capture( point, window, { .characters = static_cast<std::size_t>( cfg.scan.max_length ), .sentence = sentence } );
 		}
-		reading.took = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started );
-		log::debug( "capture: {} characters in {} ms{}", characters( captured ), reading.took.count(), sentence ? " (the whole sentence)" : "" );
+		reading.took = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - started );
+		log::debug( "capture: {} characters in {} ms{}", characters( captured ), reading.took.count() / 1000, sentence ? " (the whole sentence)" : "" );
 		if ( captured && captured->origin != nullptr )
 		{
 			reading.source = captured->origin->name();
@@ -1302,7 +1319,7 @@ namespace lexiglance::daemon
 
 			if ( request->probe )
 			{
-				request->probe->set_value( captured );
+				request->probe->set_value( inspect( state, *request, std::move( captured ), took ) );
 				continue;
 			}
 
@@ -1332,11 +1349,12 @@ namespace lexiglance::daemon
 				result.selected_ruby = translator.readings( dictionaries_.load(), utf8::prefix( result.text, result.selected ), std::move( words ) );
 			}
 			log::debug( "lookup: {} terms in {} us", result.terms.size(), std::chrono::duration_cast<std::chrono::microseconds>( result.elapsed ).count() );
+			traceLookup( *request, *captured, result, source, unread, took );
 			// Only real lookups count towards the statistics shown in the settings application.
 			recordScreenLookup( *request, result, source, captured->text );
 			if ( !request->text && request->length == 0 )
 			{
-				reportCapture( *request, captured->text, unread, source, took, result.terms.size() + result.kanji.size(), reported );
+				reportCapture( *request, captured->text, unread, source, std::chrono::duration_cast<std::chrono::milliseconds>( took ), result.terms.size() + result.kanji.size(), reported );
 			}
 
 			// A sentence asked for with the sentence key, or a selection no entry covers, is translated as well.
@@ -1529,6 +1547,10 @@ namespace lexiglance::daemon
 			return;
 		}
 		render::Translation finished = *waiting;
+		if ( tracer_.on() )
+		{
+			tracer_.send( request.generation, { { .stage = Stage::Translate, .took = took } }, [&]( json::Writer& out ) { out.field( "translated", translation.has_value() && !translation->empty() ); } );
+		}
 		if ( !translation )
 		{
 			finished.problem = std::format( "No translation: {}", translation.error().message );
@@ -1567,14 +1589,14 @@ namespace lexiglance::daemon
 			return !sleeping.wait_for( lock, stop, duration, [] { return false; } ) && !stop.stop_requested();
 		};
 		auto last = std::chrono::steady_clock::now() - interval + first;
-#ifdef __linux__
+#ifndef _WIN32
 		std::optional<std::filesystem::file_time_type> replaced;
 #endif
 		while ( sleep( look ) )
 		{
-#ifdef __linux__
+#ifndef _WIN32
 			// This copy replaced by a newer one (an update, a package installed over it, a download put in place of the
-			// AppImage, a rebuild): its daemon takes over. Otherwise this one would run the old version until the next
+			// AppImage, a new Lexiglance.app dragged over it, a rebuild): its daemon takes over. Otherwise this one would run the old version until the next
 			// login, and find the version already installed as an update.
 			if ( process::replacementReady( replaced ) )
 			{
@@ -1619,6 +1641,42 @@ namespace lexiglance::daemon
 		}
 	}
 
+	void Daemon::watchConfig( const std::stop_token& stop )
+	{
+		thread::setName( "lg-config" );
+		std::mutex                  mutex;
+		std::condition_variable_any sleeping;
+		std::unique_lock            lock( mutex );
+		while ( !sleeping.wait_for( lock, stop, std::chrono::seconds( 2 ), [] { return false; } ) && !stop.stop_requested() )
+		{
+			// Checked, read and applied in one go: no save of the daemon's own comes in between, nor is taken for someone else's.
+			const std::scoped_lock applying( apply_mutex_ );
+			if ( !config_watch_.changed() )
+			{
+				continue;
+			}
+			// Read here rather than with Config::load, which takes a file it cannot open for the defaults.
+			std::ifstream     in( config_path_, std::ios::binary );
+			const std::string text( ( std::istreambuf_iterator<char>( in ) ), std::istreambuf_iterator<char>() );
+			auto              loaded = in ? config::Config::parse( text ) : std::unexpected( Error{ "cannot open it" } );
+			if ( !loaded )
+			{
+				// Kept aside, as at start-up: the next save writes the settings in use over the edit.
+				auto broken = config_path_;
+				broken += ".broken";
+				std::error_code copied;
+				std::filesystem::copy_file( config_path_, broken, std::filesystem::copy_options::overwrite_existing, copied );
+				log::warn( "settings: {} was changed but cannot be read ({}), so the settings in use stay; {}", config_path_.string(), loaded.error().message, copied ? std::format( "it cannot be copied aside ({})", copied.message() ) : std::format( "the edit is kept as {} until the next one", broken.string() ) );
+				continue;
+			}
+			log::info( "settings: {} was changed outside Lexiglance; applying it", config_path_.string() );
+			if ( auto applied = applyConfig( std::move( *loaded ), false ); !applied )
+			{
+				log::warn( "settings: {}", applied.error().message );
+			}
+		}
+	}
+
 	void Daemon::renderLoop( const std::stop_token& stop )
 	{
 		thread::setName( "lg-render" );
@@ -1659,6 +1717,12 @@ namespace lexiglance::daemon
 				image = renderer.render( request->shown->result, request->notes, visible, request->shown->translation ? &*request->shown->translation : nullptr );
 			}
 			log::debug( "render: {} terms in {} ms{}", request->shown->result.terms.size(), std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started ).count(), complete ? " (the rest)" : "" );
+			// Traced from here to the popup on screen as its showing, the wait for the desktop's thread included.
+			const auto posted = tracer_.on() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			if ( posted != std::chrono::steady_clock::time_point{} )
+			{
+				tracer_.send( request->generation, { { .stage = Stage::Render, .took = posted - started } }, [&]( json::Writer& out ) { out.field( "terms", request->shown->result.terms.size() ).field( "rest", complete ); } );
+			}
 			if ( !image )
 			{
 				continue;
@@ -1675,8 +1739,10 @@ namespace lexiglance::daemon
 					render::Color::parse( cfg->popup.highlight_color ).value_or( render::Color{ .r = 0.35, .g = 0.63, .b = 1.0, .a = 0.35 } ),
 					platform::lookFor( cfg->popup ).shape
 			);
-			backend_->post( [this, generation = request->generation, image = std::move( image ), shown = std::move( shown ), notes = request->notes, style, anchor = request->anchor, highlight = request->highlight, source = request->source, key = request->key, chosen = request->chosen, keeps = request->keeps, color, autoplay = cfg->audio.autoplay, whole] {
-				if ( !current( generation, key ) )
+			backend_->post( [this, generation = request->generation, image = std::move( image ), shown = std::move( shown ), notes = request->notes, style, anchor = request->anchor, highlight = request->highlight, source = request->source, key = request->key, chosen = request->chosen, keeps = request->keeps, color, autoplay = cfg->audio.autoplay, whole, posted] {
+				// A translation asked for before the latest press of the sentence key or turn of the wheel, which the screen
+				// lags behind: shown, it would make the next press turn it off rather than on.
+				if ( !current( generation, key ) || ( keeps && generation < acted_.load() ) )
 				{
 					return;
 				}
@@ -1691,7 +1757,12 @@ namespace lexiglance::daemon
 				const bool first = shown_key_.load() != key;
 				awaiting_        = false;
 				backend_->showPopup( { .image = image, .style = style, .anchor = anchor, .source = source } );
+				if ( posted != std::chrono::steady_clock::time_point{} )
+				{
+					tracer_.send( generation, { { .stage = Stage::Show, .took = std::chrono::steady_clock::now() - posted } }, [&]( json::Writer& out ) { out.field( "x", anchor.x ).field( "y", anchor.y ); } );
+				}
 				current_ = { .generation = generation, .shown = shown, .anchor = anchor, .highlight = highlight, .notes = notes, .source = source, .key = key, .chosen = chosen, .keeps = keeps };
+				last_popup_.store( shown );
 				shown_key_.store( key );
 				// Turns of the wheel that came before the popup did.
 				if ( pending_wheel_ != 0 )
@@ -1759,7 +1830,7 @@ namespace lexiglance::daemon
 		// Throttled with the report, so moving the pointer along a line does not fill the file.
 		log::info( "lookup: {} {}", summary, where );
 		json::Writer out;
-		out.beginObject().field( "summary", summary ).field( "where", where ).field( "found", !text.empty() ).field( "entries", entries ).endObject();
+		out.beginObject().field( "summary", summary ).field( "where", where ).field( "window", request.window.wm_class ).field( "found", !text.empty() ).field( "entries", entries ).endObject();
 		ipc_.broadcast( "capture.result", out.str() );
 	}
 
@@ -1782,11 +1853,11 @@ namespace lexiglance::daemon
 				job = std::move( imports_.front() );
 				imports_.pop_front();
 			}
-			runImport( job );
+			runImport( job, stop );
 		}
 	}
 
-	void Daemon::runImport( const ImportJob& job )
+	void Daemon::runImport( const ImportJob& job, const std::stop_token& stop )
 	{
 		const auto started = [&] {
 			json::Writer out;
@@ -1795,9 +1866,10 @@ namespace lexiglance::daemon
 		}();
 		ipc_.broadcast( "import.started", started );
 
+		// The loop's stop token, not import_thread_'s: run() may still be assigning that when the first job starts.
 		dict::ImportOptions options;
 		options.background  = true;
-		options.stop        = import_thread_.get_stop_token();
+		options.stop        = stop;
 		auto last_report    = std::chrono::steady_clock::time_point{};
 		options.on_progress = [&]( const dict::ImportProgress& progress ) {
 			const auto now = std::chrono::steady_clock::now();
@@ -1828,14 +1900,16 @@ namespace lexiglance::daemon
 			std::filesystem::remove( job.path, ec );
 		}
 
+		// An older revision the import replaced goes from the settings too.
+		std::string  replaced;
 		json::Writer out;
 		out.beginObject().field( "job", job.id ).field( "ok", summary.has_value() );
 		if ( summary )
 		{
 			log::info( "imported {} ({} terms, {} meta, {} kanji) in {:.2f}s", summary->title, summary->terms, summary->meta, summary->kanji, summary->seconds );
-			if ( !job.replaces.empty() && job.replaces != summary->title )
+			if ( !job.replaces.empty() && job.replaces != summary->title && store_.remove( job.replaces ) )
 			{
-				( void )store_.remove( job.replaces );
+				replaced = job.replaces;
 			}
 			out.field( "title", summary->title )
 					.field( "terms", summary->terms )
@@ -1850,7 +1924,7 @@ namespace lexiglance::daemon
 		}
 		out.endObject();
 
-		reloadDictionaries();
+		reloadDictionaries( true, replaced );
 		ipc_.broadcast( "import.finished", out.str() );
 		ipc_.broadcast( "dictionaries.changed", "{}" );
 	}
@@ -1882,7 +1956,7 @@ namespace lexiglance::daemon
 		{
 			const std::scoped_lock lock( capture_status_mutex_ );
 			out.field( "capture", capture_status_ );
-			out.field( "capture_problem", capture_problem_ );
+			writeSimulated( out, capture_problem_ );
 		}
 		out.field( "paused", cfg->paused );
 		out.field( "scale", backend_ ? backend_->scaleFactor() : 1.0 );
@@ -1905,13 +1979,13 @@ namespace lexiglance::daemon
 
 	void Daemon::registerActionHandlers()
 	{
-		ipc_.on( "audio.play", [this]( const json::Value& params ) -> Result<std::string> {
-			auto done = actions_->submit( [this, expression = std::string( params["expression"].asString() ), reading = std::string( params["reading"].asString() ), cfg = config()] {
+		ipc_.onSlow( "audio.play", [this]( const json::Value& params ) -> Result<std::string> {
+			auto done = audio_actions_->submit( [this, expression = std::string( params["expression"].asString() ), reading = std::string( params["reading"].asString() ), cfg = config()] {
 				return audio_.play( expression, reading, &lang::languageOf( expression, lang::findLanguage( cfg->language ), lang::enabledLanguages( cfg->disabled_languages ) ), cfg->audio );
 			} );
 			if ( done.wait_for( std::chrono::seconds( 20 ) ) != std::future_status::ready )
 			{
-				return fail( "audio timed out" );
+				return fail( "Playing the pronunciation took too long." );
 			}
 			if ( auto played = done.get(); !played )
 			{
@@ -1920,12 +1994,16 @@ namespace lexiglance::daemon
 			return "{}";
 		} );
 
-		ipc_.on( "anki.add", [this]( const json::Value& params ) -> Result<std::string> {
+		ipc_.onSlow( "anki.add", [this]( const json::Value& params ) -> Result<std::string> {
 			const auto text  = params["text"].asString();
 			const auto entry = static_cast<std::size_t>( std::max<std::int64_t>( 0, params["entry"].asInt( 0 ) ) );
 			auto       shown = std::make_shared<Shown>();
-			shown->result    = ipc_translator_.lookup( dictionaries_.load(), text, lookupOptions( *config() ) );
-			shown->sentence  = std::string( params["sentence"].asString( text ) );
+			// Not ipc_translator_: this runs on a worker, beside the IPC thread.
+			lookup::Translator translator;
+			auto               options = lookupOptions( *config() );
+			options.max_length         = static_cast<std::size_t>( std::max<std::int64_t>( 1, params["max_length"].asInt( static_cast<std::int64_t>( options.max_length ) ) ) );
+			shown->result              = translator.lookup( dictionaries_.load(), text, options );
+			shown->sentence            = std::string( params["sentence"].asString( text ) );
 			if ( entry >= shown->result.terms.size() )
 			{
 				return fail( "no such entry" );
@@ -2032,7 +2110,7 @@ namespace lexiglance::daemon
 			{
 				return std::unexpected( removed.error() );
 			}
-			reloadDictionaries();
+			reloadDictionaries( true, params["title"].asString() );
 			ipc_.broadcast( "dictionaries.changed", "{}" );
 			return "{}";
 		} );
@@ -2041,22 +2119,31 @@ namespace lexiglance::daemon
 		// monolingual, kanji, frequency and pitch lists. Whether each is enabled stays as it was.
 		// `dry_run` only tells the order.
 		ipc_.on( "dictionaries.sort", [this]( const json::Value& params ) -> Result<std::string> {
-			auto                                      cfg      = *config();
-			const auto                                profiles = profilesOf( cfg.dictionaries, *installed_.load() );
+			auto       cfg       = *config();
+			const auto installed = installed_.load();
+			// Those installed here; another computer's (sharing the settings file) stay after them as they are.
+			std::vector<config::DictionaryPreference> here;
+			std::vector<config::DictionaryPreference> elsewhere;
+			for ( const auto& preference : cfg.dictionaries )
+			{
+				( std::ranges::any_of( *installed, [&]( const auto& d ) { return d->info().title == preference.title; } ) ? here : elsewhere ).push_back( preference );
+			}
+			const auto                                profiles = profilesOf( here, *installed );
 			std::vector<config::DictionaryPreference> sorted;
 			sorted.reserve( cfg.dictionaries.size() );
 			json::Writer out;
 			out.beginObject().key( "order" ).beginArray();
 			for ( const std::size_t index : dict::smartOrder( profiles ) )
 			{
-				sorted.push_back( cfg.dictionaries[index] );
-				out.beginObject().field( "title", cfg.dictionaries[index].title ).field( "kind", dict::kindName( dict::classify( profiles[index] ) ) ).endObject();
+				sorted.push_back( here[index] );
+				out.beginObject().field( "title", here[index].title ).field( "kind", dict::kindName( dict::classify( profiles[index] ) ) ).endObject();
 			}
 			out.endArray().endObject();
 			if ( params["dry_run"].asBool() )
 			{
 				return out.take();
 			}
+			sorted.insert( sorted.end(), elsewhere.begin(), elsewhere.end() );
 			cfg.dictionaries = std::move( sorted );
 			if ( auto applied = applyConfig( std::move( cfg ), true ); !applied )
 			{
@@ -2074,11 +2161,12 @@ namespace lexiglance::daemon
 
 		registerLookupHandlers();
 		registerTranslationHandlers();
+		registerDeveloperHandlers();
 	}
 
 	void Daemon::registerTranslationHandlers()
 	{
-		ipc_.on( "translate", [this]( const json::Value& params ) -> Result<std::string> {
+		ipc_.onSlow( "translate", [this]( const json::Value& params ) -> Result<std::string> {
 			const std::string     text( params["text"].asString() );
 			const auto            cfg      = config();
 			const auto            code     = params["language"].asString();
@@ -2171,16 +2259,22 @@ namespace lexiglance::daemon
 				}
 				cfg = std::move( *parsed );
 			}
-			// Without a text (or with one no dictionary has) the preview shows a word the dictionaries have.
+			// Without a text (or with one no dictionary has) the preview shows a word the dictionaries have; with `last`, what
+			// the latest popup showed.
 			const auto set    = dictionaries_.load();
-			auto       result = ipc_translator_.lookup( set, params["text"].asString(), lookupOptions( cfg ) );
+			const auto last   = params["last"].asBool() ? last_popup_.load() : nullptr;
+			auto       result = last ? last->result : ipc_translator_.lookup( set, params["text"].asString(), lookupOptions( cfg ) );
+			if ( params["last"].asBool() && !last )
+			{
+				return fail( "no popup was shown yet" );
+			}
 			if ( result.empty() )
 			{
 				result = sampleLookup( set, cfg );
 			}
 			if ( result.empty() )
 			{
-				return fail( "no results for the preview text" );
+				return fail( "No dictionary has a word to show here. Install or enable one on the Dictionaries page." );
 			}
 
 			if ( !preview_renderer_ )
@@ -2237,31 +2331,6 @@ namespace lexiglance::daemon
 			return out.take();
 		} );
 
-		ipc_.on( "debug.capture", [this]( const json::Value& params ) -> Result<std::string> {
-			if ( !backend_ )
-			{
-				return fail( "no desktop integration available" );
-			}
-			auto                  probe  = std::make_shared<std::promise<std::optional<platform::CapturedText>>>();
-			auto                  future = probe->get_future();
-			const platform::Point point{ .x = static_cast<int>( params["x"].asInt() ), .y = static_cast<int>( params["y"].asInt() ) };
-			// Resolved like a real scan, so the capture clips to the window under the point.
-			backend_->post( [this, point, probe] { capture_requests_.post( { .point = point, .window = backend_->windowAt( point ), .probe = probe } ); } );
-			if ( future.wait_for( std::chrono::seconds( 5 ) ) != std::future_status::ready )
-			{
-				return fail( "capture timed out" );
-			}
-			json::Writer out;
-			const auto   captured = future.get();
-			out.beginObject().field( "text", captured ? captured->text : std::string() );
-			if ( captured )
-			{
-				out.field( "confidence", static_cast<double>( captured->confidence ) ).field( "source", captured->origin != nullptr ? std::string( captured->origin->name() ) : std::string() );
-			}
-			out.endObject();
-			return out.take();
-		} );
-
 		ipc_.on( "keys.record", [this]( const json::Value& ) -> Result<std::string> {
 			if ( !backend_ )
 			{
@@ -2290,7 +2359,11 @@ namespace lexiglance::daemon
 			return "{}";
 		} );
 
-		ipc_.on( "health", [this]( const json::Value& params ) -> Result<std::string> { return healthJson( params["interactive"].asBool() ); } );
+		// One check at a time: two would take the capture thread's diagnosis from each other.
+		ipc_.onSlow( "health", [this]( const json::Value& params ) -> Result<std::string> {
+			const std::scoped_lock lock( health_mutex_ );
+			return healthJson( params["interactive"].asBool() );
+		} );
 
 		// The tally behind the Statistics page. Written to disk when asked for, so the figures a second daemon would
 		// read are never behind what this one shows.
@@ -2299,19 +2372,11 @@ namespace lexiglance::daemon
 			return stats_.json();
 		} );
 
+		// Asked for after every lookup (the tray's menu, the Search page), so unlike "stats" it writes nothing.
+		ipc_.on( "stats.recent", [this]( const json::Value& ) -> Result<std::string> { return stats_.recentJson(); } );
+
 		ipc_.on( "stats.reset", [this]( const json::Value& ) -> Result<std::string> {
 			stats_.reset();
-			return "{}";
-		} );
-
-		ipc_.on( "debug.scan", [this]( const json::Value& params ) -> Result<std::string> {
-			if ( !backend_ )
-			{
-				return fail( "no desktop integration available" );
-			}
-			// Exactly what holding the trigger there does: capture, look up, highlight and show the popup.
-			const platform::Point point{ .x = static_cast<int>( params["x"].asInt() ), .y = static_cast<int>( params["y"].asInt() ) };
-			backend_->post( [this, point] { onScan( point, backend_->windowAt( point ), false, false ); } );
 			return "{}";
 		} );
 

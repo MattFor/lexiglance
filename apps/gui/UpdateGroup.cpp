@@ -40,6 +40,13 @@ namespace lexiglance::gui
 
 		using Kind = UpdateGroup::Kind;
 
+		// The app bundle this program runs in (Lexiglance.app/Contents/MacOS/lexiglance); empty when it is not in one.
+		QString appBundle()
+		{
+			const QString here = QCoreApplication::applicationDirPath();
+			return here.endsWith( QStringLiteral( ".app/Contents/MacOS" ) ) ? QDir::cleanPath( here + QStringLiteral( "/../.." ) ) : QString();
+		}
+
 		Kind installKind()
 		{
 			const QDir here( QCoreApplication::applicationDirPath() );
@@ -49,6 +56,10 @@ namespace lexiglance::gui
 			}
 #ifdef Q_OS_WIN
 			return here.exists( QStringLiteral( "../Uninstall.exe" ) ) ? Kind::WindowsSetup : Kind::WindowsPortable;
+#elifdef Q_OS_MACOS
+			// Run from the disk image, or from a folder this account cannot change, it cannot replace itself.
+			const QString bundle = appBundle();
+			return !bundle.isEmpty() && QFileInfo( QFileInfo( bundle ).absolutePath() ).isWritable() ? Kind::MacApp : Kind::Other;
 #else
 			// Releases for Linux are built for x86-64 only.
 			if ( QSysInfo::kernelType() != QStringLiteral( "linux" ) || QSysInfo::currentCpuArchitecture() != QStringLiteral( "x86_64" ) )
@@ -103,6 +114,8 @@ namespace lexiglance::gui
 					return QStringLiteral( "lexiglance-windows-portable.zip" );
 				case Kind::AppImage:
 					return QStringLiteral( "Lexiglance-x86_64.AppImage" );
+				case Kind::MacApp:
+					return QStringLiteral( "Lexiglance-macos.dmg" );
 				case Kind::Deb:
 					return QStringLiteral( "lexiglance-amd64.deb" );
 				case Kind::Rpm:
@@ -119,28 +132,30 @@ namespace lexiglance::gui
 			switch ( kind )
 			{
 				case Kind::WindowsSetup:
-					return QStringLiteral( "Installed with the Windows setup: an update installs the new setup in the background and opens Lexiglance again." );
+					return QStringLiteral( "Installed with the Windows setup: updates run the new setup in the background and reopen Lexiglance." );
 				case Kind::WindowsPortable:
-					return QStringLiteral( "The portable copy: an update unpacks the new .zip over this folder and opens Lexiglance again." );
+					return QStringLiteral( "Portable copy: updates unpack the new .zip over this folder and reopen Lexiglance." );
 				case Kind::AppImage:
-					return QStringLiteral( "The AppImage: an update replaces %1 and opens Lexiglance again." ).arg( qEnvironmentVariable( "APPIMAGE" ) );
+					return QStringLiteral( "AppImage: updates replace %1 and reopen Lexiglance." ).arg( qEnvironmentVariable( "APPIMAGE" ) );
+				case Kind::MacApp:
+					return QStringLiteral( "Updates replace %1 and reopen Lexiglance." ).arg( appBundle() );
 				case Kind::Deb:
-					return QStringLiteral( "Installed from the .deb package: an update installs the new package, which asks for your password." );
+					return QStringLiteral( "Installed from the .deb package: updates install the new package and ask for your password." );
 				case Kind::Rpm:
-					return QStringLiteral( "Installed from the .rpm package: an update installs the new package, which asks for your password." );
+					return QStringLiteral( "Installed from the .rpm package: updates install the new package and ask for your password." );
 				case Kind::Source:
-					return channel != "stable" ? QStringLiteral( "Built from source: update it with git pull and a rebuild, or Install release puts the newest release in its place." )
+					return channel != "stable" ? QStringLiteral( "Built from source: update it with git pull and a rebuild, or use Install release to put the newest release in its place." )
 					                           : QStringLiteral( "Built from source: update it with git pull and a rebuild." );
 				case Kind::Other:
 					break;
 			}
-			return QStringLiteral( "This copy cannot replace itself: Download gets the newest build for this system." );
+			return QStringLiteral( "This copy can't update itself. Download gets the newest build for this system." );
 		}
 
 		// Installing without asking: not the .deb or the .rpm, whose password prompt would come out of nowhere.
 		bool installsAutomatically( Kind kind )
 		{
-			return kind == Kind::WindowsSetup || kind == Kind::WindowsPortable || kind == Kind::AppImage;
+			return kind == Kind::WindowsSetup || kind == Kind::WindowsPortable || kind == Kind::AppImage || kind == Kind::MacApp;
 		}
 
 		// The newest build for this system, for copies that cannot replace themselves.
@@ -151,7 +166,11 @@ namespace lexiglance::gui
 			{
 				return { latest + QStringLiteral( "/download/Lexiglance-x86_64.AppImage" ) };
 			}
+#ifdef Q_OS_MACOS
+			return { latest + QStringLiteral( "/download/Lexiglance-macos.dmg" ) };
+#else
 			return { latest };
+#endif
 		}
 
 		QString updateDirectory()
@@ -220,6 +239,19 @@ try {
 if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -ArgumentList $Arguments } else { Start-Process -FilePath (Join-Path $Target "bin\$Program") }
 )ps";
 
+		// The macOS update, run by the shell: the disk image opened where nobody sees it, its app copied beside this one and
+		// swapped in for it. A failed copy changes nothing, a failed swap puts this one back.
+		constexpr const char* mac_script = R"sh(set -e
+mount=$1 image=$2 app=$3
+trap 'hdiutil detach -quiet -force "$mount" 2>/dev/null; rm -rf "$app.update"' EXIT
+hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mount" "$image" >/dev/null
+rm -rf "$app.update" "$app.old"
+ditto "$mount/Lexiglance.app" "$app.update"
+mv "$app" "$app.old"
+mv "$app.update" "$app" || { mv "$app.old" "$app"; exit 1; }
+rm -rf "$app.old" || true
+)sh";
+
 		void repolish( QWidget* widget )
 		{
 			widget->style()->unpolish( widget );
@@ -258,7 +290,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 
 		auto memory = applicationMemory();
 		automatic_->setChecked( memory.value( QStringLiteral( "update/automatic" ), true ).toBool() );
-		status_->setText( QStringLiteral( "This is Lexiglance %1." ).arg( qs( version ) ) );
+		status_->setText( QStringLiteral( "You have Lexiglance %1." ).arg( qs( version ) ) );
 		if ( background_ )
 		{
 			// Only when updates are automatic, and only where they need no questions. What comes after an update (its
@@ -297,6 +329,18 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 		timer->start();
 		// Not while everything else starts.
 		QTimer::singleShot( 20000, this, [this] { runAutomatically(); } );
+	}
+
+	void UpdateGroup::simulate( const QString& latest, bool installed )
+	{
+		if ( installed )
+		{
+			status_->setText( QStringLiteral( "Updated to Lexiglance %1." ).arg( latest ) );
+			return;
+		}
+		latest_  = latest;
+		checked_ = QTime::currentTime().toString( QStringLiteral( "HH:mm" ) );
+		showState();
 	}
 
 	void UpdateGroup::runAutomatically()
@@ -344,8 +388,8 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 				const QString tag      = document ? qs( document->root()["tag_name"].asString() ) : QString();
 				if ( !api_error.isEmpty() || tag.isEmpty() )
 				{
-					fail( QStringLiteral( "Cannot find the newest version: %1" ).arg( !error.isEmpty() ? error : !api_error.isEmpty() ? api_error
-					                                                                                                                  : QStringLiteral( "no release is published" ) ) );
+					fail( QStringLiteral( "Couldn't check for the newest version: %1" ).arg( !error.isEmpty() ? error : !api_error.isEmpty() ? api_error
+					                                                                                                                         : QStringLiteral( "no release is published" ) ) );
 					return;
 				}
 				take( tag );
@@ -378,7 +422,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 		if ( !lock_->tryLock( 0 ) )
 		{
 			lock_.reset();
-			status_->setText( QStringLiteral( "Another update is running already." ) );
+			status_->setText( QStringLiteral( "Another update is already running." ) );
 			done();
 			return;
 		}
@@ -414,7 +458,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 			const QByteArray expected = listedChecksum( sums, name );
 			if ( !error.isEmpty() || expected.isEmpty() )
 			{
-				fail( QStringLiteral( "Update failed: %1" ).arg( error.isEmpty() ? QStringLiteral( "the release lists no checksum for %1" ).arg( name ) : error ) );
+				fail( QStringLiteral( "Update failed: %1" ).arg( error.isEmpty() ? QStringLiteral( "the release has no checksum for %1" ).arg( name ) : error ) );
 				return;
 			}
 			downloader_->download(
@@ -430,7 +474,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 						if ( checksum( target ) != expected )
 						{
 							QFile::remove( target );
-							fail( QStringLiteral( "Update failed: the download was damaged (its checksum does not match). Try again." ) );
+							fail( QStringLiteral( "Update failed: the download was damaged (its checksum doesn't match). Try again." ) );
 							return;
 						}
 						install( kind, target );
@@ -518,6 +562,34 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 				return;
 			}
 
+			case Kind::MacApp:
+			{
+				const QString mount = updateDirectory() + QStringLiteral( "/mount" );
+				QDir().mkpath( mount );
+				auto* installer = new QProcess( this );
+				connect( installer, &QProcess::errorOccurred, this, [this, installer]( QProcess::ProcessError error ) {
+					if ( error == QProcess::FailedToStart )
+					{
+						installer->deleteLater();
+						fail( QStringLiteral( "Update failed: cannot start the shell (%1)" ).arg( installer->errorString() ) );
+					}
+				} );
+				connect( installer, &QProcess::finished, this, [this, installer, arguments]( int code, QProcess::ExitStatus status ) {
+					installer->deleteLater();
+					if ( status != QProcess::NormalExit || code != 0 )
+					{
+						const QString output = QString::fromLocal8Bit( installer->readAllStandardError() ).trimmed().section( '\n', -1 );
+						fail( QStringLiteral( "Update failed: %1" ).arg( output.isEmpty() ? QStringLiteral( "exit code %1" ).arg( code ) : output ) );
+						return;
+					}
+					// After an update in the background only the daemon, in place of the one still running from the old app.
+					QProcess::startDetached( appBundle() + QStringLiteral( "/Contents/MacOS/lexiglance" ), background_ ? QStringList{ QStringLiteral( "--daemon" ), QStringLiteral( "--replace" ) } : arguments );
+					QApplication::quit();
+				} );
+				installer->start( QStringLiteral( "/bin/sh" ), { QStringLiteral( "-c" ), QString::fromUtf8( mac_script ), QStringLiteral( "sh" ), mount, file, appBundle() } );
+				return;
+			}
+
 			case Kind::Deb:
 			case Kind::Rpm:
 			{
@@ -526,7 +598,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 				const QString pkexec = QStandardPaths::findExecutable( QStringLiteral( "pkexec" ) );
 				if ( pkexec.isEmpty() )
 				{
-					fail( QStringLiteral( "Update failed: installing needs pkexec. Install %1 with %2 instead." ).arg( file, tool ) );
+					fail( QStringLiteral( "Update failed: installing needs pkexec, which isn't installed. Install %1 with %2 instead." ).arg( file, tool ) );
 					return;
 				}
 				auto* installer = new QProcess( this );
@@ -544,7 +616,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 					{
 						// pkexec: 126 when the password dialog was dismissed, 127 when it was wrong.
 						const QString output = QString::fromLocal8Bit( installer->readAllStandardError() ).trimmed().section( '\n', -1 );
-						fail( code == 126 || code == 127 ? QStringLiteral( "Update cancelled: the password was not given." ) : QStringLiteral( "Update failed: %1: %2" ).arg( tool, output ) );
+						fail( code == 126 || code == 127 ? QStringLiteral( "Update cancelled, as no password was given." ) : QStringLiteral( "Update failed: %1: %2" ).arg( tool, output ) );
 						return;
 					}
 					QProcess::startDetached( QCoreApplication::applicationFilePath(), arguments );
@@ -574,15 +646,15 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 		{
 			if ( newer )
 			{
-				status_->setText( QStringLiteral( "Lexiglance %1 is out (this is %2)." ).arg( latest_, current ) );
+				status_->setText( QStringLiteral( "Lexiglance %1 is out. You have %2." ).arg( latest_, current ) );
 			}
 			else if ( ahead )
 			{
-				status_->setText( QStringLiteral( "This is Lexiglance %1, newer than the latest release (%2)." ).arg( current, latest_ ) );
+				status_->setText( QStringLiteral( "You have Lexiglance %1, newer than the latest release (%2)." ).arg( current, latest_ ) );
 			}
 			else
 			{
-				status_->setText( QStringLiteral( "Lexiglance %1 is the newest version. Checked at %2." ).arg( current, checked_ ) );
+				status_->setText( QStringLiteral( "Lexiglance %1 is up to date. Checked at %2." ).arg( current, checked_ ) );
 			}
 		}
 
@@ -620,7 +692,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 			}
 			update_->setText( action.arg( latest_ ) );
 		}
-		update_->setToolTip( kind == Kind::Other ? QStringLiteral( "Opens the download of the newest release for this system" ) : QStringLiteral( "Downloads %1 from the newest release and installs it, even when it is this version" ).arg( assetName( kind ) ) );
+		update_->setToolTip( kind == Kind::Other ? QStringLiteral( "Opens the download page of the newest release for this system" ) : QStringLiteral( "Downloads %1 from the newest release and installs it, even if it's the version you have" ).arg( assetName( kind ) ) );
 		update_->setProperty( "primary", newer );
 		repolish( update_ );
 	}
@@ -657,7 +729,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 			return;
 		}
 		const QString installer = vcredist::installerPath();
-		status_->setText( QStringLiteral( "Updated to Lexiglance %1. Downloading the Visual C++ Redistributable for OCR..." ).arg( qs( version ) ) );
+		status_->setText( QStringLiteral( "Updated to Lexiglance %1. Downloading the Visual C++ Redistributable, which OCR needs..." ).arg( qs( version ) ) );
 		progress_->show();
 		setBusy( true );
 		downloader_->download(
@@ -673,7 +745,7 @@ if ($Arguments) { Start-Process -FilePath (Join-Path $Target "bin\$Program") -Ar
 						status_->setText( QStringLiteral( "Updated to Lexiglance %1. OCR still needs the Visual C++ Redistributable (Overview → Health)." ).arg( qs( version ) ) );
 						return;
 					}
-					status_->setText( QStringLiteral( "Updated to Lexiglance %1. Installing the Visual C++ Redistributable; Windows asks for permission." ).arg( qs( version ) ) );
+					status_->setText( QStringLiteral( "Updated to Lexiglance %1. Installing the Visual C++ Redistributable. Windows will ask for permission." ).arg( qs( version ) ) );
 					vcredist::install( this, installer, [this]( const QString& problem ) {
 						if ( !problem.isEmpty() )
 						{

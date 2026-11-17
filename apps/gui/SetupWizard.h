@@ -13,6 +13,7 @@
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QTextBrowser>
+#include <QVBoxLayout>
 #include <QWidget>
 
 #include <cstdint>
@@ -25,10 +26,11 @@
 namespace lexiglance::gui
 {
 
-	// First-run setup: welcome, languages, then dictionaries and OCR downloaded without further clicks
-	// (the keys explained meanwhile), and a sentence to try the popup on. For the first five seconds Escape and clicks
+	// First-run setup: welcome, languages (with OCR and translation offered), then dictionaries and models downloaded
+	// without further clicks (the keys explained meanwhile; Continue while it downloads leaves them running), and a
+	// sentence to try the popup on. For the first five seconds Escape and clicks
 	// beside the card do nothing, so the welcome is not dismissed by accident. First-run setup cannot be skipped at all.
-	// Dev builds can open it again from Help; that path reinstalls dictionaries and OCR.
+	// Help opens it again (Run setup again); the Developer page's path reinstalls dictionaries and OCR.
 	class SetupWizard final : public QWidget
 	{
 	public:
@@ -65,7 +67,7 @@ namespace lexiglance::gui
 		void                                             pumpImports( const std::shared_ptr<InstallBatch>& batch );
 		void                                             importDone( const QString& error );
 		void                                             onDictDownloadDone( const std::shared_ptr<InstallBatch>& batch, const QString& name, const QString& target, const QString& error );
-		void                                             onOcrDownloadDone( const std::shared_ptr<InstallBatch>& batch, const QString& error );
+		void                                             onOcrDownloadDone( const std::shared_ptr<InstallBatch>& batch, const QString& name, const QString& error );
 		void                                             refreshProgress( const std::shared_ptr<InstallBatch>& batch );
 		void                                             tryFinishBatch( const std::shared_ptr<InstallBatch>& batch );
 		void                                             finishInstall( const QString& error );
@@ -82,29 +84,39 @@ namespace lexiglance::gui
 		// The sentence to try the popup on, in the first language chosen, and the box as tall as it.
 		void updatePractice();
 		void fitPractice();
+		// macOS: what System Settings has yet to allow (the health report's "open-privacy-" checks), above the sentence.
+		void refreshPermissions();
+		// The current page's main button, which Enter presses and which has the focus when the page opens.
+		[[nodiscard]] QPushButton* primaryButton() const;
 
-		Context                  context_;
-		std::function<void()>    finished_;
-		Downloader*              downloader_;
-		QFrame*                  card_;
-		QStackedWidget*          pages_;
-		QLabel*                  welcome_title_;
-		QLabel*                  lock_hint_;
-		QPushButton*             continue_;
-		QPushButton*             skip_;
-		QLabel*                  install_status_;
-		QLabel*                  overall_label_;
-		QProgressBar*            overall_bar_;
-		QLabel*                  dict_label_;
-		QProgressBar*            dict_bar_;
-		QLabel*                  ocr_label_;
-		QProgressBar*            ocr_bar_;
-		QCheckBox*               translation_box_;
-		QLabel*                  translation_note_;
-		QLabel*                  tips_;
-		QLabel*                  done_blurb_;
-		QTextBrowser*            practice_;
-		QLabel*                  practice_status_;
+		Context               context_;
+		std::function<void()> finished_;
+		Downloader*           downloader_;
+		QFrame*               card_;
+		QStackedWidget*       pages_;
+		QLabel*               welcome_title_;
+		QPushButton*          continue_;
+		QPushButton*          skip_;
+		QLabel*               install_status_;
+		QLabel*               overall_label_;
+		QProgressBar*         overall_bar_;
+		QLabel*               dict_label_;
+		QProgressBar*         dict_bar_;
+		QLabel*               ocr_label_;
+		QProgressBar*         ocr_bar_;
+		QCheckBox*            ocr_box_;
+		QLabel*               ocr_note_;
+		QCheckBox*            translation_box_;
+		QLabel*               translation_note_;
+		QLabel*               tips_;
+		QPushButton*          continue_anyway_;
+		QLabel*               done_blurb_;
+		QFrame*               permissions_;
+		QVBoxLayout*          permission_rows_;
+		QTextBrowser*         practice_;
+		QLabel*               practice_status_;
+		// The Try it page's word on downloads still running (Continue while it downloads) or failed.
+		QLabel*                  downloads_note_;
 		QPushButton*             done_;
 		std::vector<QCheckBox*>  language_boxes_;
 		std::vector<std::string> language_codes_;
@@ -112,6 +124,8 @@ namespace lexiglance::gui
 		bool                     installing_   = false;
 		bool                     reinstall_    = false;
 		bool                     required_     = false;
+		// Dictionaries still downloading or importing, so the sentence to try finds nothing yet.
+		bool dicts_pending_ = false;
 		// A word was found on the sentence to try.
 		bool    tried_ = false;
 		QString redist_;

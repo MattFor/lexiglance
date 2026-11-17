@@ -261,7 +261,7 @@ namespace lexiglance::daemon::elevation
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>Lexiglance</Author>
-    <Description>Starts Lexiglance with administrator rights, so that its trigger works over programs that run as administrator. Turned on and off in Lexiglance, Overview, Startup, Run as administrator.</Description>
+    <Description>Starts Lexiglance with administrator rights, so the trigger also works over programs that run as administrator. Turn it on or off in Lexiglance: Overview, Startup, Run as administrator.</Description>
   </RegistrationInfo>
   <Principals>
     <Principal id="Author">

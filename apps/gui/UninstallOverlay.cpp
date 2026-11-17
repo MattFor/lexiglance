@@ -76,20 +76,13 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 		client_( client ),
 		text_( wrapped() ),
 		erase_( new QCheckBox( QStringLiteral( "Also delete my settings, dictionaries and downloaded models" ) ) ),
-		erase_note_( wrapped( QStringLiteral( "Untick to keep them for a later install." ) ) ),
+		erase_note_( wrapped( QStringLiteral( "Untick this to keep them for a later install." ) ) ),
 		status_( wrapped() ),
 		cancel_( new QPushButton( QStringLiteral( "Cancel" ) ) ),
 		uninstall_( new QPushButton( QStringLiteral( "Uninstall" ) ) )
 	{
-		auto* layout = new QVBoxLayout( card() );
-		layout->setContentsMargins( 26, 20, 26, 18 );
-		layout->setSpacing( 12 );
-		auto* title      = new QLabel( QStringLiteral( "Uninstall Lexiglance" ) );
-		QFont title_font = title->font();
-		title_font.setPointSizeF( title_font.pointSizeF() * 1.4 );
-		title_font.setBold( true );
-		title->setFont( title_font );
-		layout->addWidget( title );
+		auto* layout = cardLayout();
+		layout->addWidget( cardTitle( QStringLiteral( "Uninstall Lexiglance" ) ) );
 		text_->setTextFormat( Qt::RichText );
 		layout->addWidget( text_ );
 		layout->addWidget( erase_ );
@@ -179,7 +172,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 			}
 			if ( !QProcess::startDetached( qs( plan.where.string() ), options ) )
 			{
-				fail( QStringLiteral( "Cannot start %1. Nothing was removed." ).arg( qs( plan.where.string() ) ) );
+				fail( QStringLiteral( "Couldn't start %1. Nothing was removed." ).arg( qs( plan.where.string() ) ) );
 				return;
 			}
 			QApplication::quit();
@@ -215,7 +208,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 		const QString pkexec = QStandardPaths::findExecutable( QStringLiteral( "pkexec" ) );
 		if ( pkexec.isEmpty() )
 		{
-			fail( QStringLiteral( "Removing it takes root, and pkexec is not installed. Run in a terminal: sudo %1" ).arg( root.join( ' ' ) ) );
+			fail( QStringLiteral( "Removing it needs root, and pkexec isn't installed. Run this in a terminal instead: sudo %1" ).arg( root.join( ' ' ) ) );
 			return;
 		}
 		// The program's path: pkexec runs it with a PATH of its own.
@@ -230,7 +223,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 			if ( error == QProcess::FailedToStart )
 			{
 				process->deleteLater();
-				fail( QStringLiteral( "Uninstalling failed (cannot start pkexec: %1). Nothing was removed." ).arg( process->errorString() ) );
+				fail( QStringLiteral( "Couldn't uninstall: pkexec didn't start (%1). Nothing was removed." ).arg( process->errorString() ) );
 			}
 		} );
 		connect( process, &QProcess::finished, this, [this, process, plan, own]( int code, QProcess::ExitStatus status ) {
@@ -239,7 +232,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 			{
 				// pkexec: 126 when the password dialog was dismissed, 127 when it was refused.
 				const QString output = QString::fromLocal8Bit( process->readAllStandardError() ).trimmed().section( '\n', -1 );
-				fail( code == 126 || code == 127 ? QStringLiteral( "Cancelled: the password was not given. Nothing was removed." ) : QStringLiteral( "Uninstalling failed (%1). Nothing was removed." ).arg( output.isEmpty() ? QStringLiteral( "exit code %1" ).arg( code ) : output ) );
+				fail( code == 126 || code == 127 ? QStringLiteral( "Cancelled, as no password was given. Nothing was removed." ) : QStringLiteral( "Couldn't uninstall (%1). Nothing was removed." ).arg( output.isEmpty() ? QStringLiteral( "exit code %1" ).arg( code ) : output ) );
 				return;
 			}
 			removeRest( plan, own );
@@ -276,14 +269,18 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 	{
 		finished_ = true;
 		log::info( "uninstall: done, {} not removed", failures.size() );
-		QString text = QStringLiteral( "Lexiglance was uninstalled." );
+		QString text = QStringLiteral( "Lexiglance is uninstalled." );
 		if ( plan.kind == uninstall::Kind::BuildTree )
 		{
-			text += QStringLiteral( " The build in %1 stays: delete it yourself if it should go too." ).arg( qs( plan.where.string() ).toHtmlEscaped() );
+			text += QStringLiteral( " The build in %1 is still there; delete it yourself if you want it gone." ).arg( qs( plan.where.string() ).toHtmlEscaped() );
+		}
+		if ( plan.kind == uninstall::Kind::MacApp && !std::ranges::contains( plan.programs, plan.where ) )
+		{
+			text += QStringLiteral( " Drag %1 to the Bin to remove the app itself." ).arg( qs( plan.where.string() ).toHtmlEscaped() );
 		}
 		if ( !failures.empty() )
 		{
-			text += QStringLiteral( "<br>These could not be removed:" ) + bulleted( failures );
+			text += QStringLiteral( "<br>These couldn't be removed:" ) + bulleted( failures );
 		}
 		text_->setText( text );
 		erase_->hide();
@@ -319,7 +316,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 		body.insert( body.indexOf( '\n' ) + 1, text );
 		if ( !out.open( QIODevice::WriteOnly | QIODevice::Truncate ) || out.write( body.toUtf8() ) < 0 )
 		{
-			fail( QStringLiteral( "Cannot write %1. Nothing was removed." ).arg( script ) );
+			fail( QStringLiteral( "Couldn't write %1. Nothing was removed." ).arg( script ) );
 			return;
 		}
 		out.close();
@@ -344,7 +341,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 			const QString powershell = qEnvironmentVariable( "SystemRoot", QStringLiteral( "C:\\Windows" ) ) + QStringLiteral( "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" );
 			if ( !QProcess::startDetached( powershell, { QStringLiteral( "-NoProfile" ), QStringLiteral( "-ExecutionPolicy" ), QStringLiteral( "Bypass" ), QStringLiteral( "-WindowStyle" ), QStringLiteral( "Hidden" ), QStringLiteral( "-File" ), QDir::toNativeSeparators( script ), QStringLiteral( "-Wait" ), QString::number( QCoreApplication::applicationPid() ) } ) )
 			{
-				fail( QStringLiteral( "Cannot start PowerShell to remove %1." ).arg( root ) );
+				fail( QStringLiteral( "Couldn't start PowerShell to remove %1." ).arg( root ) );
 				return;
 			}
 			QApplication::quit();

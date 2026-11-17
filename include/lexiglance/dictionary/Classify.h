@@ -54,7 +54,8 @@ namespace lexiglance::dict
 
 	[[nodiscard]] Profile profile( const Dictionary& dictionary );
 
-	// The language of a dictionary's headwords: as its index.json says, or told from their script; empty if unknown.
+	// The language of a dictionary's headwords (of the words a frequency or pitch list ranks): as its index.json says, or
+	// told from their script; empty if unknown.
 	[[nodiscard]] std::string dictionaryLanguage( const Dictionary& dictionary );
 
 	[[nodiscard]] Kind classify( const Profile& profile );

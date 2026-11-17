@@ -12,9 +12,13 @@ foreach(
     StyleSheet
     Glossary
     Dictionary
-    Import)
+    Import
+    Language
+    Lookup
+    Tokenizer)
     add_executable(fuzz${name} Fuzz${name}.cpp)
     target_link_libraries(fuzz${name} PRIVATE lexiglance::core
                                               lexiglance::options)
     target_link_options(fuzz${name} PRIVATE -fsanitize=fuzzer)
 endforeach()
+target_link_libraries(fuzzTokenizer PRIVATE lexiglance::translate)

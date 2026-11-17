@@ -104,9 +104,16 @@ namespace lexiglance::gui
 		auto* audio     = new QVBoxLayout( audio_box );
 		audio->addWidget( audio_enabled_ );
 		audio->addWidget( autoplay_ );
-		audio->addWidget( note( QStringLiteral( "Sources, tried in order: <b>jpod101</b> (JapanesePod101, Japanese words), <b>commons</b> (Wikimedia Commons, many languages) "
-		                                        "or a URL with {term}, {reading} and {language}, e.g. a local audio server. Words no source has are looked for on Wikimedia Commons. "
-		                                        "Clips are played with ffplay, mpv or mpg123." ) ) );
+#ifdef Q_OS_WIN
+		const QString players = QStringLiteral( "Clips play through Windows (MP3 and WAV); other formats need ffplay or mpv." );
+#elifdef Q_OS_MACOS
+		const QString players = QStringLiteral( "Clips play with macOS's afplay (MP3, AAC and WAV)." );
+#else
+		const QString players = QStringLiteral( "Clips play with ffplay, mpv or mpg123." );
+#endif
+		audio->addWidget( note( QStringLiteral( "One source per line, tried in order: <b>jpod101</b> (JapanesePod101, Japanese words), <b>commons</b> (Wikimedia Commons, many languages) "
+		                                        "or a URL with {term}, {reading} and {language}, such as a local audio server. If none of them has the word, Wikimedia Commons is tried. " ) +
+		                        players ) );
 		sources_->setMaximumHeight( 70 );
 		sources_->setPlaceholderText( QStringLiteral( "jpod101\ncommons" ) );
 		audio->addWidget( sources_ );
@@ -130,11 +137,11 @@ namespace lexiglance::gui
 		url_row->addWidget( connect_ );
 		form->addRow( QStringLiteral( "AnkiConnect" ), url_row );
 		key_->setEchoMode( QLineEdit::Password );
-		key_->setPlaceholderText( QStringLiteral( "only if AnkiConnect requires one" ) );
+		key_->setPlaceholderText( QStringLiteral( "Only if AnkiConnect needs one" ) );
 		form->addRow( QStringLiteral( "API key" ), key_ );
 		form->addRow( QStringLiteral( "Deck" ), deck_ );
 		form->addRow( QStringLiteral( "Note type" ), model_ );
-		tags_->setPlaceholderText( QStringLiteral( "space separated" ) );
+		tags_->setPlaceholderText( QStringLiteral( "Separated by spaces" ) );
 		form->addRow( QStringLiteral( "Tags" ), tags_ );
 		form->addRow( duplicates_ );
 		anki->addLayout( form );
@@ -153,7 +160,7 @@ namespace lexiglance::gui
 		{
 			markers << QStringLiteral( "{%1}" ).arg( qs( marker ) );
 		}
-		anki->addWidget( note( QStringLiteral( "Markers: " ) + markers.join( QStringLiteral( " " ) ) ) );
+		anki->addWidget( note( QStringLiteral( "Markers you can use in a field: " ) + markers.join( QStringLiteral( " " ) ) ) );
 		layout->addWidget( anki_box );
 		layout->addStretch( 1 );
 
@@ -343,7 +350,7 @@ namespace lexiglance::gui
 			reply->deleteLater();
 			if ( reply->error() != QNetworkReply::NoError )
 			{
-				done( {}, QStringLiteral( "AnkiConnect is not reachable (is Anki running with the AnkiConnect add-on?)" ) );
+				done( {}, QStringLiteral( "Couldn't reach AnkiConnect. Make sure Anki is running with the AnkiConnect add-on." ) );
 				return;
 			}
 			const auto document = QJsonDocument::fromJson( reply->readAll() );

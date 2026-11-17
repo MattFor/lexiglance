@@ -50,6 +50,13 @@ else()
         target_compile_options(lexiglance_options
                                INTERFACE -march=${LEXIGLANCE_ARCH})
     endif()
+    if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # Xcode's libc++ keeps std::jthread and std::stop_token experimental.
+        target_compile_options(lexiglance_options
+                               INTERFACE -fexperimental-library)
+        target_link_options(lexiglance_options INTERFACE
+                            -fexperimental-library)
+    endif()
     if(NOT APPLE)
         # Calls into shared libraries go straight through the GOT instead of a
         # PLT stub.

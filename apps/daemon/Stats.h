@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lexiglance::daemon
 {
@@ -39,6 +40,9 @@ namespace lexiglance::daemon
 
 		// {lookups, found, words, days, ...}: the whole tally, as the Statistics page shows it.
 		[[nodiscard]] std::string json() const;
+
+		// {recent: [word, ...]}: the words found by the latest lookups, newest first, each once.
+		[[nodiscard]] std::string recentJson() const;
 
 		// Forgets everything counted so far and writes the empty tally.
 		void reset();
@@ -80,6 +84,8 @@ namespace lexiglance::daemon
 			Counts        translated_languages;
 			Counts        sources;
 			Counts        words;
+			// The latest words found, newest first.
+			std::vector<std::string> recent;
 			// By day ("2026-09-19"), oldest first.
 			std::map<std::string, Day, std::less<>> days;
 		};

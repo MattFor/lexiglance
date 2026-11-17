@@ -24,6 +24,7 @@ add_executable(
     TestLanguage.cpp
     TestLanguageFiles.cpp
     TestOcr.cpp
+    TestReport.cpp
     TestRussian.cpp
     TestScripts.cpp
     TestTranslate.cpp
@@ -49,8 +50,11 @@ if(LEXIGLANCE_BUILD_DAEMON)
                 TestAnki.cpp
                 TestIpc.cpp
                 TestStatistics.cpp
+                TestConfigWatch.cpp
+                TestDeveloper.cpp
                 ${PROJECT_SOURCE_DIR}/apps/daemon/Anki.cpp
                 ${PROJECT_SOURCE_DIR}/apps/daemon/Audio.cpp
+                ${PROJECT_SOURCE_DIR}/apps/daemon/Developer.cpp
                 ${PROJECT_SOURCE_DIR}/apps/daemon/IpcServer.cpp
                 ${PROJECT_SOURCE_DIR}/apps/daemon/Stats.cpp
                 ${PROJECT_SOURCE_DIR}/apps/daemon/Translation.cpp)

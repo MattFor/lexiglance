@@ -48,8 +48,12 @@ namespace lexiglance::health
 					.field( "title", check.title )
 					.field( "status", statusName( check.status ) )
 					.field( "detail", check.detail )
-					.field( "fix", check.fix )
-					.endObject();
+					.field( "fix", check.fix );
+			if ( check.simulated )
+			{
+				out.field( "simulated", true );
+			}
+			out.endObject();
 		}
 		out.endArray();
 		out.field( "errors", std::ranges::count( checks, Severity::Error, &Check::status ) );
@@ -64,11 +68,12 @@ namespace lexiglance::health
 		{
 			checks.push_back(
 					{
-							.id     = std::string( item["id"].asString() ),
-							.title  = std::string( item["title"].asString() ),
-							.status = parseStatus( item["status"].asString() ),
-							.detail = std::string( item["detail"].asString() ),
-							.fix    = std::string( item["fix"].asString() ),
+							.id        = std::string( item["id"].asString() ),
+							.title     = std::string( item["title"].asString() ),
+							.status    = parseStatus( item["status"].asString() ),
+							.detail    = std::string( item["detail"].asString() ),
+							.fix       = std::string( item["fix"].asString() ),
+							.simulated = item["simulated"].asBool(),
 					}
 			);
 		}

@@ -1,5 +1,6 @@
 """Tables of what the OCR benchmark read: the error rate (wrong characters among those wanted), the lines read
-exactly, and the lines where nothing was read, by language, style, size and font. With a second file of results, the
+exactly, the lines where nothing was read and the median milliseconds a line took to read (both points), by language,
+style, size and font. With a second file of results, the
 same for it beside them, and how many lines read better or worse than there.
 	python3 tools/ocr-bench/summary.py <results.tsv> [earlier results.tsv] [--fonts] [--worse]
 --fonts adds the table by font, --worse lists the lines that read worse than in the earlier results."""
@@ -23,15 +24,18 @@ def load(path):
 					"error": float(f[5]),
 					"want": f[7],
 					"got": f[8],
+					"ms": float(f[9]) + float(f[10]) if len(f) >= 11 else None,
 				}
 	return rows
 
 
 def figures(rows):
 	count = len(rows)
+	timed = sorted(r["ms"] for r in rows if r["ms"] is not None)
 	return (
 		f"errors {sum(r['error'] for r in rows) / count:6.1%}  exact {sum(r['error'] == 0 for r in rows) / count:6.1%}"
 		f"  nothing {sum(r['got'] == '<nothing>' for r in rows) / count:6.1%}"
+		+ (f"  ms {timed[len(timed) // 2]:6.0f}" if timed else "")
 	)
 
 

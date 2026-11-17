@@ -113,7 +113,7 @@ namespace lexiglance
 		workers_.clear();
 	}
 
-	void ThreadPool::enqueue( std::move_only_function<void()> job )
+	void ThreadPool::enqueue( Task job )
 	{
 		{
 			const std::scoped_lock lock( mutex_ );
@@ -126,7 +126,7 @@ namespace lexiglance
 	{
 		while ( true )
 		{
-			std::move_only_function<void()> job;
+			Task job;
 			{
 				std::unique_lock lock( mutex_ );
 				if ( !ready_.wait( lock, stop, [this] { return !queue_.empty(); } ) )

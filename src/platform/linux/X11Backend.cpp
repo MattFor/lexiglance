@@ -353,7 +353,7 @@ namespace lexiglance::platform
 				wake();
 			}
 
-			void post( std::move_only_function<void()> task ) override
+			void post( Task task ) override
 			{
 				{
 					const std::scoped_lock lock( tasks_mutex_ );
@@ -638,11 +638,11 @@ namespace lexiglance::platform
 						missing.push_back( std::move( names ) );
 					}
 				}
-				health::Check trigger{ .id = "trigger", .title = "Trigger keys" };
+				health::Check trigger{ .id = "trigger", .title = "Trigger" };
 				if ( chord_.empty() )
 				{
 					trigger.status = health::Severity::Error;
-					trigger.detail = "No trigger is set, so nothing is ever looked up.";
+					trigger.detail = "No trigger is set, so nothing can be looked up. Choose one on the Scanning page.";
 					trigger.fix    = "open-scanning";
 				}
 				else if ( !missing.empty() )
@@ -653,7 +653,7 @@ namespace lexiglance::platform
 						keys.append( keys.empty() ? "" : ", " ).append( name );
 					}
 					trigger.status = health::Severity::Error;
-					trigger.detail = std::format( "{} is not on the current keyboard layout, so the trigger ({}) can never be held. Choose other keys.", keys, chord );
+					trigger.detail = std::format( "{} isn't on your keyboard layout, so the trigger ({}) can't be held. Choose other keys on the Scanning page.", keys, chord );
 					trigger.fix    = "open-scanning";
 				}
 				else
@@ -678,7 +678,7 @@ namespace lexiglance::platform
 							{ .id     = "keyboard",
 							  .title  = "Keyboard state",
 							  .status = health::Severity::Info,
-							  .detail = "A key was recorded as held although it was not (or the other way round); this was corrected." }
+							  .detail = "Lexiglance thought a key was held when it wasn't (or the other way round). That's fixed now." }
 					);
 				}
 
@@ -688,7 +688,7 @@ namespace lexiglance::platform
 					selectRawEvents();
 					XFlush( display_ );
 					input.status = health::Severity::Warning;
-					input.detail = "Lexiglance was no longer subscribed to keyboard and mouse events, so the trigger could not be seen; it subscribed again.";
+					input.detail = "Lexiglance had stopped receiving keyboard and mouse events, so it couldn't see the trigger. It's receiving them again.";
 				}
 				else
 				{
@@ -697,14 +697,14 @@ namespace lexiglance::platform
 					if ( age < 0 )
 					{
 						input.status = interactive ? health::Severity::Error : health::Severity::Info;
-						input.detail = interactive ? "No keyboard or mouse event reached Lexiglance, not even the click that started this check."
-						                           : "None arrived since Lexiglance started. Move the mouse or press a key, then check again.";
+						input.detail = interactive ? "No keyboard or mouse events reached Lexiglance, not even the click that started this check. Restart Lexiglance."
+						                           : "None have arrived since Lexiglance started. Move the mouse or press a key, then check again.";
 						input.fix    = interactive ? "restart" : "";
 					}
 					else if ( interactive && age > 10 )
 					{
 						input.status = health::Severity::Error;
-						input.detail = std::format( "The click that started this check did not reach Lexiglance (the last event arrived {} s ago).", age );
+						input.detail = std::format( "The click that started this check didn't reach Lexiglance (the last event arrived {} s ago). Restart Lexiglance.", age );
 						input.fix    = "restart";
 					}
 					else
@@ -1019,7 +1019,7 @@ namespace lexiglance::platform
 
 			void runTasks()
 			{
-				std::vector<std::move_only_function<void()>> tasks;
+				std::vector<Task> tasks;
 				{
 					const std::scoped_lock lock( tasks_mutex_ );
 					tasks.swap( tasks_ );
@@ -2195,7 +2195,7 @@ namespace lexiglance::platform
 			std::vector<std::pair<Rect, std::chrono::steady_clock::time_point>> vacated_;
 			Rect                                                                underlay_rect_;
 			std::shared_ptr<const std::vector<std::uint8_t>>                    underlay_gray_;
-			std::vector<std::move_only_function<void()>>                        tasks_;
+			std::vector<Task>                                                   tasks_;
 			std::atomic<bool>                                                   quit_{ false };
 			std::atomic<double>                                                 scale_{ 1.0 };
 			std::atomic<bool>                                                   dark_{ false };

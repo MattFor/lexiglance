@@ -5,6 +5,7 @@
 
 #include <lexiglance/language/Language.h>
 #include <lexiglance/config/Keys.h>
+#include <lexiglance/core/Glob.h>
 
 #include <QFormLayout>
 #include <QGroupBox>
@@ -79,10 +80,11 @@ namespace lexiglance::gui
 		accessibility_( new QCheckBox( QStringLiteral( "Ask applications to expose their text (accessibility bus)" ) ) ),
 		known_languages_( new QCheckBox( QStringLiteral( "Only look up text in a supported language (no popups for English interface text)" ) ) ),
 		preferred_( new QComboBox() ),
-		wheel_( new QCheckBox( QStringLiteral( "Mouse wheel changes the looked-up length while the trigger is held" ) ) ),
-		wheel_lock_( new QCheckBox( QStringLiteral( "Also keep the wheel from the window underneath (uses a mouse hook some anti-cheats dislike)" ) ) ),
+		wheel_( new QCheckBox( QStringLiteral( "Scroll wheel selects more or fewer characters while you hold the trigger" ) ) ),
+		wheel_lock_( new QCheckBox( QStringLiteral( "Stop the window underneath from scrolling too (uses a mouse hook some anti-cheats dislike)" ) ) ),
 		selection_( new QComboBox() ),
 		ignored_( new QPlainTextEdit() ),
+		add_window_( new QPushButton() ),
 		ocr_( new OcrGroup( context ) )
 	{
 		auto* scroll  = new QScrollArea();
@@ -94,8 +96,8 @@ namespace lexiglance::gui
 		auto* trigger_box = new QGroupBox( QStringLiteral( "Trigger" ) );
 		auto* trigger     = new QVBoxLayout( trigger_box );
 		trigger->addWidget( note( QStringLiteral(
-				"Hold these keys together and point at text to look it up. Keys are observed passively: other applications and games "
-				"still receive every key press."
+				"Hold these keys together and point at text to look it up. Lexiglance only watches the keys: other applications and games "
+				"still get every key press."
 		) ) );
 		auto* row = new QHBoxLayout();
 		for ( std::size_t i = 0; i < keys_.size(); ++i )
@@ -129,8 +131,8 @@ namespace lexiglance::gui
 		form->addRow( QStringLiteral( "Scan length" ), length_ );
 		form->addRow( QStringLiteral( "Rescan interval" ), delay_ );
 		form->addRow( QStringLiteral( "Movement threshold" ), threshold_ );
-#ifdef Q_OS_WIN
-		// Windows has no selection of its own; text hookers copy what they read to the clipboard.
+#if defined( Q_OS_WIN ) || defined( Q_OS_MACOS )
+		// Windows and macOS have no selection of their own; text hookers copy what they read to the clipboard.
 		selection_->addItems( { QStringLiteral( "Off" ), QStringLiteral( "Whenever text is copied" ), QStringLiteral( "When text is copied while the trigger is held" ) } );
 		form->addRow( QStringLiteral( "Look up copied text" ), selection_ );
 #else
@@ -149,7 +151,7 @@ namespace lexiglance::gui
 		for ( const lang::Language* language : lang::languages() )
 		{
 			auto* box = new QCheckBox( qs( language->name() ) );
-			box->setToolTip( QStringLiteral( "Look up words in %1. Turning off languages you do not read makes telling languages apart and OCR faster." ).arg( qs( language->name() ) ) );
+			box->setToolTip( QStringLiteral( "Look up words in %1. Turn off languages you don't read to make lookups and OCR faster." ).arg( qs( language->name() ) ) );
 			language_boxes_.emplace_back( box, std::string( language->code() ) );
 			languages_row->addWidget( box );
 		}
@@ -158,7 +160,7 @@ namespace lexiglance::gui
 		languages_col->addWidget( note( QStringLiteral( "At least one language must stay on." ) ) );
 		form->addRow( QStringLiteral( "Languages" ), languages_col );
 		preferred_->setToolTip( QStringLiteral( "Used when several languages share a script (for example Russian and Ukrainian), and as a fallback." ) );
-		form->addRow( QStringLiteral( "Preferred" ), preferred_ );
+		form->addRow( QStringLiteral( "Preferred language" ), preferred_ );
 		form->addRow( known_languages_ );
 		form->addRow( wheel_ );
 		form->addRow( wheel_lock_ );
@@ -167,14 +169,22 @@ namespace lexiglance::gui
 		form->setRowVisible( accessibility_, false );
 		form->addRow( note( QStringLiteral(
 				"Office, browsers, Qt, WPF and WinUI applications and consoles expose their text through UI Automation; OCR reads "
-				"everything else. Copied text lookup works with text hookers such as Textractor."
+				"everything else. Looking up copied text works with text hookers such as Textractor."
+		) ) );
+#elifdef Q_OS_MACOS
+		// The Accessibility permission decides whether applications are asked, not a setting.
+		form->setRowVisible( accessibility_, false );
+		form->addRow( note( QStringLiteral(
+				"AppKit applications, Safari and other WebKit views, Chromium, Electron and Qt applications expose their text "
+				"through Accessibility; OCR reads everything else. Looking up copied text works in every application. Stopping the "
+				"window underneath from scrolling needs the Accessibility permission too."
 		) ) );
 #else
 		// X11 grabs the two wheel buttons instead, which needs nothing of the user.
 		form->setRowVisible( wheel_lock_, false );
 		form->addRow( note( QStringLiteral(
-				"GTK, Qt, Firefox and LibreOffice expose text automatically. Chromium based browsers and Electron apps need "
-				"--force-renderer-accessibility. Selection lookup works everywhere, including terminals."
+				"GTK, Qt, Firefox and LibreOffice expose their text on their own. Chromium-based browsers and Electron apps need "
+				"--force-renderer-accessibility. Looking up selections works everywhere, including terminals."
 		) ) );
 #endif
 		layout->addWidget( behaviour_box );
@@ -189,16 +199,30 @@ namespace lexiglance::gui
 		ignored_->setPlaceholderText( QStringLiteral( "steam_app_*" ) );
 		ignored_->setMaximumHeight( 110 );
 		ignore->addWidget( ignored_ );
+		// Window classes are hard to find out: the window of the latest lookup is a click away.
+		add_window_->hide();
+		auto* add_row = new QHBoxLayout();
+		add_row->addWidget( add_window_ );
+		add_row->addStretch( 1 );
+		ignore->addLayout( add_row );
 		layout->addWidget( ignore_box );
+		connect( add_window_, &QPushButton::clicked, this, [this] { ignored_->appendPlainText( last_window_ ); } );
+		client().onEvent( [this]( std::string_view name, const json::Value& params ) {
+			if ( const QString window = qs( params["window"].asString() ); name == "capture.result" && !window.isEmpty() && window != last_window_ )
+			{
+				last_window_ = window;
+				updateAddWindow();
+			}
+		} );
 
 		auto* reset_row = new QHBoxLayout();
 		auto* reset     = new QPushButton( QStringLiteral( "Reset to defaults..." ) );
-		reset->setToolTip( QStringLiteral( "The trigger, how text is scanned and the OCR settings. Downloaded OCR models stay." ) );
+		reset->setToolTip( QStringLiteral( "Resets the trigger, the scanning options and the OCR settings. Downloaded OCR models stay." ) );
 		reset_row->addStretch( 1 );
 		reset_row->addWidget( reset );
 		layout->addLayout( reset_row );
 		connect( reset, &QPushButton::clicked, this, [this] {
-			if ( !confirm( this, QStringLiteral( "Reset scanning" ), QStringLiteral( "The trigger, how text is scanned and the OCR settings go back to their defaults. Downloaded OCR models stay." ), QStringLiteral( "Reset" ) ) )
+			if ( !confirm( this, QStringLiteral( "Reset scanning" ), QStringLiteral( "The trigger, the scanning options and the OCR settings go back to their defaults. Downloaded OCR models stay." ), QStringLiteral( "Reset" ) ) )
 			{
 				return;
 			}
@@ -301,6 +325,7 @@ namespace lexiglance::gui
 					patterns.push_back( ss( line.trimmed() ) );
 				}
 			}
+			updateAddWindow();
 			commit();
 		} );
 		connect( record_, &QPushButton::clicked, this, [this] { record(); } );
@@ -347,7 +372,7 @@ namespace lexiglance::gui
 			}
 			recording_ = true;
 			record_->setText( QStringLiteral( "Cancel" ) );
-			record_hint_->setText( QStringLiteral( "Press and hold your trigger keys (or mouse button), then release them." ) );
+			record_hint_->setText( QStringLiteral( "Press and hold the keys you want (or a mouse button), then let go." ) );
 		} );
 	}
 
@@ -420,6 +445,7 @@ namespace lexiglance::gui
 			const QSignalBlocker blocker( ignored_ );
 			ignored_->setPlainText( patterns.join( '\n' ) );
 		}
+		updateAddWindow();
 		ocr_->refresh();
 		loading_ = false;
 		// Preferred must be one of the languages that are on; repair a stale value from an older config.
@@ -427,6 +453,13 @@ namespace lexiglance::gui
 		{
 			settings().commit();
 		}
+	}
+
+	void ScanningPage::updateAddWindow()
+	{
+		const auto window = ss( last_window_ );
+		add_window_->setText( QStringLiteral( "Ignore %1 (the window of your last lookup)" ).arg( last_window_ ) );
+		add_window_->setVisible( !window.empty() && std::ranges::none_of( settings().config().scan.ignored_windows, [&]( const std::string& pattern ) { return globMatch( pattern, window ); } ) );
 	}
 
 	void ScanningPage::updateLanguages()

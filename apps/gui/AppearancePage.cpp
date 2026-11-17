@@ -24,6 +24,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -143,6 +144,8 @@ namespace lexiglance::gui
 		theme_( combo( { QStringLiteral( "Follow the desktop" ), QStringLiteral( "Dark" ), QStringLiteral( "Light" ) } ) ),
 #ifdef Q_OS_WIN
 		default_font_( new QCheckBox( QStringLiteral( "Default (Yu Gothic UI)" ) ) ),
+#elifdef Q_OS_MACOS
+		default_font_( new QCheckBox( QStringLiteral( "Default (Helvetica Neue, Hiragino Sans)" ) ) ),
 #else
 		default_font_( new QCheckBox( QStringLiteral( "Default (Noto Sans CJK JP)" ) ) ),
 #endif
@@ -162,7 +165,7 @@ namespace lexiglance::gui
 		offset_y_( spin( -500, 500, QStringLiteral( " px" ) ) ),
 		select_button_( combo( { QStringLiteral( "Right button" ), QStringLiteral( "Middle button" ) } ) ),
 		furigana_( new QCheckBox( QStringLiteral( "Furigana above the headword" ) ) ),
-		reading_( new QCheckBox( QStringLiteral( "The reading next to the headword" ) ) ),
+		reading_( new QCheckBox( QStringLiteral( "Reading next to the headword" ) ) ),
 		inflection_( new QCheckBox( QStringLiteral( "How a conjugated word was formed" ) ) ),
 		tags_( new QCheckBox( QStringLiteral( "Word classes and tags" ) ) ),
 		frequencies_( new QCheckBox( QStringLiteral( "Frequency ranks" ) ) ),
@@ -177,12 +180,12 @@ namespace lexiglance::gui
 		highlight_presets_( new QToolButton() ),
 		highlight_style_( combo( { QStringLiteral( "Underline" ), QStringLiteral( "Outline" ), QStringLiteral( "Highlighter (filled box)" ), QStringLiteral( "Double underline" ), QStringLiteral( "Dotted underline" ), QStringLiteral( "Wavy underline" ), QStringLiteral( "Corner brackets" ) } ) ),
 		highlight_( new QPushButton() ),
-		highlight_auto_( new QCheckBox( QStringLiteral( "Choose the colour for the background automatically" ) ) ),
+		highlight_auto_( new QCheckBox( QStringLiteral( "Pick a colour that suits the background under the text" ) ) ),
 		highlight_thickness_( spin( 1, 12, QStringLiteral( " px" ) ) ),
 		highlight_radius_( spin( 0, 32, QStringLiteral( " px" ), QStringLiteral( "Square" ) ) ),
 		highlight_padding_x_( spin( -16, 16, QStringLiteral( " px" ) ) ),
 		highlight_padding_y_( spin( -16, 16, QStringLiteral( " px" ) ) ),
-		compositor_( combo( { QStringLiteral( "Automatic (follow the compositor)" ), QStringLiteral( "Compositor: translucent" ), QStringLiteral( "No compositor: highlighter" ) } ) ),
+		compositor_( combo( { QStringLiteral( "Automatic (check for a compositor)" ), QStringLiteral( "Translucent (needs a compositor)" ), QStringLiteral( "Highlighter (no compositor)" ) } ) ),
 		preview_text_( new QLineEdit() ),
 		highlight_preview_( new QLabel() ),
 		preview_( new QLabel() ),
@@ -194,7 +197,8 @@ namespace lexiglance::gui
 		               { .button = new QPushButton(), .reset = new QToolButton(), .field = &config::PopupSettings::accent_color, .name = QStringLiteral( "Accent (furigana, numbers)" ) },
 		               { .button = new QPushButton(), .reset = new QToolButton(), .field = &config::PopupSettings::border_color, .name = QStringLiteral( "Border" ) } } };
 
-		scale_->setRange( 0.0, 4.0 );
+		// Automatic is the bottom of the range, a step below the smallest scale that still reads.
+		scale_->setRange( config::min_popup_scale - 0.25, 4.0 );
 		scale_->setSingleStep( 0.25 );
 		scale_->setDecimals( 2 );
 		scale_->setSpecialValueText( QStringLiteral( "Automatic" ) );
@@ -216,9 +220,9 @@ namespace lexiglance::gui
 		themes_->setMenu( theme_menu );
 		connect( theme_menu, &QMenu::aboutToShow, this, [this, theme_menu] { fillThemeMenu( theme_menu ); } );
 		auto* reset_look = new QPushButton( QStringLiteral( "Reset to defaults..." ) );
-		reset_look->setToolTip( QStringLiteral( "The friendly design, the default colours, window and highlight. Themes you saved are kept." ) );
+		reset_look->setToolTip( QStringLiteral( "Puts back the friendly design and the default colours, window and highlight. Your saved themes are kept." ) );
 		connect( reset_look, &QPushButton::clicked, this, [this] {
-			if ( !confirm( this, QStringLiteral( "Reset the appearance" ), QStringLiteral( "The popup's look and the highlight go back to their defaults. Themes you saved are kept." ), QStringLiteral( "Reset" ) ) )
+			if ( !confirm( this, QStringLiteral( "Reset the appearance" ), QStringLiteral( "The popup and the highlight go back to their defaults. Your saved themes are kept." ), QStringLiteral( "Reset" ) ) )
 			{
 				return;
 			}
@@ -235,7 +239,7 @@ namespace lexiglance::gui
 		look->addRow( theme_row );
 		design_->setItemData( 0, QStringLiteral( "Large furigana above the kanji, plain words instead of codes, numbered senses" ), Qt::ToolTipRole );
 		design_->setItemData( 1, QStringLiteral( "Yomitan's look: coloured tags, small furigana" ), Qt::ToolTipRole );
-		design_->setItemData( 2, QStringLiteral( "The friendly layout, closer together" ), Qt::ToolTipRole );
+		design_->setItemData( 2, QStringLiteral( "The friendly design, packed tighter" ), Qt::ToolTipRole );
 		look->addRow( QStringLiteral( "Design" ), design_ );
 		look->addRow( QStringLiteral( "Colour scheme" ), scheme_ );
 		look->addRow( QStringLiteral( "Dark or light" ), theme_ );
@@ -266,16 +270,16 @@ namespace lexiglance::gui
 				preview_timer_->start();
 			} );
 		}
-		look->addRow( note( QStringLiteral( "Themes set all of this at once. Save your own look as a theme to keep it, share it or edit the file by hand (Themes -> Open the themes folder)." ) ) );
+		look->addRow( note( QStringLiteral( "A theme sets all of this at once. Save your look as a theme to keep it, share it or edit it by hand (Themes -> Open the themes folder)." ) ) );
 		column->addWidget( group( QStringLiteral( "Theme" ), look ) );
 
 		auto* text = new QFormLayout();
 		text->addRow( QStringLiteral( "Font" ), default_font_ );
 		text->addRow( QString(), font_ );
 		text->addRow( QStringLiteral( "Font size" ), font_size_ );
-		headword_size_->setToolTip( QStringLiteral( "Automatic follows the design: large in the friendly one." ) );
+		headword_size_->setToolTip( QStringLiteral( "Automatic follows the design: large in Friendly." ) );
 		text->addRow( QStringLiteral( "Headword size" ), headword_size_ );
-		furigana_size_->setToolTip( QStringLiteral( "The readings above the kanji of the headword. Automatic follows the design." ) );
+		furigana_size_->setToolTip( QStringLiteral( "The reading above the headword's kanji. Automatic follows the design." ) );
 		text->addRow( QStringLiteral( "Furigana size" ), furigana_size_ );
 		text->addRow( QStringLiteral( "Scale" ), scale_ );
 		column->addWidget( group( QStringLiteral( "Text" ), text ) );
@@ -286,12 +290,12 @@ namespace lexiglance::gui
 		window->addRow( QStringLiteral( "Corner rounding" ), corner_radius_ );
 		window->addRow( QStringLiteral( "Border" ), border_width_ );
 		window->addRow( QStringLiteral( "Inner margin" ), padding_ );
-		opacity_->setToolTip( QStringLiteral( "How much of what is behind the popup shows through its background (needs a compositor)." ) );
+		opacity_->setToolTip( QStringLiteral( "How solid the popup's background is. Below 100 % what's behind it shows through (needs a compositor)." ) );
 		window->addRow( QStringLiteral( "Opacity" ), opacity_ );
 		window->addRow( QStringLiteral( "Opens" ), placement_ );
 		window->addRow( QStringLiteral( "Horizontal offset" ), offset_x_ );
 		window->addRow( QStringLiteral( "Vertical offset" ), offset_y_ );
-		select_button_->setToolTip( QStringLiteral( "Drag with this button over the popup to select text; releasing copies it. The left button copies an entry's word." ) );
+		select_button_->setToolTip( QStringLiteral( "Drag over the popup with this button to select text; letting go copies it. Left-click copies an entry's word." ) );
 		window->addRow( QStringLiteral( "Select text with" ), select_button_ );
 		window->addRow( note( QStringLiteral( "Rounded corners and opacity need a compositor; without one the popup is square and solid." ) ) );
 		column->addWidget( group( QStringLiteral( "Window" ), window ) );
@@ -301,12 +305,12 @@ namespace lexiglance::gui
 		{
 			shown->addRow( box );
 		}
-		button_size_->setToolTip( QStringLiteral( "The size of the speaker and Anki buttons in the popup; automatic matches the headword. The middle mouse button plays the pronunciation wherever the pointer is over the popup." ) );
+		button_size_->setToolTip( QStringLiteral( "Size of the speaker and Anki buttons in the popup. Automatic matches the headword. Middle-click anywhere on the popup to hear the pronunciation." ) );
 		shown->addRow( QStringLiteral( "Button size" ), button_size_ );
-		max_senses_->setToolTip( QStringLiteral( "Definitions shown for each dictionary of an entry; the rest are counted (\"+ 3 more\")." ) );
+		max_senses_->setToolTip( QStringLiteral( "How many definitions each dictionary shows for an entry. The rest are counted (\"+ 3 more\")." ) );
 		shown->addRow( QStringLiteral( "Definitions per dictionary" ), max_senses_ );
 		shown->addRow( QStringLiteral( "Maximum results" ), results_ );
-		dictionaries_->setToolTip( QStringLiteral( "Only the first dictionaries in the priority list that have the word are shown; the next one is used when one has nothing." ) );
+		dictionaries_->setToolTip( QStringLiteral( "Shows only this many dictionaries: the first ones in your priority list that have the word." ) );
 		shown->addRow( QStringLiteral( "Dictionaries shown" ), dictionaries_ );
 		column->addWidget( group( QStringLiteral( "Show" ), shown ) );
 
@@ -324,14 +328,14 @@ namespace lexiglance::gui
 		highlight->addRow( QStringLiteral( "Line thickness" ), highlight_thickness_ );
 		highlight->addRow( QStringLiteral( "Corner rounding" ), highlight_radius_ );
 		// Applications report the box of a word differently; below zero the mark is pulled in over one that is too generous.
-		const QString room = QStringLiteral( "How far the mark reaches past the text. Below zero it is pulled in, for applications that report a box larger than the word looks." );
+		const QString room = QStringLiteral( "How far the mark reaches past the text. Go below zero for programs that report a box bigger than the word." );
 		highlight_padding_x_->setToolTip( room );
 		highlight_padding_y_->setToolTip( room );
 		highlight->addRow( QStringLiteral( "Room left and right" ), highlight_padding_x_ );
 		highlight->addRow( QStringLiteral( "Room above and below" ), highlight_padding_y_ );
-		compositor_->setToolTip( QStringLiteral( "With a compositor the highlight is translucent and the popup has rounded corners; without one the highlight marks the background around the glyphs." ) );
+		compositor_->setToolTip( QStringLiteral( "With a compositor the highlight is see-through and the popup has rounded corners. Without one the highlight colours the background around the letters." ) );
 		highlight->addRow( QStringLiteral( "Transparency" ), compositor_ );
-		highlight->addRow( note( QStringLiteral( "Lines use the colour as it is; a highlighter tints the text with it, its opacity being the strength (also when the colour is chosen automatically)." ) ) );
+		highlight->addRow( note( QStringLiteral( "Lines use the colour as it is. The highlighter tints the text with it, and the colour's opacity sets how strongly (also when the colour is picked automatically)." ) ) );
 		column->addWidget( group( QStringLiteral( "Highlight" ), highlight ) );
 		column->addStretch( 1 );
 
@@ -345,10 +349,10 @@ namespace lexiglance::gui
 		auto* preview_column = new QVBoxLayout();
 		preview_column->setContentsMargins( 12, 20, 12, 20 );
 		preview_column->addWidget( new QLabel( QStringLiteral( "<b>Live preview</b>" ) ) );
-		preview_text_->setPlaceholderText( QStringLiteral( "Preview word (empty: one from your dictionaries)" ) );
+		preview_text_->setPlaceholderText( QStringLiteral( "Word to preview (leave empty for one from your dictionaries)" ) );
 		preview_column->addWidget( preview_text_ );
 		highlight_preview_->setAlignment( Qt::AlignLeft | Qt::AlignTop );
-		highlight_preview_->setToolTip( QStringLiteral( "The highlight over text on a light and on a dark background" ) );
+		highlight_preview_->setToolTip( QStringLiteral( "The highlight on a light and a dark background" ) );
 		preview_column->addWidget( highlight_preview_ );
 		preview_->setAlignment( Qt::AlignLeft | Qt::AlignTop );
 		preview_->setMinimumSize( 300, 200 );
@@ -383,6 +387,12 @@ namespace lexiglance::gui
 		}
 		hook( font_, &QFontComboBox::currentFontChanged );
 		hook( scale_, &QDoubleSpinBox::valueChanged );
+		connect( scale_, &QDoubleSpinBox::editingFinished, this, [this] {
+			if ( scale_->value() > scale_->minimum() && scale_->value() < config::min_popup_scale )
+			{
+				scale_->setValue( config::min_popup_scale );
+			}
+		} );
 
 		connect( save_theme_, &QPushButton::clicked, this, [this] { saveTheme(); } );
 		connect( highlight_, &QPushButton::clicked, this, [this] {
@@ -411,7 +421,7 @@ namespace lexiglance::gui
 		{
 			const std::string& value = popup.*( colour.field );
 			colour.button->setIcon( value.empty() ? QIcon() : swatch( parseColor( value ) ) );
-			colour.button->setText( value.empty() ? QStringLiteral( "The scheme's" ) : qs( value ) );
+			colour.button->setText( value.empty() ? QStringLiteral( "From the scheme" ) : qs( value ) );
 			colour.reset->setEnabled( !value.empty() );
 		}
 	}
@@ -491,7 +501,7 @@ namespace lexiglance::gui
 		popup.font_size           = font_size_->value();
 		popup.headword_size       = headword_size_->value();
 		popup.furigana_size       = furigana_size_->value();
-		popup.scale               = scale_->value();
+		popup.scale               = scale_->value() > scale_->minimum() ? std::max( config::min_popup_scale, scale_->value() ) : 0.0;
 		popup.width               = width_->value();
 		popup.max_height          = height_->value();
 		popup.corner_radius       = corner_radius_->value();
@@ -600,7 +610,7 @@ namespace lexiglance::gui
 		QString error;
 		if ( !themes::apply( theme, settings().config().popup, &error ) )
 		{
-			QMessageBox::warning( this, QStringLiteral( "Theme" ), QStringLiteral( "\"%1\" could not be used: %2" ).arg( theme.name, error ) );
+			QMessageBox::warning( this, QStringLiteral( "Theme" ), QStringLiteral( "Couldn't apply \"%1\": %2" ).arg( theme.name, error ) );
 			return;
 		}
 		settings().commit();
@@ -610,7 +620,7 @@ namespace lexiglance::gui
 	void AppearancePage::saveTheme()
 	{
 		bool          ok   = false;
-		const QString name = QInputDialog::getText( this, QStringLiteral( "Save as theme" ), QStringLiteral( "Name of the theme:" ), QLineEdit::Normal, QStringLiteral( "My theme" ), &ok );
+		const QString name = QInputDialog::getText( this, QStringLiteral( "Save as theme" ), QStringLiteral( "Theme name:" ), QLineEdit::Normal, QStringLiteral( "My theme" ), &ok );
 		if ( !ok || name.trimmed().isEmpty() )
 		{
 			return;
@@ -622,7 +632,7 @@ namespace lexiglance::gui
 			QMessageBox::warning( this, QStringLiteral( "Save as theme" ), error );
 			return;
 		}
-		QMessageBox::information( this, QStringLiteral( "Save as theme" ), QStringLiteral( "Saved as %1.\nIt is in the Themes menu; the file can be shared or edited by hand." ).arg( QDir::toNativeSeparators( path ) ) );
+		QMessageBox::information( this, QStringLiteral( "Save as theme" ), QStringLiteral( "Saved to %1.\nIt's in the Themes menu now. You can share the file or edit it by hand." ).arg( QDir::toNativeSeparators( path ) ) );
 	}
 
 	void AppearancePage::updatePreview()

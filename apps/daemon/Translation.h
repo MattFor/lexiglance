@@ -1,6 +1,7 @@
 #ifndef LEXIGLANCE_DAEMON_TRANSLATION_H
 #define LEXIGLANCE_DAEMON_TRANSLATION_H
 
+#include <lexiglance/core/Compat.h>
 #include <lexiglance/core/Error.h>
 #include <lexiglance/core/Health.h>
 #include <lexiglance/language/Language.h>
@@ -124,9 +125,9 @@ namespace lexiglance::daemon
 		std::condition_variable_any wake_;
 		std::optional<Request>      pending_;
 		// The request being translated.
-		std::optional<Request>                      active_;
-		std::deque<std::move_only_function<void()>> jobs_;
-		bool                                        reload_ = false;
+		std::optional<Request> active_;
+		std::deque<Task>       jobs_;
+		bool                   reload_ = false;
 		// A warm() waiting to be done: the scans of a key held down ask again and again.
 		bool warming_ = false;
 		// A loaded model, which weights it came from (a language given the others is loaded afresh) and when it last

@@ -4,6 +4,8 @@ add_executable(
     Anki.cpp
     Audio.cpp
     Daemon.cpp
+    Debugging.cpp
+    Developer.cpp
     Health.cpp
     IpcServer.cpp
     Stats.cpp
@@ -24,4 +26,18 @@ if(WIN32)
                                               advapi32)
 endif()
 
-install(TARGETS lexiglanced RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(APPLE)
+    # A helper app of its own inside Lexiglance.app: in Contents/MacOS,
+    # LaunchServices would take it for Lexiglance.app itself.
+    set(LEXIGLANCE_DAEMON_APP Lexiglance.app/Contents/Helpers/lexiglanced.app)
+    install(TARGETS lexiglanced
+            RUNTIME DESTINATION ${LEXIGLANCE_DAEMON_APP}/Contents/MacOS)
+    configure_file(${PROJECT_SOURCE_DIR}/data/macos/Daemon-Info.plist.in
+                   Info.plist @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/Info.plist
+            DESTINATION ${LEXIGLANCE_DAEMON_APP}/Contents)
+    install(FILES ${PROJECT_SOURCE_DIR}/data/macos/lexiglance.icns
+            DESTINATION ${LEXIGLANCE_DAEMON_APP}/Contents/Resources)
+else()
+    install(TARGETS lexiglanced RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()

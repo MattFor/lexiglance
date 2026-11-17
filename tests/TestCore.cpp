@@ -161,6 +161,30 @@ namespace
 		test::expect( parsed->dictionary( "Jiten" ) != nullptr && !parsed->dictionary( "Jiten" )->enabled );
 	} );
 
+	const test::Registrar config_changes( "config: the settings an import changes, maps and lists included", [] {
+		lg::config::Config here;
+		lg::config::Config there = here;
+		test::expect( lg::config::changes( here, there ).empty() );
+		here.anki.fields   = { { .name = "Back", .value = "{glossary}" } };
+		there.scan.trigger = { "Control_L", "Alt_L" };
+		there.popup.theme  = lg::config::Theme::Dark;
+		there.anki.fields  = { { .name = "Front", .value = "{expression}" } };
+		const auto changed = lg::config::changes( here, there );
+		if ( !test::expect( changed.size() == 4 ) )
+		{
+			return;
+		}
+		test::expectEqual( changed[0].setting, std::string( "scan.trigger" ) );
+		test::expectEqual( changed[0].before, std::string( R"(["Super","Alt_L"])" ) );
+		test::expectEqual( changed[0].after, std::string( R"(["Control_L","Alt_L"])" ) );
+		test::expectEqual( changed[1].setting, std::string( "popup.theme" ) );
+		test::expectEqual( changed[1].after, std::string( R"("dark")" ) );
+		test::expectEqual( changed[2].setting, std::string( "anki.fields.Back" ) );
+		test::expectEqual( changed[2].after, std::string() );
+		test::expectEqual( changed[3].setting, std::string( "anki.fields.Front" ) );
+		test::expectEqual( changed[3].before, std::string() );
+	} );
+
 #ifndef _WIN32
 	// A file size limit fails the write as a full disk does.
 	const test::Registrar config_full_disk( "config: a save the disk cannot hold leaves the saved settings as they were", [] {
@@ -214,6 +238,12 @@ namespace
 		test::expect( !lg::config::Config::parse( R"({"scan":{"trigger":["Hyper"]}})" ).has_value() );
 		const auto clamped = lg::config::Config::parse( R"({"popup":{"width":5,"font_size":999}})" );
 		test::expect( clamped && clamped->popup.width == 200 && clamped->popup.font_size == 72 );
+		// A hand-edited scale never makes a popup too small to read; 0 or less is the desktop's own.
+		for ( const auto& [given, scale] : std::initializer_list<std::pair<std::string_view, double>>{ { "0.01", 0.5 }, { "0.75", 0.75 }, { "9", 4.0 }, { "0", 0.0 }, { "-1", 0.0 } } )
+		{
+			const auto parsed = lg::config::Config::parse( std::format( R"({{"popup":{{"scale":{}}}}})", given ) );
+			test::expect( parsed && parsed->popup.scale == scale );
+		}
 		test::expect( lg::config::Config::parse( "{}" ).has_value() );
 	} );
 
@@ -239,11 +269,23 @@ namespace
 		test::expectEqual( lg::config::displayName( "Super" ), std::string( "Win" ) );
 		test::expectEqual( lg::config::displayName( "Meta" ), std::string( "Win" ) );
 		test::expectEqual( lg::config::displayName( "Super_R" ), std::string( "Right Win" ) );
+#elifdef __APPLE__
+		test::expectEqual( lg::config::displayKeyName( lg::config::Key::SuperL ), std::string_view( "Left Cmd" ) );
+		test::expectEqual( lg::config::displayName( "Super" ), std::string( "Cmd" ) );
+		test::expectEqual( lg::config::displayName( "Alt_L" ), std::string( "Left Option" ) );
+		test::expectEqual( lg::config::displayName( "Alt" ), std::string( "Option" ) );
 #else
 		test::expectEqual( lg::config::displayKeyName( lg::config::Key::SuperL ), std::string_view( "Left Super" ) );
 		test::expectEqual( lg::config::displayName( "Super" ), std::string( "Super" ) );
 #endif
+#ifndef __APPLE__
 		test::expectEqual( lg::config::displayName( "Alt_L" ), std::string( "Left Alt" ) );
+#endif
+		// What a recorded chord stores (the names shown) parses back on every platform.
+		for ( const char* name : { "Left Cmd", "Right Command", "Left Option", "Option" } )
+		{
+			test::expect( lg::config::parseKey( name ).has_value() );
+		}
 		test::expectEqual( lg::config::displayName( "Control_R" ), std::string( "Right Ctrl" ) );
 		test::expectEqual( lg::config::displayName( "Caps_Lock" ), std::string( "Caps Lock" ) );
 		test::expectEqual( lg::config::displayName( "Hyper" ), std::string( "Hyper" ) );

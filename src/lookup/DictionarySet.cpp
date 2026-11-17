@@ -1,5 +1,7 @@
 #include <lexiglance/lookup/DictionarySet.h>
 
+#include <lexiglance/dictionary/Classify.h>
+
 namespace lexiglance::lookup
 {
 
@@ -22,6 +24,7 @@ namespace lexiglance::lookup
 			{
 				kanji_.push_back( index );
 			}
+			languages_.push_back( lang::findLanguage( dict::dictionaryLanguage( dictionary ) ) );
 		}
 	}
 

@@ -4,31 +4,25 @@
 #include "Settings.h"
 
 #include <lexiglance/core/Json.h>
-#include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Version.h>
-#include <lexiglance/core/Zip.h>
 #include <lexiglance/language/Language.h>
 
-#include <QClipboard>
-#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
-#include <QMimeData>
+#include <QPushButton>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QSysInfo>
-#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
 #include <array>
-#include <memory>
 #include <utility>
 
 namespace lexiglance::gui
@@ -56,16 +50,16 @@ namespace lexiglance::gui
 		};
 
 		constexpr std::array<Component, 11> components{ {
-				{ .name = "Qt", .use = "the settings application", .licence = "LGPL 3.0", .url = "https://www.qt.io" },
-				{ .name = "Breeze icons", .use = "the icons of this window", .licence = "LGPL 3.0", .url = "https://invent.kde.org/frameworks/breeze-icons" },
+				{ .name = "Qt", .use = "the settings window", .licence = "LGPL 3.0", .url = "https://www.qt.io" },
+				{ .name = "Breeze icons", .use = "the icons in this window", .licence = "LGPL 3.0", .url = "https://invent.kde.org/frameworks/breeze-icons" },
 				{ .name = "Cairo", .use = "drawing the popup", .licence = "LGPL 2.1 or MPL 1.1", .url = "https://cairographics.org" },
 				{ .name = "Pango, HarfBuzz, FriBidi, GLib", .use = "laying out text", .licence = "LGPL 2.1, MIT", .url = "https://pango.gnome.org" },
 				{ .name = "libcurl", .use = "pronunciations and AnkiConnect", .licence = "curl licence", .url = "https://curl.se" },
 				{ .name = "zlib", .use = "reading dictionary archives", .licence = "zlib licence", .url = "https://zlib.net" },
-				{ .name = "ONNX Runtime", .use = "running PaddleOCR, downloaded when chosen", .licence = "MIT", .url = "https://onnxruntime.ai" },
-				{ .name = "PaddleOCR PP-OCRv6 and PP-OCRv5", .use = "text recognition models (PP-OCRv5 for Russian, Ukrainian, Korean and Greek), downloaded when chosen", .licence = "Apache 2.0", .url = "https://github.com/PaddlePaddle/PaddleOCR" },
+				{ .name = "ONNX Runtime", .use = "running PaddleOCR, downloaded when you choose it", .licence = "MIT", .url = "https://onnxruntime.ai" },
+				{ .name = "PaddleOCR PP-OCRv6 and PP-OCRv5", .use = "text recognition models (PP-OCRv5 for Russian, Ukrainian, Korean and Greek), downloaded when you choose them", .licence = "Apache 2.0", .url = "https://github.com/PaddlePaddle/PaddleOCR" },
 				{ .name = "Tesseract", .use = "text recognition, when installed", .licence = "Apache 2.0", .url = "https://github.com/tesseract-ocr/tesseract" },
-				{ .name = "OpenCC", .use = "the table of simplified to Japanese kanji", .licence = "Apache 2.0", .url = "https://github.com/BYVoid/OpenCC" },
+				{ .name = "OpenCC", .use = "the table from simplified Chinese to Japanese kanji", .licence = "Apache 2.0", .url = "https://github.com/BYVoid/OpenCC" },
 				{ .name = "Wikimedia Commons", .use = "pronunciations, fetched when played", .licence = "each recording's own (mostly CC BY-SA)", .url = "https://commons.wikimedia.org" },
 		} };
 
@@ -116,46 +110,12 @@ namespace lexiglance::gui
 			return button;
 		}
 
-		Result<> addText( ZipWriter& zip, std::string_view name, const QString& text )
-		{
-			const QByteArray bytes = text.toUtf8();
-			return zip.add( name, std::as_bytes( std::span( bytes.constData(), static_cast<std::size_t>( bytes.size() ) ) ) );
-		}
-
-		Result<> addOptionalFile( ZipWriter& zip, std::string_view name, const std::filesystem::path& path )
-		{
-			if ( !std::filesystem::is_regular_file( path ) )
-			{
-				return {};
-			}
-			return zip.addFile( name, path );
-		}
-
-		// The zip goes into public bug reports: never the raw file, it may hold the AnkiConnect key.
-		Result<> addConfig( ZipWriter& zip )
-		{
-			if ( !std::filesystem::is_regular_file( paths::configFile() ) )
-			{
-				return {};
-			}
-			auto config = config::Config::load( paths::configFile() );
-			if ( !config )
-			{
-				return addText( zip, "config-error.txt", qs( config.error().message ) + '\n' );
-			}
-			if ( !config->anki.key.empty() )
-			{
-				config->anki.key = "<redacted>";
-			}
-			return addText( zip, "config.json", qs( config->toJson( true ) ) + '\n' );
-		}
-
 	} // namespace
 
 	AboutPage::AboutPage( Context context, QWidget* parent ) :
 		Page( std::move( context ), parent ),
 		text_( new QTextBrowser() ),
-		diagnosis_( new QPushButton( QStringLiteral( "Copy diagnosis..." ) ) )
+		developer_( new QCheckBox( QStringLiteral( "Developer mode" ) ) )
 	{
 		auto* layout = new QVBoxLayout( this );
 		layout->setContentsMargins( 28, 24, 28, 20 );
@@ -176,12 +136,25 @@ namespace lexiglance::gui
 		name_font.setBold( true );
 		name->setFont( name_font );
 		identity->addWidget( name );
-		auto* tagline = new QLabel( QStringLiteral( "A system-wide pop-up dictionary. Simply point at a word in any application and read what it means." ) );
+		auto* tagline = new QLabel( QStringLiteral( "A system-wide pop-up dictionary. Point at a word in any program and read what it means." ) );
 		tagline->setWordWrap( true );
 		identity->addWidget( tagline );
-		auto* byline = new QLabel( QStringLiteral( "Version %1 · %2 · %3 · by %4 · free software under the MIT licence" ).arg( qs( version ), buildName(), platformName().toHtmlEscaped(), link( authorUrl(), QStringLiteral( "MattFor" ) ) ) );
+		// The version is a link of its own, looking like the rest: seven clicks on it offer developer mode.
+		auto* byline = new QLabel( QStringLiteral( "Version <a href=\"lexiglance:version\" style=\"color: %5; text-decoration: none\">%1</a> · %2 · %3 · by %4 · free software under the MIT licence" )
+		                                   .arg( qs( version ), buildName(), platformName().toHtmlEscaped(), link( authorUrl(), QStringLiteral( "MattFor" ) ), palette().color( QPalette::WindowText ).name() ) );
 		byline->setTextFormat( Qt::RichText );
-		byline->setOpenExternalLinks( true );
+		connect( byline, &QLabel::linkActivated, this, [this]( const QString& url ) {
+			if ( url != QStringLiteral( "lexiglance:version" ) )
+			{
+				QDesktopServices::openUrl( QUrl( url ) );
+				return;
+			}
+			if ( ++version_clicks_ >= 7 && !developer_->isVisible() )
+			{
+				developer_->show();
+				showSummary( QStringLiteral( "You can now turn on Developer mode below the links." ) );
+			}
+		} );
 		byline->setWordWrap( true );
 		identity->addWidget( byline );
 
@@ -189,13 +162,27 @@ namespace lexiglance::gui
 		auto*         links   = new QHBoxLayout();
 		links->setSpacing( 8 );
 		links->addWidget( opener( QStringLiteral( "Website" ), project, this ) );
-		links->addWidget( opener( QStringLiteral( "Report a problem" ), project + QStringLiteral( "/issues" ), this ) );
+		auto* report = new QPushButton( QStringLiteral( "Report a problem..." ) );
+		report->setToolTip( QStringLiteral( "Saves a report on your computer (no secrets, nothing is sent) and opens a GitHub issue filled in for you to attach it to" ) );
+		connect( report, &QPushButton::clicked, this, [this] { showPage( QStringLiteral( "report" ) ); } );
+		links->addWidget( report );
 		links->addWidget( opener( QStringLiteral( "Releases" ), project + QStringLiteral( "/releases" ), this ) );
-		diagnosis_->setToolTip( QStringLiteral( "Builds a zip with system information, health, settings and logs, and copies that file to the clipboard" ) );
-		links->addWidget( diagnosis_ );
 		links->addStretch( 1 );
 		identity->addSpacing( 4 );
 		identity->addLayout( links );
+		developer_->setToolTip( QStringLiteral( "Adds the Developer page: pipeline trace, capture inspector, simulated lookups and problems, live log and an IPC console" ) );
+		developer_->hide();
+		identity->addWidget( developer_ );
+		connect( developer_, &QCheckBox::toggled, this, [this]( bool on ) {
+			// Every page hears of it, the sidebar too.
+			auto config      = settings().config();
+			config.developer = on;
+			settings().replace( std::move( config ) );
+			if ( on )
+			{
+				showPage( QStringLiteral( "developer" ) );
+			}
+		} );
 		header->addLayout( identity, 1 );
 		auto* donate = opener( QStringLiteral( "♥  Support Lexiglance" ), donateUrl(), this );
 		donate->setObjectName( QStringLiteral( "donateButton" ) );
@@ -213,13 +200,12 @@ namespace lexiglance::gui
 			// error from the file manager.
 			if ( url.isLocalFile() && !QFileInfo::exists( url.toLocalFile() ) )
 			{
-				showSummary( QStringLiteral( "%1 is not there any more." ).arg( QDir::toNativeSeparators( url.toLocalFile() ) ) );
+				showSummary( QStringLiteral( "%1 no longer exists." ).arg( QDir::toNativeSeparators( url.toLocalFile() ) ) );
 				render();
 				return;
 			}
 			QDesktopServices::openUrl( url );
 		} );
-		connect( diagnosis_, &QPushButton::clicked, this, [this] { copyDiagnosis(); } );
 
 		daemon_ = QStringLiteral( "not running" );
 		render();
@@ -267,6 +253,13 @@ namespace lexiglance::gui
 		} );
 	}
 
+	void AboutPage::refresh()
+	{
+		const QSignalBlocker blocker( developer_ );
+		developer_->setChecked( settings().config().developer );
+		developer_->setVisible( settings().config().developer || version_clicks_ >= 7 );
+	}
+
 	void AboutPage::render()
 	{
 		const QString muted = palette().color( QPalette::PlaceholderText ).name();
@@ -296,9 +289,8 @@ namespace lexiglance::gui
 		std::error_code ec;
 		std::filesystem::create_directories( lang::languagesDirectory(), ec );
 		html += row( QStringLiteral( "Languages" ), folder( lang::languagesDirectory() ) );
-		html += row( QStringLiteral( "Daemon log" ), file( qs( ( paths::stateDir() / "daemon.log" ).string() ), QStringLiteral( "not written yet: the daemon has not run" ) ) );
+		html += row( QStringLiteral( "Daemon log" ), file( qs( ( paths::stateDir() / "daemon.log" ).string() ), QStringLiteral( "not written yet: Lexiglance hasn't run" ) ) );
 		html += row( QStringLiteral( "Application log" ), file( qs( ( paths::stateDir() / "application.log" ).string() ), QStringLiteral( "not written yet" ) ) );
-		html += row( QStringLiteral( "Diagnosis zip" ), file( diagnosisZipPath(), QStringLiteral( "not made yet: Copy diagnosis makes it" ) ) );
 		html += QStringLiteral( "</table>" );
 
 		html += QStringLiteral( "<h3>Licence</h3><p>Lexiglance is free software under the %1. Copyright © 2026 %2.</p>" )
@@ -307,7 +299,7 @@ namespace lexiglance::gui
 		html += QStringLiteral( "<h3>Attributions</h3>" );
 		html += QStringLiteral( "<p style=\"color: %1\">Dictionaries, programs and data Lexiglance uses, with their licences. The dictionary format is Yomitan's.</p>" ).arg( muted );
 		html += QStringLiteral( "<h4>Dictionaries</h4>" );
-		html += dictionaries_.isEmpty() ? QStringLiteral( "<p style=\"color: %1\">No installed dictionary asks for an attribution.</p>" ).arg( muted ) : dictionaries_;
+		html += dictionaries_.isEmpty() ? QStringLiteral( "<p style=\"color: %1\">None of your dictionaries asks for an attribution.</p>" ).arg( muted ) : dictionaries_;
 		html += QStringLiteral( "<h4>Software</h4><table cellspacing=\"3\">" );
 		for ( const Component& component : components )
 		{
@@ -319,88 +311,6 @@ namespace lexiglance::gui
 		const int scroll = text_->verticalScrollBar() != nullptr ? text_->verticalScrollBar()->value() : 0;
 		text_->setHtml( html );
 		text_->verticalScrollBar()->setValue( scroll );
-	}
-
-	void AboutPage::copyDiagnosis()
-	{
-		diagnosis_->setEnabled( false );
-		diagnosis_->setText( QStringLiteral( "Preparing..." ) );
-
-		auto status_json = std::make_shared<QString>();
-		auto health_json = std::make_shared<QString>();
-		auto pending     = std::make_shared<int>( 2 );
-
-		const auto finish = [this, status_json, health_json, pending] {
-			if ( --*pending > 0 )
-			{
-				return;
-			}
-
-			const QString zip_path = diagnosisZipPath();
-			ZipWriter     zip( std::filesystem::path( ss( zip_path ) ) );
-
-			QString summary;
-			summary += QStringLiteral( "Lexiglance %1 (%2)\n" ).arg( qs( version ), buildName() );
-			summary += QStringLiteral( "Daemon: %1\n" ).arg( daemon_ );
-			summary += QStringLiteral( "System: %1\n" ).arg( systemDescription() );
-			summary += QStringLiteral( "Program: %1\n" ).arg( QCoreApplication::applicationFilePath() );
-			summary += QStringLiteral( "Settings: %1\n" ).arg( qs( paths::configDir().string() ) );
-			summary += QStringLiteral( "Data: %1\n" ).arg( qs( paths::dataDir().string() ) );
-			summary += QStringLiteral( "Cache: %1\n" ).arg( qs( paths::cacheDir().string() ) );
-			summary += QStringLiteral( "State: %1\n" ).arg( qs( paths::stateDir().string() ) );
-			summary += QStringLiteral( "Languages: %1\n" ).arg( languageNames() );
-			summary += QStringLiteral( "Trigger: %1\n" ).arg( chordText( settings().config().scan.trigger ) );
-
-			auto fail = [&]( const Result<>& step ) -> bool {
-				if ( step )
-				{
-					return false;
-				}
-				log::warn( "diagnosis: {}", step.error().message );
-				diagnosis_->setEnabled( true );
-				diagnosis_->setText( QStringLiteral( "Copy diagnosis..." ) );
-				showSummary( QStringLiteral( "Could not build the diagnosis zip." ) );
-				return true;
-			};
-
-			if ( fail( addText( zip, "summary.txt", summary ) ) || fail( addText( zip, "status.json", status_json->isEmpty() ? QStringLiteral( "{}\n" ) : *status_json ) ) || fail( addText( zip, "health.json", health_json->isEmpty() ? QStringLiteral( "{}\n" ) : *health_json ) ) || fail( addConfig( zip ) ) || fail( addOptionalFile( zip, "settings-application.ini", paths::configDir() / "settings-application.ini" ) ) || fail( addOptionalFile( zip, "daemon.log", paths::stateDir() / "daemon.log" ) ) || fail( addOptionalFile( zip, "application.log", paths::stateDir() / "application.log" ) ) || fail( zip.close() ) )
-			{
-				return;
-			}
-
-			auto* mime = new QMimeData();
-			mime->setUrls( { QUrl::fromLocalFile( zip_path ) } );
-			mime->setText( zip_path );
-			QGuiApplication::clipboard()->setMimeData( mime );
-
-			diagnosis_->setEnabled( true );
-			diagnosis_->setText( QStringLiteral( "Copied ✓" ) );
-			// Its path turns into a link.
-			render();
-			showSummary( QStringLiteral( "Diagnosis zip copied to the clipboard." ) );
-			QTimer::singleShot( 2000, diagnosis_, [this] { diagnosis_->setText( QStringLiteral( "Copy diagnosis..." ) ); } );
-			log::info( "diagnosis zip ready at {}", ss( zip_path ) );
-		};
-
-		client().call( "status", "{}", [status_json, finish]( const json::Value* status, const QString& ) {
-			if ( status != nullptr )
-			{
-				*status_json = qs( json::serialize( *status ) ) + '\n';
-			}
-			finish();
-		} );
-		client().call(
-				"health",
-				"{\"interactive\":false}",
-				[health_json, finish]( const json::Value* health, const QString& ) {
-					if ( health != nullptr )
-					{
-						*health_json = qs( json::serialize( *health ) ) + '\n';
-					}
-					finish();
-				},
-				30000
-		);
 	}
 
 } // namespace lexiglance::gui

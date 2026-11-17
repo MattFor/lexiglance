@@ -33,7 +33,8 @@ namespace lexiglance::ocr
 		constexpr std::string_view vc_redist_url = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
 	#endif
 #elifdef __APPLE__
-		constexpr std::array library_names{ "libonnxruntime.dylib", "libonnxruntime.1.dylib" };
+		// A bare name is looked for in /usr/local/lib only: Homebrew on Apple silicon and MacPorts are named in full.
+		constexpr std::array library_names{ "libonnxruntime.dylib", "/opt/homebrew/lib/libonnxruntime.dylib", "/opt/local/lib/libonnxruntime.dylib" };
 #else
 		constexpr std::array library_names{ "libonnxruntime.so", "libonnxruntime.so.1" };
 #endif
@@ -210,13 +211,13 @@ namespace lexiglance::ocr
 		OrtAllocator* allocator = nullptr;
 		ignore( api, api->GetAllocatorWithDefaultOptions( &allocator ) );
 		char* name = nullptr;
-		if ( api->SessionGetInputName( result->session_, 0, allocator, &name ) == nullptr && name != nullptr )
+		if ( check( api, api->SessionGetInputName( result->session_, 0, allocator, &name ) ) && name != nullptr )
 		{
 			result->input_ = name;
 			ignore( api, api->AllocatorFree( allocator, name ) );
 		}
 		name = nullptr;
-		if ( api->SessionGetOutputName( result->session_, 0, allocator, &name ) == nullptr && name != nullptr )
+		if ( check( api, api->SessionGetOutputName( result->session_, 0, allocator, &name ) ) && name != nullptr )
 		{
 			result->output_ = name;
 			ignore( api, api->AllocatorFree( allocator, name ) );
@@ -265,7 +266,7 @@ namespace lexiglance::ocr
 		std::size_t                count = 0;
 		std::size_t                dims  = 0;
 		void*                      data  = nullptr;
-		if ( api_->GetTensorTypeAndShape( output, &info ) == nullptr )
+		if ( check( api_, api_->GetTensorTypeAndShape( output, &info ) ) )
 		{
 			ignore( api_, api_->GetDimensionsCount( info, &dims ) );
 			tensor.shape.resize( dims );
@@ -273,7 +274,7 @@ namespace lexiglance::ocr
 			ignore( api_, api_->GetTensorShapeElementCount( info, &count ) );
 			api_->ReleaseTensorTypeAndShapeInfo( info );
 		}
-		if ( api_->GetTensorMutableData( output, &data ) == nullptr && data != nullptr )
+		if ( check( api_, api_->GetTensorMutableData( output, &data ) ) && data != nullptr )
 		{
 			const auto* values = static_cast<const float*>( data );
 			tensor.data.assign( values, values + count );
@@ -343,7 +344,7 @@ namespace lexiglance::ocr
 			std::size_t                count = 0;
 			std::size_t                dims  = 0;
 			void*                      data  = nullptr;
-			if ( api_->GetTensorTypeAndShape( results[i], &info ) == nullptr )
+			if ( check( api_, api_->GetTensorTypeAndShape( results[i], &info ) ) )
 			{
 				ignore( api_, api_->GetDimensionsCount( info, &dims ) );
 				tensors[i].shape.resize( dims );
@@ -351,7 +352,7 @@ namespace lexiglance::ocr
 				ignore( api_, api_->GetTensorShapeElementCount( info, &count ) );
 				api_->ReleaseTensorTypeAndShapeInfo( info );
 			}
-			if ( count > 0 && api_->GetTensorMutableData( results[i], &data ) == nullptr && data != nullptr )
+			if ( count > 0 && check( api_, api_->GetTensorMutableData( results[i], &data ) ) && data != nullptr )
 			{
 				const auto* floats = static_cast<const float*>( data );
 				tensors[i].data.assign( floats, floats + count );
@@ -408,12 +409,12 @@ namespace lexiglance::ocr
 		OrtModelMetadata* metadata  = nullptr;
 		OrtAllocator*     allocator = nullptr;
 		std::string       result;
-		if ( api_->SessionGetModelMetadata( session_, &metadata ) != nullptr || api_->GetAllocatorWithDefaultOptions( &allocator ) != nullptr )
+		if ( !check( api_, api_->SessionGetModelMetadata( session_, &metadata ) ) )
 		{
 			return result;
 		}
 		char* value = nullptr;
-		if ( api_->ModelMetadataLookupCustomMetadataMap( metadata, allocator, key, &value ) == nullptr && value != nullptr )
+		if ( check( api_, api_->GetAllocatorWithDefaultOptions( &allocator ) ) && check( api_, api_->ModelMetadataLookupCustomMetadataMap( metadata, allocator, key, &value ) ) && value != nullptr )
 		{
 			result = value;
 			ignore( api_, api_->AllocatorFree( allocator, value ) );

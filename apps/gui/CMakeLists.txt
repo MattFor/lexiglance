@@ -11,6 +11,7 @@ add_executable(
     Common.cpp
     DaemonClient.cpp
     DesktopEntry.cpp
+    DeveloperPage.cpp
     DictionariesPage.cpp
     Downloader.cpp
     HelpOverlay.cpp
@@ -18,6 +19,7 @@ add_executable(
     OcrGroup.cpp
     OcrInstall.cpp
     OverviewPage.cpp
+    ReportOverlay.cpp
     RunAsAdministrator.cpp
     ScanningPage.cpp
     SearchPage.cpp
@@ -57,6 +59,11 @@ target_link_libraries(
                        lexiglance::options Qt6::Widgets Qt6::Network)
 
 install(TARGETS lexiglance RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+if(APPLE)
+    # The Objective-C runtime, for the Dock icon's activation policy, and CoreGraphics' permission checks (Common.cpp).
+    target_link_libraries(lexiglance PRIVATE objc "-framework CoreGraphics")
+endif()
 
 if(WIN32)
     # A windowed program: no console opens with it. Run as administrator starts

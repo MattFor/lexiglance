@@ -27,7 +27,7 @@ namespace lexiglance::gui::desktop
 	{
 
 		// The program a command line starts: "/a path/program" or /path/program, with arguments or without.
-		QString commandProgram( const QString& command )
+		[[maybe_unused]] QString commandProgram( const QString& command )
 		{
 			static const QRegularExpression pattern( QStringLiteral( R"re(^\s*(?:"([^"]+)"|(\S+)))re" ) );
 			const auto                      match = pattern.match( command );
@@ -64,7 +64,7 @@ namespace lexiglance::gui::desktop
 			{
 				if ( error != nullptr )
 				{
-					*error = QStringLiteral( "Cannot write %1" ).arg( QDir::toNativeSeparators( path ) );
+					*error = QStringLiteral( "Couldn't write %1" ).arg( QDir::toNativeSeparators( path ) );
 				}
 				return false;
 			}
@@ -163,9 +163,11 @@ namespace lexiglance::gui::desktop
 	namespace
 	{
 
+		// The settings application in the menu bar, which starts the daemon: macOS then asks for its permissions for
+		// Lexiglance, the app that started it.
 		QString autostartFile()
 		{
-			return QDir::homePath() + "/Library/LaunchAgents/io.github.mattfor.lexiglance.daemon.plist";
+			return QDir::homePath() + "/Library/LaunchAgents/io.github.mattfor.lexiglance.plist";
 		}
 
 		QString autostartText()
@@ -173,16 +175,21 @@ namespace lexiglance::gui::desktop
 			return QStringLiteral(
 						   "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
 						   "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
-						   "<plist version=\"1.0\"><dict><key>Label</key><string>io.github.mattfor.lexiglance.daemon</string>"
-						   "<key>ProgramArguments</key><array><string>%1</string></array><key>RunAtLoad</key><true/></dict></plist>\n"
+						   "<plist version=\"1.0\">\n<dict>\n"
+						   "\t<key>Label</key>\n\t<string>io.github.mattfor.lexiglance</string>\n"
+						   "\t<key>AssociatedBundleIdentifiers</key>\n\t<string>io.github.mattfor.lexiglance</string>\n"
+						   "\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%1</string>\n\t\t<string>--tray</string>\n\t</array>\n"
+						   "\t<key>RunAtLoad</key>\n\t<true/>\n"
+						   "\t<key>ProcessType</key>\n\t<string>Interactive</string>\n"
+						   "</dict>\n</plist>\n"
 			)
-			        .arg( daemonExecutable().toHtmlEscaped() );
+			        .arg( QFileInfo( QCoreApplication::applicationFilePath() ).canonicalFilePath().toHtmlEscaped() );
 		}
 
 		// The first of the ProgramArguments.
 		QString autostartProgram()
 		{
-			static const QRegularExpression pattern( QStringLiteral( "<array><string>([^<]*)</string>" ) );
+			static const QRegularExpression pattern( QStringLiteral( "<array>\\s*<string>([^<]*)</string>" ) );
 			return pattern.match( read( autostartFile() ) ).captured( 1 );
 		}
 
@@ -197,6 +204,7 @@ namespace lexiglance::gui::desktop
 
 	} // namespace
 
+	// Apps are in Launchpad and Spotlight by being in an Applications folder, where the user drags them.
 	bool menuEntryShown()
 	{
 		return false;
@@ -206,7 +214,7 @@ namespace lexiglance::gui::desktop
 	{
 		if ( error != nullptr )
 		{
-			*error = QStringLiteral( "Menu entries are made by the installer on this system." );
+			*error = QStringLiteral( "Drag Lexiglance into Applications to find it in Launchpad and Spotlight." );
 		}
 		return false;
 	}
@@ -216,6 +224,7 @@ namespace lexiglance::gui::desktop
 		return QFile::exists( autostartFile() );
 	}
 
+	// Only the file: launchd reads it at the next login, and unloading the job now would end this program if it started it.
 	bool setAutostart( bool enabled )
 	{
 		if ( !enabled )
@@ -230,6 +239,14 @@ namespace lexiglance::gui::desktop
 		if ( autostartEnabled() && read( autostartFile() ) != autostartText() )
 		{
 			claimed( "autostart", autostartProgram() );
+			( void )setAutostart( true );
+		}
+		// As the Windows setup does: started at login from the first start on, until that is turned off. Not from the disk
+		// image (or anywhere else read-only), which is gone at the next login.
+		auto settings = applicationMemory();
+		if ( !settings.value( QStringLiteral( "autostart/decided" ), false ).toBool() && QFileInfo( QCoreApplication::applicationDirPath() + QStringLiteral( "/../../.." ) ).isWritable() )
+		{
+			settings.setValue( QStringLiteral( "autostart/decided" ), true );
 			( void )setAutostart( true );
 		}
 	}
@@ -313,7 +330,7 @@ namespace lexiglance::gui::desktop
 		{
 			if ( error != nullptr )
 			{
-				*error = QStringLiteral( "Cannot remove %1" ).arg( QDir::toNativeSeparators( shortcut() ) );
+				*error = QStringLiteral( "Couldn't remove %1" ).arg( QDir::toNativeSeparators( shortcut() ) );
 			}
 			return false;
 		}
@@ -322,7 +339,7 @@ namespace lexiglance::gui::desktop
 		{
 			if ( error != nullptr )
 			{
-				*error = QStringLiteral( "Cannot write %1" ).arg( QDir::toNativeSeparators( shortcut() ) );
+				*error = QStringLiteral( "Couldn't write %1" ).arg( QDir::toNativeSeparators( shortcut() ) );
 			}
 			return false;
 		}
@@ -746,7 +763,7 @@ namespace lexiglance::gui::desktop
 				}
 				if ( generated( entry.text ) && entryProgram( entry.text ).isEmpty() ? !QFile::remove( entry.path ) : !save( entry.path, QString( entry.text ).remove( hiding_line ) ) )
 				{
-					return failed( error, QStringLiteral( "Cannot change %1" ), entry.path );
+					return failed( error, QStringLiteral( "Couldn't change %1" ), entry.path );
 				}
 			}
 			return menuEntryShown() || save( userEntry(), entryText(), error );
@@ -767,16 +784,16 @@ namespace lexiglance::gui::desktop
 					const QString cover = userApplications() + "/" + entry.relative;
 					if ( QFile::exists( cover ) || !save( cover, QStringLiteral( "[Desktop Entry]\nType=Application\nName=Lexiglance\nNoDisplay=true\nHidden=true\n%1true\n" ).arg( generated_key ), error ) )
 					{
-						return failed( error, QStringLiteral( "Cannot hide %1" ), entry.path );
+						return failed( error, QStringLiteral( "Couldn't hide %1" ), entry.path );
 					}
 				}
 				else if ( generated( entry.text ) && unedited( entry.text ) ? !QFile::remove( entry.path ) : !save( entry.path, QString( entry.text ).replace( QStringLiteral( "[Desktop Entry]\n" ), QStringLiteral( "[Desktop Entry]\nNoDisplay=true\n" ) ) ) )
 				{
-					return failed( error, QStringLiteral( "Cannot change %1" ), entry.path );
+					return failed( error, QStringLiteral( "Couldn't change %1" ), entry.path );
 				}
 			}
 		}
-		return !menuEntryShown() || failed( error, QStringLiteral( "Cannot take %1 out of the menu" ), QStringLiteral( "Lexiglance" ) );
+		return !menuEntryShown() || failed( error, QStringLiteral( "Couldn't remove %1 from the menu" ), QStringLiteral( "Lexiglance" ) );
 	}
 
 	bool autostartEnabled()

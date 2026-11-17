@@ -88,7 +88,7 @@ namespace lexiglance::gui::themes
 			{
 				if ( error != nullptr )
 				{
-					*error = QStringLiteral( "Not a theme: %1" ).arg( document ? QStringLiteral( "not a JSON object" ) : qs( document.error().message ) );
+					*error = QStringLiteral( "This file isn't a theme (%1)" ).arg( document ? QStringLiteral( "not a JSON object" ) : qs( document.error().message ) );
 				}
 				return false;
 			}
@@ -140,7 +140,7 @@ namespace lexiglance::gui::themes
 			{
 				if ( error != nullptr )
 				{
-					*error = QStringLiteral( "Cannot read %1" ).arg( path );
+					*error = QStringLiteral( "Couldn't read %1" ).arg( path );
 				}
 				return {};
 			}
@@ -256,7 +256,7 @@ namespace lexiglance::gui::themes
 		{
 			if ( error != nullptr )
 			{
-				*error = QStringLiteral( "Cannot create %1" ).arg( directory() );
+				*error = QStringLiteral( "Couldn't create %1" ).arg( directory() );
 			}
 			return {};
 		}
@@ -269,7 +269,7 @@ namespace lexiglance::gui::themes
 		{
 			if ( error != nullptr )
 			{
-				*error = QStringLiteral( "Cannot write %1" ).arg( path );
+				*error = QStringLiteral( "Couldn't write %1" ).arg( path );
 			}
 			return {};
 		}
@@ -296,7 +296,7 @@ namespace lexiglance::gui::themes
 		{
 			if ( error != nullptr )
 			{
-				*error = QStringLiteral( "Cannot copy the theme to %1" ).arg( path );
+				*error = QStringLiteral( "Couldn't copy the theme to %1" ).arg( path );
 			}
 			return {};
 		}

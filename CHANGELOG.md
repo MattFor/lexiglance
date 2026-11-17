@@ -1,5 +1,137 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- macOS 13.3 Ventura or later, on Apple silicon and Intel: `Lexiglance-macos.dmg` holds Lexiglance.app, with the daemon,
+  `lexiglancectl` and everything they need inside; drag it onto Applications. The trigger is Command + Left Option.
+  Lexiglance asks for Input Monitoring, Accessibility and Screen Recording (for OCR), and the health check reports
+  which are missing. It is not notarised: the first time, open it, then choose Open Anyway in System Settings ->
+  Privacy & Security; macOS may ask for the permissions again after an update.
+- **Report a problem** (Overview -> Health, About, the tray menu): describe what happened, look at what the report
+  holds, and Lexiglance saves it as a zip among your downloads and opens GitHub's issue form filled in with the key
+  facts, to drag the zip into. It holds the versions, the system, how the screen is read, the health report, the
+  settings without the AnkiConnect key or other secrets, the dictionaries' names, the end of the logs and, if ticked, a
+  picture of the latest popup. Nothing is sent by Lexiglance itself. `lexiglancectl report` makes the same report.
+- Developer mode, for working on Lexiglance (About: click the version seven times, or `lexiglance --developer`): a
+  Developer page with every lookup traced live (what was read where, through what, and how long reading, looking up,
+  translating, drawing and showing took, with medians and 95th percentiles), a capture inspector that shows the boxes
+  found and the picture OCR read, scans, lookups, the wheel and health problems simulated through Lexiglance's own
+  pipeline, the daemon's log as it is written, an IPC console and a diagnostics export. `lexiglancectl trace` and
+  `lexiglancectl debug ...` do the same from a terminal; the daemon refuses all of these while developer mode is off.
+  [docs/debugging.md](docs/debugging.md) has the details.
+- Recent lookups: the tray menu lists the last ten words looked up on screen, and the Search page the last 30 while
+  nothing is typed in it; a click looks one up again. They are kept with the statistics, on this computer only: not
+  while counting is off, and forgotten with them. Scripts get them with the daemon's `stats.recent`.
+- The tray menu (the menu bar icon on macOS) can turn scanning off in the program you looked something up in last,
+  and on again: **Don't scan in** adds its window class to Scanning -> Ignored windows, which offers the same with a
+  button, so the class no longer has to be found out by hand. The menu also opens Search, the icon fades while scanning
+  is paused, and its tooltip names the trigger.
+- Search: **Play**, **Copy** and **Add to Anki** under every entry. Up, Down, Page Up and Page Down scroll the results
+  while typing, Escape empties the box, and Watch clipboard stays ticked from one start to the next.
+- **Overview -> Settings -> Export** saves every setting in one file, and **Import** on another computer takes them
+  over after listing what changes. The dictionaries are not in it.
+- Changes to `config.json` made by hand (or synced from another computer) take effect within two seconds, with no
+  restart. Lexiglance does not write such a file back, and dictionaries installed only on the other computer keep their
+  place in it, so two computers sharing it settle on one file. A file that cannot be read leaves the settings in use as
+  they are: the health check's recent problems say why, and the edit is kept as `config.json.broken`.
+
+### Changed
+
+- Words that match the text equally well are listed by how common they are, as your frequency dictionaries rank them:
+  行って and 行っちゃった show 行く first, no longer 行う, which JMdict's own order puts first. The frequency dictionary
+  that ranks most of them decides; without one, the order stays as it was.
+- The daemon answers while a request that waits is under way: a health check, a translation, a note added to Anki or a
+  pronunciation played for one program (the settings application, `lexiglancectl`, a script) no longer holds up the
+  others, which waited for it for up to a minute. Each program still gets its answers in the order it asked.
+- Appearance -> Scale goes from Automatic straight to 0.5x, the smallest scale a popup can still be read at; a smaller
+  one typed in, or written in the settings file by hand, becomes 0.5x.
+- Dictionaries dropped anywhere on the settings window are imported, not only on the Dictionaries page, which comes
+  up to show their progress; a dropped folder of zips imports each of them.
+- OCR: moving along a line of game or video text no longer looks for text again every few words: a line read once
+  serves wherever the pointer goes along it. On the test page the slowest tenth of popups came after 150 ms and now
+  after 20 ms, and the OCR benchmark reads 80.7% of its lines exactly instead of 78.3% (errors 4.5% instead of 5.5%),
+  as lines are less often cut at the edge of what was read.
+- OCR: a line read surely in the script of a language's own recogniser is not read again by the others: with Russian
+  on as well, Japanese lines are read about a fifth sooner.
+- Lookups search only the dictionaries of the text's script: Russian text no longer brings up a Japanese dictionary's
+  stray entry first (Pixiv's Москва, read もすくわ), nor Greek text Japanese entries for Greek letters, and a lookup
+  reads 15 to 80% less of the dictionary files, which makes the first lookups after a long break quicker.
+- The first popup after Lexiglance starts is drawn in about half the time, as its fonts are loaded beforehand.
+- First-run setup: OCR for games and videos is offered as a choice beside translation. **Continue while it downloads**
+  is there from the start, so a slow or missing connection no longer keeps you on the download page for minutes, and
+  when downloads fail the page names every one of them, grouped by what went wrong. The sentence to try comes with a
+  couple of everyday words, and the page says when the dictionary is still on its way. Closed during the downloads, setup
+  opens again where you left it, with your languages still ticked.
+- Help has **Run setup again** and **What's new** for everyone, not only in development builds.
+- The what's new card reads like the changelog it comes from: headings in proportion, space between the points, and
+  links that open.
+- The cards over the window (setup, Help, What's new, Report a problem, Uninstall) press their main button with Enter,
+  and the keyboard goes back where it was when they close.
+- The text throughout the settings window, the health check and the popup's messages is shorter and plainer, with one
+  name for each thing and what to do next. On Windows the uninstall card also lists the autostart, the Start menu
+  entry, the Installed apps entry and the Run as administrator task it removes.
+
+### Fixed
+
+- First-run setup: the sentence to try is read through accessibility (AT-SPI, UI Automation, macOS Accessibility).
+  Pointing at a card over the settings window reached the page under it, so the sentence was not found there, nor by
+  screen readers.
+- Windows: with Run as administrator on but not in effect, Health no longer tells you to turn it on, which
+  contradicted the start-up problem above it.
+- Japanese written with emphasis is looked up as the word it is: うまーい, でかーい and やばーい as うまい, でかい and
+  やばい, ほんっと as ほんと, すごぉい, かわいぃ and ありがとぅ as すごい, かわいい and ありがとう. The emphasis does
+  not count towards how much of the text such a word matches, so a word written as the text is and as long still comes
+  first: おーきい shows おー, not 沖.
+- Firefox and other browsers: the last words of a paragraph (those less than the longest lookup from its end, often
+  all of a short one) are read through accessibility; nothing at all was read there.
+- OCR reads the whole of a line whose words the detector boxed apart when one of them has only short letters
+  (изменения beside перед выходом?): the line used to stop at that word.
+- Importing a dictionary no longer leaves a `.lgd.lock` file beside it in the dictionaries folder, and those earlier
+  versions left are removed, as is the half-written file of an import that was killed.
+- Linux and macOS: a daemon whose runtime folder is too deep for a socket (a long `LEXIGLANCE_HOME`) removes the
+  `lexiglance-<user>-<id>` folder it made for the socket in the temporary folder when it exits.
+- `lexiglancectl show` without a text shows a word the dictionaries have, as the daemon allows. Wrong arguments
+  (`stats foo`, `status extra`, `import` with nothing to import, `translate --language` without a code) print the
+  usage and exit with 2, instead of being ignored or ending without a word; `lexiglancectl --help` exits with 0.
+- Uninstalling a copy with a home of its own (`LEXIGLANCE_HOME`) stops only that home's daemon and settings window,
+  no longer every Lexiglance program of the user.
+- When the settings application cannot reach its daemon, Overview names its own home's daemon, not another copy's.
+- macOS: Chrome, Edge and other Chromium browsers have their pages' text read through accessibility, with the
+  highlight split line by line; every lookup there used to fall back to OCR. Chromium and Electron apps are asked for
+  their text as soon as they come to the front, so the first lookup in an app just started reads it too.
+- macOS: after allowing Input Monitoring or Screen Recording, macOS's own Quit & Reopen restarts the daemon too, which
+  until then kept running without the permission, so the trigger still did nothing.
+- macOS: `lexiglance --claim-entries` says what it set up there, the autostart of the app in the menu bar, rather than
+  a menu entry that a Mac does not have.
+- Dictionaries: the next queued download no longer starts while one is still being imported, when some other import (a
+  local file, the setup wizard) finishes meanwhile.
+- A translation model that fails to load is written to the log and to the health report's recent problems, not only
+  shown in the popup.
+- `lexiglanced --replace` and the health check's Restart stop only the daemon of their own home (`LEXIGLANCE_HOME`).
+- Windows: a copy with a home of its own (`LEXIGLANCE_HOME`) runs a daemon of its own, instead of reaching the installed
+  copy's.
+- Windows: the Translation page shows the compact models' size in full ("115 MB", not "115 ...").
+- Windows: the Anki page says pronunciations play through Windows' own player, not ffplay, mpv or mpg123.
+- Linux: text in Qt applications' text views (QTextEdit, QTextBrowser) is read through accessibility. It was not found
+  there, so only OCR could read it.
+- Holding the trigger again over text chosen with the wheel looks it up again. Until it was held somewhere else, no
+  popup came there, and the wheel and the sentence key did nothing.
+- Quick presses of the sentence key each count when popups are slow to draw too: a translation asked for by an earlier
+  press, arriving after a later one, no longer comes back on screen to make the next press turn translation off rather
+  than on.
+- A pronunciation plays at once while Anki does not answer (a dialog open in it, a sync): it waited up to 20 seconds
+  behind the notes being added and the popup's check for notes Anki already has.
+- Of pronunciations asked for in a row (playing by themselves as the pointer moves on, the speaker clicked on another
+  entry), the last one is heard: an earlier one still downloading no longer plays over it.
+- Windows: words in Notepad, dialog boxes and other classic text fields are read directly over the right half of a
+  character too. There they went through OCR, slower, and not at all with OCR off or not downloaded.
+- Windows: turning Run as administrator on no longer reports "Restart failed" when Windows takes more than 15 seconds
+  to start Lexiglance as administrator.
+- First-run setup: when nothing of the dictionaries or models could be downloaded (offline, say), their progress bars
+  no longer keep moving as if the downloads went on.
+
 ## [1.4.1] - 15:47 CET 16-11-2026
 
 ### Changed

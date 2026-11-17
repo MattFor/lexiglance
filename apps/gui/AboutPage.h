@@ -3,7 +3,7 @@
 
 #include "Common.h"
 
-#include <QPushButton>
+#include <QCheckBox>
 #include <QTextBrowser>
 
 namespace lexiglance::gui
@@ -15,13 +15,15 @@ namespace lexiglance::gui
 		explicit AboutPage( Context context, QWidget* parent = nullptr );
 
 		void activated() override;
+		void refresh() override;
 
 	private:
 		void render();
-		void copyDiagnosis();
 
 		QTextBrowser* text_;
-		QPushButton*  diagnosis_;
+		// Developer mode's switch, shown once it is on or the version was clicked seven times.
+		QCheckBox* developer_;
+		int        version_clicks_ = 0;
 		// The daemon's version, backend and text capture, or why it is not known.
 		QString daemon_;
 		// Attributions the installed dictionaries ask for (HTML).

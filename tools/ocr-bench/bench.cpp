@@ -2,7 +2,7 @@
 // the daemon does at a real one, so everything between the pixels and the text is measured (finding the line,
 // choosing the recogniser, reading on past the area first looked at, the confidence it takes). Prints a line of
 // results for each line of truth: picture, language, font, style, size, error rate (0 to 1), confidence, what was
-// wanted, what was read.
+// wanted, what was read, and the milliseconds the two points took to read.
 //   ocrbench <truth.tsv> <pictures directory> [--lookup] [--beside] [--languages ja,ru] [--engine tesseract]
 //            [--shard 0/8] [--debug]
 // --lookup reads as a lookup does rather than as a translation does (which wants the whole sentence); --beside points
@@ -14,6 +14,7 @@
 #include <lexiglance/language/Language.h>
 
 #include <algorithm>
+#include <array>
 #include <cairo.h>
 #include <charconv>
 #include <chrono>
@@ -142,7 +143,8 @@ namespace
 	std::size_t editDistance( const std::u32string& a, const std::u32string& b )
 	{
 		std::vector<std::size_t> row( b.size() + 1 );
-		std::ranges::iota( row, std::size_t{ 0 } );
+		// Not std::ranges::iota: Xcode's libc++ lacks it.
+		std::iota( row.begin(), row.end(), std::size_t{ 0 } );
 		for ( std::size_t i = 1; i <= a.size(); ++i )
 		{
 			std::size_t diagonal = row[0];
@@ -324,9 +326,13 @@ int main( int argc, char** argv )
 		std::string read   = "<nothing>";
 		double      worst  = -1.0;
 		float       sure   = 0.0F;
+		// How long each point took to read: the first one finds the text boxes, the second mostly reuses them.
+		std::array<double, 2> took{};
 		for ( const bool far : { false, true } )
 		{
-			const auto   found = ( *capture )->capture( pointAt( shown, line, far, options->beside ), {}, { .characters = 20, .sentence = !options->lookup } );
+			const auto started = std::chrono::steady_clock::now();
+			const auto found   = ( *capture )->capture( pointAt( shown, line, far, options->beside ), {}, { .characters = 20, .sentence = !options->lookup } );
+			took[far ? 1 : 0]  = std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - started ).count();
 			const auto   got   = found ? letters( found->sentence ) : std::u32string();
 			const double error = std::min( 1.0, static_cast<double>( editDistance( got, wanted ) ) / static_cast<double>( std::max<std::size_t>( 1, wanted.size() ) ) );
 			if ( error > worst )
@@ -336,7 +342,7 @@ int main( int argc, char** argv )
 				sure  = found ? found->confidence : 0.0F;
 			}
 		}
-		std::println( "{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.0f}\t{}\t{}", field[0], field[5], field[6], field[7], field[8], worst, sure, field[9], read );
+		std::println( "{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.0f}\t{}\t{}\t{:.1f}\t{:.1f}", field[0], field[5], field[6], field[7], field[8], worst, sure, field[9], read, took[0], took[1] );
 	}
 	std::println( stderr, "shard {}/{}: {} s", options->shard, options->shards, std::chrono::duration_cast<std::chrono::seconds>( std::chrono::steady_clock::now() - began ).count() );
 	return 0;

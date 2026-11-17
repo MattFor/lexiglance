@@ -58,7 +58,7 @@ namespace lexiglance::gui
 		auto file = std::make_shared<QSaveFile>( target );
 		if ( !file->open( QIODevice::WriteOnly ) )
 		{
-			done( QStringLiteral( "cannot write " ) + target );
+			done( QStringLiteral( "cannot write to " ) + target );
 			return;
 		}
 
@@ -97,7 +97,7 @@ namespace lexiglance::gui
 			if ( reply->error() != QNetworkReply::NoError )
 			{
 				file->cancelWriting();
-				const QString error = *stalled ? QStringLiteral( "no data for 30 s" ) : reply->errorString();
+				const QString error = *stalled ? QStringLiteral( "the connection stalled (no data for 30 s)" ) : reply->errorString();
 				log::warn( "download of {} failed after {} ms: {}", ss( reply->url().toString() ), started->elapsed(), ss( error ) );
 				done( error );
 				return;

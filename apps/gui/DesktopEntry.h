@@ -21,7 +21,7 @@ namespace lexiglance::gui::desktop
 	// it out (the entry it wrote goes, any other is hidden, the user's own in place). False (and `error`) on failure.
 	bool setMenuEntry( bool shown, QString* error = nullptr );
 
-	// The daemon at login.
+	// The daemon at login (on macOS the settings application in the menu bar, which starts it).
 	[[nodiscard]] bool autostartEnabled();
 	bool               setAutostart( bool enabled );
 

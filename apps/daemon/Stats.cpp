@@ -25,6 +25,8 @@ namespace lexiglance::daemon
 		constexpr std::size_t kept_days  = 400;
 		// Words are counted as they are read, so a stray line of text cannot fill the file with one enormous entry.
 		constexpr std::size_t longest_word = 64;
+		// Enough for the tray's menu and the Search page.
+		constexpr std::size_t kept_recent = 30;
 
 		void readCounts( const json::Value& object, std::map<std::string, std::uint64_t, std::less<>>& counts )
 		{
@@ -124,6 +126,13 @@ namespace lexiglance::daemon
 				readCounts( root["translated_languages"], tally_.translated_languages );
 				readCounts( root["sources"], tally_.sources );
 				readCounts( root["words"], tally_.words );
+				for ( const json::Value& word : root["recent"].items() )
+				{
+					if ( word.isString() && tally_.recent.size() < kept_recent )
+					{
+						tally_.recent.emplace_back( word.asString() );
+					}
+				}
 				// Each day's figures; a tally from before 1.3.0 has only its lookups, as a count.
 				for ( const json::Member& member : root["days"].members() )
 				{
@@ -188,6 +197,12 @@ namespace lexiglance::daemon
 			writeCounts( out, "translated_languages", tally_.translated_languages );
 			writeCounts( out, "sources", tally_.sources );
 			writeCounts( out, "words", tally_.words );
+			out.key( "recent" ).beginArray();
+			for ( const auto& word : tally_.recent )
+			{
+				out.value( word );
+			}
+			out.endArray();
 			out.key( "days" ).beginObject();
 			for ( const auto& [name, day] : tally_.days )
 			{
@@ -253,6 +268,12 @@ namespace lexiglance::daemon
 			if ( word.size() <= longest_word )
 			{
 				++tally_.words[std::string( word )];
+				std::erase( tally_.recent, word );
+				tally_.recent.emplace( tally_.recent.begin(), word );
+				if ( tally_.recent.size() > kept_recent )
+				{
+					tally_.recent.pop_back();
+				}
 			}
 		}
 		// A quarter over before pruning, so the sort is rare and a new word can be counted twice before it competes.
@@ -394,6 +415,19 @@ namespace lexiglance::daemon
 		}
 		out.endArray();
 		out.endObject();
+		return out.take();
+	}
+
+	std::string Statistics::recentJson() const
+	{
+		const std::scoped_lock lock( mutex_ );
+		json::Writer           out;
+		out.beginObject().key( "recent" ).beginArray();
+		for ( const auto& word : tally_.recent )
+		{
+			out.value( word );
+		}
+		out.endArray().endObject();
 		return out.take();
 	}
 

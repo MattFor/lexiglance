@@ -19,8 +19,9 @@ namespace lexiglance::process
 	{
 	public:
 		InstanceLock() = default;
-		// Tries to take the lock at once.
-		explicit InstanceLock( std::filesystem::path file );
+		// Tries to take the lock at once. A `temporary` lock's file goes when the lock is released (an import's, while the
+		// daemon's stays for the next one).
+		explicit InstanceLock( std::filesystem::path file, bool temporary = false );
 		~InstanceLock();
 
 		InstanceLock( const InstanceLock& )            = delete;
@@ -43,8 +44,9 @@ namespace lexiglance::process
 		void release() noexcept;
 
 		std::filesystem::path file_;
-		int                   fd_   = -1;
-		bool                  held_ = false;
+		int                   fd_        = -1;
+		bool                  held_      = false;
+		bool                  temporary_ = false;
 	};
 
 	// Whether `pid` is a live (not zombie) process of this user running the executable `name` (on Windows without
@@ -88,8 +90,9 @@ namespace lexiglance::process
 	// discarded when `quiet`. Its exit code; -1 when it cannot be started or did not exit by itself.
 	int run( const std::filesystem::path& program, std::span<const std::string> arguments, bool quiet );
 
-	// Another program of Lexiglance's beside this one (`name` without ".exe"): in the same directory, or in a build tree
-	// in apps/<name without "lexiglance">/; empty when there is none.
+	// Another program of Lexiglance's beside this one (`name` without ".exe"): in the same directory, in a build tree
+	// in apps/<name without "lexiglance">/, or in Lexiglance.app the daemon's helper app and the programs around it; empty
+	// when there is none.
 	[[nodiscard]] std::filesystem::path sibling( std::string_view name );
 
 } // namespace lexiglance::process

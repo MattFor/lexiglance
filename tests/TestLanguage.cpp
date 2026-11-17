@@ -1,5 +1,6 @@
 #include "Test.h"
 
+#include <lexiglance/core/Utf8.h>
 #include <lexiglance/dictionary/Importer.h>
 #include <lexiglance/dictionary/WordRules.h>
 #include <lexiglance/language/Deinflector.h>
@@ -9,6 +10,10 @@
 #include <lexiglance/lookup/Translator.h>
 
 #include <algorithm>
+#include <fstream>
+#include <initializer_list>
+#include <string>
+#include <utility>
 
 namespace
 {
@@ -196,6 +201,16 @@ namespace
 		result = translator.lookup( set, "ｶﾞｯｺｳ" );
 		test::expect( !result.terms.empty() && result.terms.front().expression == "学校" && result.matched_length == 5 );
 
+		// Emphasis written into the word: a long vowel mark, a small vowel lengthening the one before it, a small つ that
+		// doubles nothing. A small つ that doubles a consonant is the word's own.
+		for ( const std::string_view text : { "すっごい！", "すごぉい", "すごーーい", "たかーい", "たかぁい", "すごぃ" } )
+		{
+			result = translator.lookup( set, text );
+			test::expect( !result.terms.empty() && ( result.terms.front().expression == "すごい" || result.terms.front().expression == "高い" ) && result.matched_length == lg::utf8::length( text ) - ( text.ends_with( "！" ) ? 1 : 0 ) );
+		}
+		result = translator.lookup( set, "がっこう" );
+		test::expect( !result.terms.empty() && result.terms.front().expression == "学校" && !result.terms.front().folded );
+
 		result = translator.lookup( set, "hello" );
 		test::expect( result.terms.empty() );
 
@@ -223,6 +238,90 @@ namespace
 		test::expectEqual( joined( translator.readings( set, "食べさせられなかった", {} ) ), std::string( "食[た]べさせられなかった" ) );
 		// What no dictionary has stays as it is.
 		test::expectEqual( joined( translator.readings( set, "hello 学校", {} ) ), std::string( "hello 学校[がっこう]" ) );
+	} );
+
+	// A dictionary written for the test: its files' names and contents.
+	std::shared_ptr<const lg::dict::Dictionary> writtenDictionary( std::string_view name, std::initializer_list<std::pair<std::string_view, std::string_view>> files )
+	{
+		const auto directory = test::scratch( name );
+		for ( const auto& [file, text] : files )
+		{
+			std::ofstream( directory / file ) << text;
+		}
+		const auto output = directory / "out" / "test.lgd";
+		if ( !test::expect( lg::dict::compile( directory, output ).has_value() ) )
+		{
+			return nullptr;
+		}
+		auto dictionary = lg::dict::Dictionary::open( output );
+		return test::expect( dictionary.has_value() ) ? *dictionary : nullptr;
+	}
+
+	const test::Registrar frequency_order( "equally good matches go by frequency", [] {
+		// The dictionary's own scores put 行う first, though 行って is 行く far more often.
+		const auto terms = writtenDictionary(
+				"frequency-terms",
+				{ { "index.json", R"({"title": "Terms", "revision": "1", "format": 3})" },
+				  { "term_bank_1.json", R"([["行う", "おこなう", "v5", "v5", 2000, ["to do"], 1, ""], ["行く", "いく", "v5", "v5", 1000, ["to go"], 2, ""]])" } }
+		);
+		const auto ranks = writtenDictionary(
+				"frequency-ranks",
+				{ { "index.json", R"({"title": "Ranks", "revision": "1", "format": 3})" },
+				  { "term_meta_bank_1.json", R"([["行く", "freq", {"reading": "いく", "frequency": 44}], ["行う", "freq", {"reading": "おこなう", "frequency": 361}]])" } }
+		);
+		const auto counts = writtenDictionary(
+				"frequency-counts",
+				{ { "index.json", R"({"title": "Counts", "revision": "1", "format": 3, "frequencyMode": "occurrence-based"})" },
+				  { "term_meta_bank_1.json", R"([["行く", "freq", 5000], ["行う", "freq", 100]])" } }
+		);
+		if ( !test::expect( terms && ranks && counts ) )
+		{
+			return;
+		}
+		lg::lookup::Translator translator;
+		const auto             first = [&]( std::initializer_list<std::shared_ptr<const lg::dict::Dictionary>> dictionaries, std::string_view text ) {
+			std::vector<lg::lookup::LoadedDictionary> loaded;
+			for ( const auto& dictionary : dictionaries )
+			{
+				loaded.push_back( { .dictionary = dictionary, .styles = nullptr, .name = dictionary->info().title } );
+			}
+			const auto result = translator.lookup( std::make_shared<const lg::lookup::DictionarySet>( std::move( loaded ) ), text );
+			return result.terms.empty() ? std::string() : std::string( result.terms.front().expression );
+		};
+		test::expectEqual( first( { terms, ranks }, "行って" ), std::string( "行く" ) );
+		test::expectEqual( first( { terms, ranks }, "行っちゃった" ), std::string( "行く" ) );
+		// Lists of occurrences count the other way round; without any list the scores decide.
+		test::expectEqual( first( { terms, counts }, "行って" ), std::string( "行く" ) );
+		test::expectEqual( first( { terms }, "行って" ), std::string( "行う" ) );
+	} );
+
+	const test::Registrar emphasis_ranking( "emphasis left out does not make a word longer", [] {
+		// おーきい: おー is written so; 沖 (おき) is found only by leaving the ー out and 嘔気 (おうき) by spelling it out,
+		// which does not count towards how much they match, so both go after おー. うまーい: 旨い matches more of the
+		// text than 馬 even without its ー.
+		const auto terms = writtenDictionary(
+				"emphasis-terms",
+				{ { "index.json", R"({"title": "Emphasis", "revision": "1", "format": 3, "sourceLanguage": "ja"})" },
+				  { "term_bank_1.json",
+				    R"([["おー", "", "int", "", 0, ["oh"], 1, ""], ["沖", "おき", "n", "", 0, ["offing"], 2, ""], ["嘔気", "おうき", "n", "", 0, ["nausea"], 3, ""], ["馬", "うま", "n", "", 0, ["horse"], 4, ""], ["旨い", "うまい", "adj-i", "adj-i", 0, ["tasty"], 5, ""]])" } }
+		);
+		if ( !test::expect( terms != nullptr ) )
+		{
+			return;
+		}
+		std::vector<lg::lookup::LoadedDictionary> loaded;
+		loaded.push_back( { .dictionary = terms, .styles = nullptr, .name = "Emphasis" } );
+		const auto             set = std::make_shared<const lg::lookup::DictionarySet>( std::move( loaded ) );
+		lg::lookup::Translator translator;
+
+		auto result = translator.lookup( set, "おーきい" );
+		test::expect( result.terms.size() == 3 && result.terms.front().expression == "おー" && !result.terms.front().folded );
+		// The text matched is the first word's: the highlight does not run on over the き only 沖 reached.
+		test::expectEqual( result.matched_length, std::uint32_t{ 2 } );
+
+		result = translator.lookup( set, "うまーい！" );
+		test::expect( !result.terms.empty() && result.terms.front().expression == "旨い" && result.terms.front().folded );
+		test::expectEqual( result.matched_length, std::uint32_t{ 4 } );
 	} );
 
 	const test::Registrar translator_limit_checks( "translator limits", [] {

@@ -46,7 +46,7 @@ namespace lexiglance::gui::vcredist
 				done( QStringLiteral( "the Visual C++ Redistributable was not installed, so OCR cannot read anything yet" ) );
 				return;
 			}
-			done( QStringLiteral( "the Visual C++ Redistributable installer failed (code %1); it can be installed by hand from %2" ).arg( code ).arg( url().toString() ) );
+			done( QStringLiteral( "the Visual C++ Redistributable installer failed (code %1); you can install it yourself from %2" ).arg( code ).arg( url().toString() ) );
 		} );
 		// A process that never starts sends no finished(), so its answer comes from here instead.
 		QObject::connect( process, &QProcess::errorOccurred, owner, [process, installer, done]( QProcess::ProcessError error ) {
@@ -56,7 +56,7 @@ namespace lexiglance::gui::vcredist
 			}
 			process->deleteLater();
 			QFile::remove( installer );
-			done( QStringLiteral( "the Visual C++ Redistributable installer could not be started (%1)" ).arg( installer ) );
+			done( QStringLiteral( "couldn't start the Visual C++ Redistributable installer (%1)" ).arg( installer ) );
 		} );
 		process->start( installer, { QStringLiteral( "/install" ), QStringLiteral( "/passive" ), QStringLiteral( "/norestart" ) } );
 	}

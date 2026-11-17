@@ -6,6 +6,9 @@
 #include <lexiglance/dictionary/SearchKey.h>
 
 #include <algorithm>
+#include <iterator>
+#include <optional>
+#include <span>
 #include <tuple>
 
 namespace lexiglance::lookup
@@ -74,6 +77,58 @@ namespace lexiglance::lookup
 				}
 			}
 			return forms;
+		}
+
+		// How much of the text an entry matches, as it ranks: what a folded spelling left out does not count.
+		std::uint32_t ranked( const TermEntry& entry ) noexcept
+		{
+			return entry.matched_length - entry.left_out;
+		}
+
+		// What makes one match better than another, before how common the word is.
+		auto standing( const TermEntry& entry ) noexcept
+		{
+			return std::tuple( ranked( entry ), steps( entry ), entry.folded, entry.expression_match );
+		}
+
+		// Equally good matches go by how common they are, by one frequency list, as values of different lists do not
+		// compare: the one that ranks most of them (of those, the first by priority). Lists counting occurrences rank the
+		// other way round; what the list does not rank goes after what it does.
+		void rankByFrequency( const DictionarySet& set, std::span<TermEntry> tied )
+		{
+			std::vector<std::size_t> known( set.all().size() );
+			for ( const TermEntry& entry : tied )
+			{
+				// An entry's frequencies are grouped by dictionary.
+				std::optional<std::uint16_t> previous;
+				for ( const Frequency& frequency : entry.frequencies )
+				{
+					if ( frequency.value > 0 && frequency.dictionary != previous )
+					{
+						++known[frequency.dictionary];
+						previous = frequency.dictionary;
+					}
+				}
+			}
+			const auto list = std::ranges::max_element( known );
+			if ( list == known.end() || *list == 0 )
+			{
+				return;
+			}
+			const auto chosen      = static_cast<std::uint16_t>( list - known.begin() );
+			const bool occurrences = set[chosen].dictionary->info().frequency_mode == "occurrence-based";
+			for ( TermEntry& entry : tied )
+			{
+				for ( const Frequency& frequency : entry.frequencies )
+				{
+					if ( frequency.dictionary == chosen && frequency.value > 0 )
+					{
+						entry.frequency_rank = std::min<std::int64_t>( entry.frequency_rank, occurrences ? -std::int64_t{ frequency.value } : frequency.value );
+					}
+				}
+			}
+			// Stable: equally common ones stay in the order of their scores.
+			std::ranges::stable_sort( tied, {}, &TermEntry::frequency_rank );
 		}
 
 	} // namespace
@@ -204,11 +259,11 @@ namespace lexiglance::lookup
 				const auto it = std::ranges::find( longest, definition.dictionary, &std::pair<std::uint32_t, std::uint16_t>::second );
 				if ( it == longest.end() )
 				{
-					longest.emplace_back( entry.matched_length, definition.dictionary );
+					longest.emplace_back( ranked( entry ), definition.dictionary );
 				}
 				else
 				{
-					it->first = std::max( it->first, entry.matched_length );
+					it->first = std::max( it->first, ranked( entry ) );
 				}
 			}
 		}
@@ -265,6 +320,14 @@ namespace lexiglance::lookup
 		matches_.clear();
 		searched_.clear();
 		followed_.clear();
+		// Dictionaries of other languages are not searched: a Japanese one has nothing to say of Russian text (but for
+		// a stray entry, Москва read もすくわ), and each search can cost a read from the disk.
+		const auto readers = [&]( std::span<const std::uint16_t> all, std::vector<std::uint16_t>& out ) {
+			out.clear();
+			std::ranges::copy_if( all, std::back_inserter( out ), [&]( std::uint16_t index ) { return result.dictionaries->reads( index, language, source.front() ); } );
+		};
+		readers( result.dictionaries->withTerms(), term_dictionaries_ );
+		readers( result.dictionaries->withMeta(), meta_dictionaries_ );
 		language.variants( source, variants_ );
 		for ( const lang::TextVariant& variant : variants_ )
 		{
@@ -273,18 +336,6 @@ namespace lexiglance::lookup
 
 		group( result );
 		keepFirstDictionaries( result, options.max_dictionaries );
-
-		std::ranges::stable_sort( result.terms, []( const TermEntry& a, const TermEntry& b ) {
-			return std::tuple( b.matched_length, steps( a ), a.folded, !a.expression_match, b.score, a.best_dictionary ) < std::tuple( a.matched_length, steps( b ), b.folded, !b.expression_match, a.score, b.best_dictionary );
-		} );
-		if ( result.terms.size() > options.max_results )
-		{
-			result.terms.resize( options.max_results );
-		}
-		for ( const TermEntry& entry : result.terms )
-		{
-			result.matched_length = std::max( result.matched_length, entry.matched_length );
-		}
 
 		if ( options.search_kanji )
 		{
@@ -298,7 +349,33 @@ namespace lexiglance::lookup
 			}
 		}
 
+		std::ranges::stable_sort( result.terms, []( const TermEntry& a, const TermEntry& b ) {
+			return std::tuple( ranked( b ), steps( a ), a.folded, !a.expression_match, b.score, a.best_dictionary ) < std::tuple( ranked( a ), steps( b ), b.folded, !b.expression_match, a.score, b.best_dictionary );
+		} );
+		if ( result.terms.size() > options.max_results )
+		{
+			// Those as good a match as the last shown stay for now: frequency may move one of them up.
+			const auto shown = options.max_results == 0 ? result.terms.begin() : std::find_if( result.terms.begin() + static_cast<std::ptrdiff_t>( options.max_results ), result.terms.end(), [&]( const TermEntry& entry ) {
+				return standing( entry ) != standing( result.terms[options.max_results - 1] );
+			} );
+			result.terms.erase( shown, result.terms.end() );
+		}
 		attachMeta( result );
+		// A dictionary's own score says less of how common a word is than frequency lists do (行って is 行く far more
+		// often than 行う, whose JMdict score is higher).
+		for ( auto run = result.terms.begin(); run != result.terms.end(); )
+		{
+			const auto end = std::find_if( run, result.terms.end(), [&]( const TermEntry& entry ) { return standing( entry ) != standing( *run ); } );
+			rankByFrequency( *result.dictionaries, std::span( run, end ) );
+			run = end;
+		}
+		if ( result.terms.size() > options.max_results )
+		{
+			result.terms.resize( options.max_results );
+		}
+		// What the first word matched: a folded one ranked after it may span more of the text (沖 over おーき of おーきい).
+		result.matched_length = result.terms.empty() ? 0 : result.terms.front().matched_length;
+
 		result.elapsed = std::chrono::steady_clock::now() - started;
 		return result;
 	}
@@ -320,7 +397,7 @@ namespace lexiglance::lookup
 					continue;
 				}
 
-				for ( const std::uint16_t index : set.withTerms() )
+				for ( const std::uint16_t index : term_dictionaries_ )
 				{
 					const dict::Dictionary& dictionary = *set[index].dictionary;
 					const auto              terms      = dictionary.terms();
@@ -356,7 +433,9 @@ namespace lexiglance::lookup
 							.chain_length = candidate.length,
 							.chain        = candidate.chain,
 							.form_of      = {},
-							.folded       = folded,
+							.folded       = folded || variant.folded,
+							.unresolved   = false,
+							.left_out     = variant.ranked_length.empty() ? 0 : length - variant.ranked_length[k],
 						};
 						if ( !addFormsOf( set, dictionary, term, match ) )
 						{
@@ -387,7 +466,7 @@ namespace lexiglance::lookup
 			const std::string                                    key = dict::searchKey( form.lemma );
 			std::vector<std::pair<std::uint16_t, std::uint32_t>> forms_of_it;
 			bool                                                 own = false;
-			for ( const std::uint16_t index : set.withTerms() )
+			for ( const std::uint16_t index : term_dictionaries_ )
 			{
 				const dict::Dictionary& other = *set[index].dictionary;
 				const auto              terms = other.terms();
@@ -460,7 +539,7 @@ namespace lexiglance::lookup
 		if ( std::ranges::any_of( matches_, []( const Match& m ) { return !m.form_of.empty() || m.folded || m.unresolved; } ) )
 		{
 			std::ranges::stable_sort( matches_, []( const Match& a, const Match& b ) {
-				return std::tuple( b.length, a.steps(), a.chain_length, a.folded, !a.expression ) < std::tuple( a.length, b.steps(), b.chain_length, b.folded, !b.expression );
+				return std::tuple( b.ranked(), a.steps(), a.chain_length, a.folded, !a.expression ) < std::tuple( a.ranked(), b.steps(), b.chain_length, b.folded, !b.expression );
 			} );
 		}
 
@@ -501,11 +580,12 @@ namespace lexiglance::lookup
 			}
 
 			TermEntry& entry   = result.terms[it->second];
-			const bool longer  = match.length > entry.matched_length;
-			const bool simpler = match.length == entry.matched_length && match.steps() < steps( entry );
+			const bool longer  = match.ranked() > ranked( entry );
+			const bool simpler = match.ranked() == ranked( entry ) && match.steps() < steps( entry );
 			if ( inserted || longer || simpler )
 			{
 				entry.matched_length   = match.length;
+				entry.left_out         = match.left_out;
 				entry.inflection_count = match.chain_length;
 				entry.inflections      = match.chain;
 				entry.expression_match = match.expression;
@@ -524,14 +604,14 @@ namespace lexiglance::lookup
 		}
 	}
 
-	void Translator::attachMeta( LookupResult& result )
+	void Translator::attachMeta( LookupResult& result ) const
 	{
 		using dict::format::MetaKind;
 		const DictionarySet& set = *result.dictionaries;
 
 		for ( TermEntry& entry : result.terms )
 		{
-			for ( const std::uint16_t index : set.withMeta() )
+			for ( const std::uint16_t index : meta_dictionaries_ )
 			{
 				const dict::Dictionary& dictionary = *set[index].dictionary;
 				const auto              meta       = dictionary.meta();
@@ -562,7 +642,7 @@ namespace lexiglance::lookup
 		for ( KanjiEntry& entry : result.kanji )
 		{
 			const auto character = ( *result.dictionaries )[entry.dictionary].dictionary->string( entry.record->character );
-			for ( const std::uint16_t index : set.withMeta() )
+			for ( const std::uint16_t index : meta_dictionaries_ )
 			{
 				const dict::Dictionary& dictionary = *set[index].dictionary;
 				const auto              meta       = dictionary.meta();

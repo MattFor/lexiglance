@@ -111,6 +111,19 @@ namespace
 		test::expectEqual( plan.integration.size(), std::size_t{ 2 } );
 	} );
 
+	const test::Registrar mac_app_plan( "uninstall plan: the macOS app bundle and its LaunchAgent", [] {
+		const fs::path root   = test::scratch( "uninstall-mac-app" );
+		const fs::path bundle = root / "Applications/Lexiglance.app";
+		touch( bundle / "Contents/MacOS/lexiglance" );
+		auto places = placesIn( root, bundle / "Contents/MacOS/lexiglance" );
+		touch( places.home / "Library/LaunchAgents/io.github.mattfor.lexiglance.plist" );
+		const auto plan = un::plan( places, true );
+		test::expect( plan.kind == un::Kind::MacApp );
+		test::expect( plan.where == bundle );
+		test::expect( plan.programs == std::vector<fs::path>{ bundle } );
+		test::expect( has( plan.integration, places.home / "Library/LaunchAgents/io.github.mattfor.lexiglance.plist" ) );
+	} );
+
 	const test::Registrar link_removal( "uninstall removes a link, not what it leads to", [] {
 		const fs::path root = test::scratch( "uninstall-links" );
 		touch( root / "elsewhere/run" );

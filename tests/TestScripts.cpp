@@ -6,8 +6,11 @@
 #include <lexiglance/language/Language.h>
 #include <lexiglance/lookup/Translator.h>
 
+#include <algorithm>
 #include <array>
+#include <cstdint>
 #include <fstream>
+#include <vector>
 
 // Ukrainian, Korean and Greek: languages that come with little more than their script.
 namespace
@@ -22,7 +25,7 @@ namespace
 	}
 
 	// A dictionary written for the test: one term bank of [expression, reading] pairs.
-	std::shared_ptr<const lg::lookup::DictionarySet> dictionaryOf( std::string_view name, std::string_view source_language, std::string_view terms )
+	std::shared_ptr<const lg::dict::Dictionary> compiled( std::string_view name, std::string_view source_language, std::string_view terms )
 	{
 		const auto directory = test::scratch( name );
 		std::ofstream( directory / "index.json" ) << R"({"title": "Test", "revision": "1", "format": 3, "sourceLanguage": ")" << source_language << R"(", "targetLanguage": "en"})";
@@ -37,8 +40,18 @@ namespace
 		{
 			return nullptr;
 		}
+		return *dictionary;
+	}
+
+	std::shared_ptr<const lg::lookup::DictionarySet> dictionaryOf( std::string_view name, std::string_view source_language, std::string_view terms )
+	{
+		auto dictionary = compiled( name, source_language, terms );
+		if ( !dictionary )
+		{
+			return nullptr;
+		}
 		std::vector<lg::lookup::LoadedDictionary> loaded;
-		loaded.push_back( { .dictionary = *dictionary, .styles = nullptr, .name = "Test" } );
+		loaded.push_back( { .dictionary = std::move( dictionary ), .styles = nullptr, .name = "Test" } );
 		return std::make_shared<const lg::lookup::DictionarySet>( std::move( loaded ) );
 	}
 
@@ -100,6 +113,39 @@ namespace
 		const std::array<std::string, 1> no_russian{ "ru" };
 		result = translator.lookup( set, "їжа", { .languages = lg::lang::enabledLanguages( no_russian ) } );
 		test::expect( result.language == &language( "uk" ) && !result.terms.empty() && result.terms.front().expression == "їжа" );
+	} );
+
+	const test::Registrar other_languages( "dictionaries of another script are not searched", [] {
+		// Japanese dictionaries carry the odd Russian word (Pixiv's Москва, read もすくわ); Russian text finds the Russian
+		// one only, and Japanese text the Japanese one. A dictionary of no known language is searched for all text.
+		auto japanese = compiled( "other-ja", "ja", R"json([["Москва", "もすくわ", "n", "", 0, ["Moscow (article)"], 1, ""], ["東京", "とうきょう", "n", "", 0, ["Tokyo"], 2, ""]])json" );
+		auto russian  = compiled( "other-ru", "ru", R"json([["Москва", "", "n", "", 0, ["Moscow"], 1, ""], ["東京", "", "n", "", 0, ["Tokyo (in Russian)"], 2, ""]])json" );
+		auto unknown  = compiled( "other-none", "", R"json([["Tokyo", "", "n", "", 0, ["Tokyo"], 1, ""], ["Moscow", "", "n", "", 0, ["Moscow"], 2, ""], ["東京", "", "n", "", 0, ["Tokyo (unknown)"], 3, ""]])json" );
+		if ( !test::expect( japanese && russian && unknown ) )
+		{
+			return;
+		}
+		std::vector<lg::lookup::LoadedDictionary> loaded;
+		for ( const auto& dictionary : { japanese, russian, unknown } )
+		{
+			loaded.push_back( { .dictionary = dictionary, .styles = nullptr, .name = "Test" } );
+		}
+		const auto             set = std::make_shared<const lg::lookup::DictionarySet>( std::move( loaded ) );
+		lg::lookup::Translator translator;
+		const auto             from = [&]( std::string_view text ) {
+			std::vector<std::uint16_t> dictionaries;
+			for ( const auto& entry : translator.lookup( set, text ).terms )
+			{
+				for ( const auto& definition : entry.definitions )
+				{
+					dictionaries.push_back( definition.dictionary );
+				}
+			}
+			std::ranges::sort( dictionaries );
+			return dictionaries;
+		};
+		test::expect( from( "Москва" ) == std::vector<std::uint16_t>{ 1 } );
+		test::expect( from( "東京" ) == std::vector<std::uint16_t>{ 0, 2 } );
 	} );
 
 } // namespace

@@ -6,6 +6,9 @@
 #ifdef LEXIGLANCE_PLATFORM_WINDOWS
 	#include "windows/WindowsBackend.h"
 #endif
+#ifdef LEXIGLANCE_PLATFORM_MACOS
+	#include "macos/MacBackend.h"
+#endif
 
 namespace lexiglance::platform
 {
@@ -16,6 +19,8 @@ namespace lexiglance::platform
 		return createX11Backend();
 #elifdef LEXIGLANCE_PLATFORM_WINDOWS
 		return createWindowsBackend();
+#elifdef LEXIGLANCE_PLATFORM_MACOS
+		return createMacBackend();
 #else
 		return fail( "this platform has no desktop integration yet (see docs/porting.md)" );
 #endif

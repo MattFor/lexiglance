@@ -7,6 +7,7 @@
 #include "VcRedist.h"
 
 #include <lexiglance/config/Keys.h>
+#include <lexiglance/core/Health.h>
 #include <lexiglance/core/Json.h>
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
@@ -15,15 +16,19 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QDateTime>
+#include <QDir>
 #include <QEvent>
 #include <QFile>
+#include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QHash>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -117,6 +122,51 @@ namespace lexiglance::gui
 			return text.left( space > 10 ? space : 30 ).remove( QRegularExpression( QStringLiteral( "[,、]$" ) ) ) + QStringLiteral( "…" );
 		}
 
+		// Every download that failed, grouped by what went wrong, so being offline reads as one line, not ten.
+		QString failureText( const std::vector<std::pair<QString, QString>>& failures )
+		{
+			QStringList                 errors;
+			QHash<QString, QStringList> names;
+			for ( const auto& [name, error] : failures )
+			{
+				if ( !names.contains( error ) )
+				{
+					errors << error;
+				}
+				if ( !names[error].contains( name ) )
+				{
+					names[error] << name;
+				}
+			}
+			QString text;
+			for ( const QString& error : errors )
+			{
+				text += QStringLiteral( "\n• %1: %2" ).arg( names[error].join( QStringLiteral( ", " ) ), error );
+			}
+			return text;
+		}
+
+		// What a downloaded file is for, in the list of failed downloads.
+		QString fileLabel( const QString& target, const QString& redist )
+		{
+			if ( target == ocr_install::runtimePackedPath() )
+			{
+				return QStringLiteral( "ONNX Runtime" );
+			}
+			if ( target == redist )
+			{
+				return QStringLiteral( "Visual C++ Redistributable" );
+			}
+			return QDir::fromNativeSeparators( target ).contains( QStringLiteral( "/translation/" ) ) ? QStringLiteral( "translation models" ) : QStringLiteral( "OCR models" );
+		}
+
+		void setPrimary( QPushButton* button, bool primary )
+		{
+			button->setProperty( "primary", primary );
+			button->style()->unpolish( button );
+			button->style()->polish( button );
+		}
+
 		void styleBar( QProgressBar* bar )
 		{
 			bar->setTextVisible( true );
@@ -156,7 +206,7 @@ namespace lexiglance::gui
 		bool                                                    finishing           = false;
 		std::int64_t                                            import_job          = -1;
 		QString                                                 import_name;
-		QString                                                 failure;
+		std::vector<std::pair<QString, QString>>                failures; // what, why
 		QString                                                 runtime;
 		QString                                                 archive;
 	};
@@ -169,7 +219,6 @@ namespace lexiglance::gui
 		card_( new QFrame( this ) ),
 		pages_( new QStackedWidget() ),
 		welcome_title_( new QLabel() ),
-		lock_hint_( new QLabel() ),
 		continue_( new QPushButton( QStringLiteral( "Continue" ) ) ),
 		skip_( new QPushButton( QStringLiteral( "Skip for now" ) ) ),
 		install_status_( new QLabel() ),
@@ -179,12 +228,18 @@ namespace lexiglance::gui
 		dict_bar_( new QProgressBar() ),
 		ocr_label_( new QLabel( QStringLiteral( "OCR and runtime" ) ) ),
 		ocr_bar_( new QProgressBar() ),
+		ocr_box_( new QCheckBox( QStringLiteral( "Read text in games and videos too (OCR)" ) ) ),
+		ocr_note_( new QLabel( QStringLiteral( "For games, videos and images, where a program doesn't share its text. If you skip it now, it's on the Scanning page later." ) ) ),
 		translation_box_( new QCheckBox( QStringLiteral( "Translate sentences into English too" ) ) ),
 		translation_note_( new QLabel() ),
 		tips_( new QLabel() ),
+		continue_anyway_( new QPushButton( QStringLiteral( "Continue while it downloads" ) ) ),
 		done_blurb_( new QLabel() ),
+		permissions_( new QFrame() ),
+		permission_rows_( new QVBoxLayout() ),
 		practice_( new QTextBrowser() ),
 		practice_status_( new QLabel() ),
+		downloads_note_( new QLabel() ),
 		done_( new QPushButton( QStringLiteral( "Get started" ) ) )
 	{
 		hide();
@@ -218,7 +273,7 @@ namespace lexiglance::gui
 		welcome_title_->setWordWrap( true );
 		welcome_layout->addWidget( welcome_title_ );
 
-		auto* blurb = new QLabel( QStringLiteral( "A pop-up dictionary for reading in the languages you learn, in any program." ) );
+		auto* blurb = new QLabel( QStringLiteral( "A pop-up dictionary for the languages you're learning, in any program." ) );
 		blurb->setAlignment( Qt::AlignHCenter );
 		blurb->setWordWrap( true );
 		welcome_layout->addWidget( blurb );
@@ -234,16 +289,12 @@ namespace lexiglance::gui
 		auto* features = new QVBoxLayout();
 		features->setContentsMargins( 20, 14, 20, 4 );
 		features->setSpacing( 12 );
-		features->addWidget( feature( QStringLiteral( "edit-find" ), QStringLiteral( "Point at a word" ), QStringLiteral( "Hold a key over text anywhere: a browser, a chat, a game, a video. A pop-up will show you exactly what it means." ) ) );
-		features->addWidget( feature( QStringLiteral( "preferences-desktop-locale" ), QStringLiteral( "Whole sentences in English" ), QStringLiteral( "Hold one more key and the sentence is translated, locally on this computer." ) ) );
-		features->addWidget( feature( QStringLiteral( "accessories-dictionary" ), QStringLiteral( "Dictionaries ready to use" ), QStringLiteral( "For %1. Easily downloadable right from the program." ).arg( listed( offered ) ) ) );
+		features->addWidget( feature( QStringLiteral( "edit-find" ), QStringLiteral( "Point at a word" ), QStringLiteral( "Hold a key over text anywhere: a browser, a chat, a game, a video. A popup shows what it means." ) ) );
+		features->addWidget( feature( QStringLiteral( "preferences-desktop-locale" ), QStringLiteral( "Whole sentences in English" ), QStringLiteral( "Hold one more key and the sentence is translated, right on this computer." ) ) );
+		features->addWidget( feature( QStringLiteral( "accessories-dictionary" ), QStringLiteral( "Dictionaries ready to use" ), QStringLiteral( "For %1. Setup downloads them for you in the next step." ).arg( listed( offered ) ) ) );
 		features->addWidget( feature( QStringLiteral( "document-send" ), QStringLiteral( "Keep what you learn" ), QStringLiteral( "Send words to Anki along with the sentence they came from." ) ) );
 		welcome_layout->addLayout( features );
 
-		lock_hint_->setWordWrap( true );
-		lock_hint_->setAlignment( Qt::AlignHCenter );
-		lock_hint_->setEnabled( false );
-		welcome_layout->addWidget( lock_hint_ );
 		welcome_layout->addStretch( 1 );
 		auto* welcome_footer = new QHBoxLayout();
 		welcome_footer->addWidget( skip_ );
@@ -261,8 +312,8 @@ namespace lexiglance::gui
 		languages_title->setFont( title_font );
 		languages_title->setWordWrap( true );
 		languages_layout->addWidget( languages_title );
-		auto* languages_blurb = new QLabel( QStringLiteral( "The recommended dictionaries of each, and what reads its text from the screen, are downloaded next. "
-		                                                    "Languages can be added or turned off later on the Scanning page." ) );
+		auto* languages_blurb = new QLabel( QStringLiteral( "Setup downloads the recommended dictionaries for each language you tick. You can change your "
+		                                                    "languages later on the Scanning page." ) );
 		languages_blurb->setWordWrap( true );
 		languages_layout->addWidget( languages_blurb );
 
@@ -296,6 +347,12 @@ namespace lexiglance::gui
 		list_layout->addStretch( 1 );
 		scroll->setWidget( list_host );
 		languages_layout->addWidget( scroll, 1 );
+		ocr_box_->setChecked( true );
+		languages_layout->addWidget( ocr_box_ );
+		ocr_note_->setWordWrap( true );
+		ocr_note_->setEnabled( false );
+		ocr_note_->setContentsMargins( 26, 0, 0, 6 );
+		languages_layout->addWidget( ocr_note_ );
 		translation_box_->setChecked( true );
 		languages_layout->addWidget( translation_box_ );
 		translation_note_->setWordWrap( true );
@@ -322,7 +379,7 @@ namespace lexiglance::gui
 		install_title->setFont( title_font );
 		install_layout->addWidget( install_title );
 		install_status_->setWordWrap( true );
-		install_status_->setText( QStringLiteral( "Preparing downloads..." ) );
+		install_status_->setText( QStringLiteral( "Getting ready..." ) );
 		install_layout->addWidget( install_status_ );
 
 		styleBar( overall_bar_ );
@@ -344,17 +401,15 @@ namespace lexiglance::gui
 		install_layout->addSpacing( 12 );
 		install_layout->addWidget( tips_ );
 
-		auto* install_continue = new QPushButton( QStringLiteral( "Continue anyway" ) );
-		install_continue->setObjectName( QStringLiteral( "setupContinueAnyway" ) );
-		install_continue->setProperty( "primary", true );
-		install_continue->hide();
+		// There from the start: offline, every download waits for the connection to time out.
+		continue_anyway_->setToolTip( QStringLiteral( "The downloads keep going while you try Lexiglance out." ) );
 		auto* install_footer = new QHBoxLayout();
 		install_footer->addStretch( 1 );
-		install_footer->addWidget( install_continue );
+		install_footer->addWidget( continue_anyway_ );
 		install_layout->addStretch( 1 );
 		install_layout->addLayout( install_footer );
 		pages_->addWidget( install_page );
-		connect( install_continue, &QPushButton::clicked, this, [this] { showPage( Page::Done ); } );
+		connect( continue_anyway_, &QPushButton::clicked, this, [this] { showPage( Page::Done ); } );
 
 		// --- Done ---
 		auto* done_page   = new QWidget();
@@ -372,6 +427,16 @@ namespace lexiglance::gui
 		done_blurb_->setAlignment( Qt::AlignHCenter );
 		done_blurb_->setTextFormat( Qt::RichText );
 		done_layout->addWidget( done_blurb_ );
+		permissions_->setObjectName( QStringLiteral( "healthRow" ) );
+		auto* permissions_layout = new QVBoxLayout( permissions_ );
+		auto* permissions_text   = new QLabel( QStringLiteral( "<b>First, allow Lexiglance in System Settings.</b> macOS needs your permission before Lexiglance can see "
+		                                                       "the trigger and read the text under the pointer. Turn Lexiglance on in each list, then reopen it if macOS asks." ) );
+		permissions_text->setWordWrap( true );
+		permissions_layout->addWidget( permissions_text );
+		permissions_layout->addLayout( permission_rows_ );
+		permissions_->hide();
+		done_layout->addSpacing( 6 );
+		done_layout->addWidget( permissions_ );
 		// A sentence to point at, in the language chosen first: text the daemon reads like any other program's.
 		QFont practice_font = practice_->font();
 		practice_font.setPointSizeF( practice_font.pointSizeF() * 1.7 );
@@ -390,8 +455,13 @@ namespace lexiglance::gui
 		practice_status_->setAlignment( Qt::AlignHCenter );
 		practice_status_->setTextFormat( Qt::RichText );
 		done_layout->addWidget( practice_status_ );
+		downloads_note_->setWordWrap( true );
+		downloads_note_->setAlignment( Qt::AlignHCenter );
+		downloads_note_->hide();
+		done_layout->addSpacing( 6 );
+		done_layout->addWidget( downloads_note_ );
 		done_layout->addStretch( 1 );
-		auto* later = new QLabel( QStringLiteral( "Everything else is explained in Help, at the bottom of the sidebar." ) );
+		auto* later = new QLabel( QStringLiteral( "Everything else is in Help, at the bottom of the sidebar." ) );
 		later->setAlignment( Qt::AlignHCenter );
 		later->setEnabled( false );
 		done_layout->addWidget( later );
@@ -447,16 +517,16 @@ namespace lexiglance::gui
 			}
 			if ( name == "trigger.changed" && params["held"].asBool() && !tried_ )
 			{
-				practice_status_->setText( QStringLiteral( "Now point at a word of the sentence." ) );
+				practice_status_->setText( QStringLiteral( "Now point at a word in the sentence." ) );
 			}
 			else if ( name == "capture.result" && params["found"].asBool() && params["entries"].asInt() > 0 )
 			{
 				tried_ = true;
-				practice_status_->setText( QStringLiteral( "<span style=\"color:#3fa45b; font-weight:600\">✓ It works.</span> It does the same in every program." ) );
+				practice_status_->setText( QStringLiteral( "<span style=\"color:#3fa45b; font-weight:600\">✓ It works.</span> Do the same in any program." ) );
 			}
 			else if ( name == "capture.result" && !tried_ )
 			{
-				practice_status_->setText( QStringLiteral( "<span style=\"color:#d19a1f\">Nothing found there</span>: point at the middle of a word." ) );
+				practice_status_->setText( dicts_pending_ ? QStringLiteral( "<span style=\"color:#d19a1f\">Nothing found yet</span>: the dictionary is still downloading." ) : QStringLiteral( "<span style=\"color:#d19a1f\">Nothing found there.</span> Point at the middle of a word." ) );
 			}
 		} );
 		context_.client->onConnection( [this]( bool connected ) {
@@ -465,6 +535,16 @@ namespace lexiglance::gui
 				importDone( QStringLiteral( "Lexiglance stopped during the import" ) );
 			}
 		} );
+
+#ifdef Q_OS_MACOS
+		// Back from System Settings.
+		connect( qApp, &QGuiApplication::applicationStateChanged, this, [this]( Qt::ApplicationState state ) {
+			if ( state == Qt::ApplicationActive && isVisible() && pages_->currentIndex() == static_cast<int>( Page::Done ) )
+			{
+				refreshPermissions();
+			}
+		} );
+#endif
 
 		parent->installEventFilter( this );
 		practice_->installEventFilter( this );
@@ -477,16 +557,14 @@ namespace lexiglance::gui
 		unlock_at_ms_ = lock_seconds > 0 ? QDateTime::currentMSecsSinceEpoch() + static_cast<qint64>( lock_seconds ) * 1000 : 0;
 		installing_   = false;
 		resetProgress();
-		if ( auto* button = findChild<QPushButton*>( QStringLiteral( "setupContinueAnyway" ) ) )
-		{
-			button->hide();
-		}
 		skip_->setVisible( !required_ );
 		const auto& cfg       = context_.settings->config();
 		const bool  first_run = !applicationMemory().value( QStringLiteral( "setup/completed" ) ).toBool();
+		// Languages already chosen once (a restart during the downloads): as they were chosen.
+		const bool chosen = applicationMemory().value( QStringLiteral( "setup/chosen" ) ).toBool();
 		for ( std::size_t i = 0; i < language_boxes_.size(); ++i )
 		{
-			if ( first_run )
+			if ( first_run && !chosen )
 			{
 				language_boxes_[i]->setChecked( language_codes_[i] == cfg.language || ( cfg.language.empty() && language_codes_[i] == "ja" ) );
 			}
@@ -502,36 +580,49 @@ namespace lexiglance::gui
 		updateTranslationBox();
 		updateKeys();
 		updatePractice();
-		showPage( Page::Welcome );
+		// Back after a restart (macOS's Quit & Reopen for a permission, or during the downloads): where it was left.
+		Page resume = Page::Welcome;
+		if ( first_run && applicationMemory().value( QStringLiteral( "setup/installed" ) ).toBool() )
+		{
+			resume = Page::Done;
+		}
+		else if ( first_run && chosen )
+		{
+			resume = Page::Languages;
+		}
+		showPage( resume );
+		continue_->setText( QStringLiteral( "Continue" ) );
+		continue_->setEnabled( !locked() );
+		skip_->setEnabled( !locked() );
 		if ( locked() )
 		{
-			lock_hint_->setText(
-					required_ ? QStringLiteral( "This card stays for a few seconds so setup is not closed by accident. Setup cannot be skipped." )
-					          : QStringLiteral( "This card stays for a few seconds so setup is not closed by accident." )
-			);
-			lock_hint_->show();
-			continue_->setEnabled( false );
-			skip_->setEnabled( false );
-			const int remaining = static_cast<int>( unlock_at_ms_ - QDateTime::currentMSecsSinceEpoch() );
-			QTimer::singleShot( std::max( 0, remaining ), this, [this] {
-				lock_hint_->hide();
+			// The seconds left on the button, which says why it can't be pressed yet.
+			auto*      countdown = new QTimer( this );
+			const auto tick      = [this, countdown] {
+				if ( const qint64 left = ( unlock_at_ms_ - QDateTime::currentMSecsSinceEpoch() + 999 ) / 1000; left > 0 )
+				{
+					continue_->setText( QStringLiteral( "Continue (%1)" ).arg( left ) );
+					return;
+				}
+				countdown->deleteLater();
+				continue_->setText( QStringLiteral( "Continue" ) );
 				continue_->setEnabled( true );
 				skip_->setEnabled( true );
-				continue_->setFocus();
-			} );
-		}
-		else
-		{
-			lock_hint_->hide();
-			continue_->setEnabled( true );
-			skip_->setEnabled( true );
+				if ( QPushButton* button = primaryButton() )
+				{
+					button->setFocus();
+				}
+			};
+			connect( countdown, &QTimer::timeout, this, tick );
+			countdown->start( 250 );
+			tick();
 		}
 		place();
 		show();
 		raise();
-		if ( !locked() )
+		if ( QPushButton* button = primaryButton(); button != nullptr && !locked() )
 		{
-			continue_->setFocus();
+			button->setFocus();
 		}
 	}
 
@@ -544,17 +635,22 @@ namespace lexiglance::gui
 		dict_label_->show();
 		ocr_label_->show();
 		setOverall( 0, 1, QStringLiteral( "Overall" ) );
+		continue_anyway_->setText( QStringLiteral( "Continue while it downloads" ) );
+		setPrimary( continue_anyway_, false );
+		continue_anyway_->show();
+		downloads_note_->hide();
+		tips_->show();
 		dict_label_->setText( QStringLiteral( "Dictionaries" ) );
 		dict_label_->setEnabled( false );
 		dict_bar_->setRange( 0, 1 );
 		dict_bar_->setValue( 0 );
 		dict_bar_->setFormat( QStringLiteral( "%p%" ) );
-		ocr_label_->setText( QStringLiteral( "OCR and runtime" ) );
+		ocr_label_->setText( QStringLiteral( "OCR and translation models" ) );
 		ocr_label_->setEnabled( false );
 		ocr_bar_->setRange( 0, 1 );
 		ocr_bar_->setValue( 0 );
 		ocr_bar_->setFormat( QStringLiteral( "%p%" ) );
-		install_status_->setText( QStringLiteral( "Preparing downloads..." ) );
+		install_status_->setText( QStringLiteral( "Getting ready..." ) );
 	}
 
 	void SetupWizard::setOverall( int value, int maximum, const QString& text )
@@ -564,14 +660,39 @@ namespace lexiglance::gui
 		overall_bar_->setRange( 0, std::max( 1, maximum ) );
 		overall_bar_->setValue( std::clamp( value, 0, overall_bar_->maximum() ) );
 		overall_bar_->setFormat( QStringLiteral( "%v / %m" ) );
+		if ( installing_ )
+		{
+			downloads_note_->setText( QStringLiteral( "Still downloading in the background: %1 of %2 files done." ).arg( overall_bar_->value() ).arg( overall_bar_->maximum() ) );
+			if ( downloads_note_->isHidden() )
+			{
+				downloads_note_->show();
+				place();
+			}
+		}
+	}
+
+	QPushButton* SetupWizard::primaryButton() const
+	{
+		for ( auto* button : pages_->currentWidget()->findChildren<QPushButton*>() )
+		{
+			if ( button->property( "primary" ).toBool() && button->isEnabled() && button->isVisibleTo( pages_->currentWidget() ) )
+			{
+				return button;
+			}
+		}
+		return nullptr;
 	}
 
 	void SetupWizard::place()
 	{
 		setGeometry( parentWidget()->rect() );
 		card_->ensurePolished();
-		const int width  = std::min( 580, this->width() - 48 );
-		const int height = std::min( 560, this->height() - 48 );
+		// Its cached height knows nothing of what was shown or hidden on a page since.
+		card_->layout()->invalidate();
+		const int width = std::min( 580, this->width() - 48 );
+		// As tall as the tallest page needs: at least the usual 560, at most the window.
+		const int room   = this->height() - 48;
+		const int height = std::clamp( card_->heightForWidth( width ), std::min( 560, room ), room );
 		card_->setGeometry( ( this->width() - width ) / 2, ( this->height() - height ) / 2, width, height );
 	}
 
@@ -616,6 +737,16 @@ namespace lexiglance::gui
 			}
 			return;
 		}
+		// Buttons outside a dialog take only Space: Enter presses the one in focus, or the page's main one.
+		if ( event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter )
+		{
+			auto* focused = qobject_cast<QPushButton*>( focusWidget() );
+			if ( QPushButton* button = focused != nullptr ? focused : primaryButton() )
+			{
+				button->click();
+			}
+			return;
+		}
 		QWidget::keyPressEvent( event );
 	}
 
@@ -626,17 +757,70 @@ namespace lexiglance::gui
 
 	bool SetupWizard::dismissible() const
 	{
-		return !required_ && !locked() && !installing_;
+		return !required_ && !locked();
 	}
 
 	void SetupWizard::showPage( Page page )
 	{
 		pages_->setCurrentIndex( static_cast<int>( page ) );
 		place();
+		if ( QPushButton* button = primaryButton(); button != nullptr && isVisible() )
+		{
+			button->setFocus();
+		}
 		if ( page == Page::Done )
 		{
+			applicationMemory().setValue( QStringLiteral( "setup/installed" ), true );
 			updatePractice();
+#ifdef Q_OS_MACOS
+			refreshPermissions();
+#endif
 		}
+	}
+
+	void SetupWizard::refreshPermissions()
+	{
+		context_.client->call(
+				"health",
+				"{}",
+				[this]( const json::Value* report, const QString& ) {
+					while ( QLayoutItem* item = permission_rows_->takeAt( 0 ) )
+					{
+						delete item->widget();
+						delete item;
+					}
+					// A row for each list in System Settings, which several checks can point at.
+					QStringList listed;
+					for ( const health::Check& check : report != nullptr ? health::read( *report ) : std::vector<health::Check>() )
+					{
+						const QString action = qs( check.fix );
+						if ( check.status == health::Severity::Ok || !action.startsWith( QStringLiteral( "open-privacy-" ) ) || listed.contains( action ) )
+						{
+							continue;
+						}
+						listed << action;
+						auto* row    = new QWidget();
+						auto* layout = new QHBoxLayout( row );
+						layout->setContentsMargins( 0, 0, 0, 0 );
+						// Named as the list is in System Settings, where it is looked for.
+						static const QHash<QString, QString> lists{
+							{ QStringLiteral( "open-privacy-accessibility" ), QStringLiteral( "Accessibility" ) },
+							{ QStringLiteral( "open-privacy-input-monitoring" ), QStringLiteral( "Input Monitoring" ) },
+							{ QStringLiteral( "open-privacy-screen-recording" ), QStringLiteral( "Screen & System Audio Recording" ) },
+						};
+						auto* title = new QLabel( lists.value( action, qs( check.title ) ) );
+						title->setToolTip( qs( check.detail ) );
+						auto* open = new QPushButton( QStringLiteral( "Open System Settings" ) );
+						connect( open, &QPushButton::clicked, this, [action] { openPrivacySettings( action ); } );
+						layout->addWidget( title, 1 );
+						layout->addWidget( open );
+						permission_rows_->addWidget( row );
+					}
+					permissions_->setVisible( permission_rows_->count() > 0 );
+					place();
+				},
+				30000
+		);
 	}
 
 	std::vector<const lang::Language*> SetupWizard::selectedLanguages() const
@@ -697,11 +881,12 @@ namespace lexiglance::gui
 		{
 			config.language = first;
 		}
-		if ( config.scan.ocr == config::OcrMode::Off )
+		if ( ocr_box_->isChecked() && config.scan.ocr == config::OcrMode::Off )
 		{
 			config.scan.ocr = config::OcrMode::Fallback;
 		}
 		context_.settings->commit();
+		applicationMemory().setValue( QStringLiteral( "setup/chosen" ), true );
 	}
 
 	void SetupWizard::startInstall()
@@ -709,7 +894,6 @@ namespace lexiglance::gui
 		installing_ = true;
 		showPage( Page::Install );
 		resetProgress();
-		install_status_->setText( QStringLiteral( "Preparing downloads..." ) );
 
 		context_.client->call( "dictionaries.list", "{}", [this]( const json::Value* result, const QString& ) {
 			std::vector<QString> installed_titles;
@@ -743,7 +927,7 @@ namespace lexiglance::gui
 				} );
 			}
 
-			batch->ocr = ocr_install::paddleFiles( selectedLanguages() );
+			batch->ocr = ocr_box_->isChecked() ? ocr_install::paddleFiles( selectedLanguages() ) : std::vector<std::pair<QUrl, QString>>();
 			batch->ocr = reinstall_ ? ocr_install::toDownload( std::move( batch->ocr ) ) : ocr_install::missingOnly( std::move( batch->ocr ) );
 			// The translation models come with them, over the same runtime.
 			if ( translation_box_->isChecked() )
@@ -753,7 +937,11 @@ namespace lexiglance::gui
 			batch->runtime = ocr_install::ocrPath( "runtime" );
 			batch->archive = ocr_install::runtimeArchive();
 			redist_.clear();
-			ocr_install::appendRuntime( batch->ocr, &redist_, this, false, reinstall_ );
+			// ONNX Runtime runs OCR and translation alike.
+			if ( ocr_box_->isChecked() || !batch->ocr.empty() )
+			{
+				ocr_install::appendRuntime( batch->ocr, &redist_, this, false, reinstall_ );
+			}
 			const QString packed  = ocr_install::runtimePackedPath();
 			batch->unpack_runtime = !packed.isEmpty() && std::ranges::any_of( batch->ocr, [&]( const auto& file ) { return file.second == packed; } );
 			beginBatch( batch );
@@ -782,7 +970,13 @@ namespace lexiglance::gui
 			dict_label_->setText( QStringLiteral( "Dictionaries" ) );
 			dict_bar_->setRange( 0, 0 );
 		}
-		const QString models = translation_box_->isChecked() ? QStringLiteral( "OCR, translation and runtime" ) : QStringLiteral( "OCR and runtime" );
+		const bool    ocr         = ocr_box_->isChecked();
+		const bool    translation = translation_box_->isChecked() && translation_box_->isEnabled();
+		const QString models      = ocr ? ( translation ? QStringLiteral( "OCR and translation models" ) : QStringLiteral( "OCR models" ) ) : QStringLiteral( "Translation models" );
+		const bool    any_models  = ocr || translation || !batch->ocr.empty();
+		ocr_label_->setVisible( any_models );
+		ocr_bar_->setVisible( any_models );
+		dicts_pending_ = !batch->dicts.empty();
 		if ( batch->ocr.empty() )
 		{
 			ocr_label_->setText( models + QStringLiteral( " (already installed)" ) );
@@ -804,7 +998,8 @@ namespace lexiglance::gui
 			return;
 		}
 
-		install_status_->setText( translation_box_->isChecked() ? QStringLiteral( "Downloading dictionaries, OCR and translation models, and runtime together..." ) : QStringLiteral( "Downloading dictionaries, OCR models, and runtime together..." ) );
+		const auto files = batch->dicts.size() + batch->ocr.size();
+		install_status_->setText( QStringLiteral( "Downloading %1 %2..." ).arg( files ).arg( files == 1 ? QStringLiteral( "file" ) : QStringLiteral( "files" ) ) );
 
 		for ( std::size_t i = 0; i < batch->dicts.size(); ++i )
 		{
@@ -830,7 +1025,7 @@ namespace lexiglance::gui
 						( *batch->ocr_sizes )[i] = { received, total };
 						refreshProgress( batch );
 					},
-					[this, batch]( const QString& error ) { onOcrDownloadDone( batch, error ); }
+					[this, batch, name = fileLabel( batch->ocr[i].second, redist_ )]( const QString& error ) { onOcrDownloadDone( batch, name, error ); }
 			);
 		}
 	}
@@ -855,9 +1050,9 @@ namespace lexiglance::gui
 
 	void SetupWizard::onDictDownloadDone( const std::shared_ptr<InstallBatch>& batch, const QString& name, const QString& target, const QString& error )
 	{
-		if ( !error.isEmpty() && batch->failure.isEmpty() )
+		if ( !error.isEmpty() )
 		{
-			batch->failure = QStringLiteral( "%1: %2" ).arg( name, error );
+			batch->failures.emplace_back( name, error );
 		}
 		if ( batch->dict_downloads_left > 0 )
 		{
@@ -872,6 +1067,7 @@ namespace lexiglance::gui
 			--batch->dict_imports_left;
 			++batch->dict_finished;
 		}
+		dicts_pending_ = batch->dict_imports_left > 0;
 		refreshProgress( batch );
 		pumpImports( batch );
 		tryFinishBatch( batch );
@@ -905,15 +1101,16 @@ namespace lexiglance::gui
 	void SetupWizard::importDone( const QString& error )
 	{
 		const auto batch = std::exchange( import_batch_, {} );
-		if ( !error.isEmpty() && batch->failure.isEmpty() )
+		if ( !error.isEmpty() )
 		{
-			batch->failure = QStringLiteral( "%1: %2" ).arg( batch->import_name, error );
+			batch->failures.emplace_back( batch->import_name, error );
 		}
 		batch->importing = false;
 		if ( batch->dict_imports_left > 0 )
 		{
 			--batch->dict_imports_left;
 		}
+		dicts_pending_ = batch->dict_imports_left > 0;
 		++batch->dict_finished;
 		if ( !batch->dicts.empty() )
 		{
@@ -926,11 +1123,11 @@ namespace lexiglance::gui
 		tryFinishBatch( batch );
 	}
 
-	void SetupWizard::onOcrDownloadDone( const std::shared_ptr<InstallBatch>& batch, const QString& error )
+	void SetupWizard::onOcrDownloadDone( const std::shared_ptr<InstallBatch>& batch, const QString& name, const QString& error )
 	{
-		if ( !error.isEmpty() && batch->failure.isEmpty() )
+		if ( !error.isEmpty() )
 		{
-			batch->failure = error;
+			batch->failures.emplace_back( name, error );
 		}
 		if ( batch->ocr_downloads_left > 0 )
 		{
@@ -971,18 +1168,17 @@ namespace lexiglance::gui
 				ocr_bar_->setRange( 0, 1 );
 				ocr_bar_->setValue( 1 );
 				ocr_bar_->setFormat( QStringLiteral( "%p%" ) );
-				ocr_label_->setText( QStringLiteral( "OCR and runtime" ) );
 			}
 			setOverall( overall_bar_->maximum(), overall_bar_->maximum(), QStringLiteral( "Overall" ) );
 
 			if ( !redist_.isEmpty() )
 			{
 				const QString installer = std::exchange( redist_, QString() );
-				install_status_->setText( QStringLiteral( "Installing the Visual C++ Redistributable..." ) );
+				install_status_->setText( QStringLiteral( "Installing the Microsoft Visual C++ Redistributable, which ONNX Runtime needs..." ) );
 				vcredist::install( this, installer, [this]( const QString& redist_error ) {
 					if ( !redist_error.isEmpty() )
 					{
-						finishInstall( redist_error );
+						finishInstall( failureText( { { QStringLiteral( "Visual C++ Redistributable" ), redist_error } } ) );
 						return;
 					}
 					context_.client->startDaemon( true );
@@ -1008,9 +1204,9 @@ namespace lexiglance::gui
 			} );
 		};
 
-		if ( batch->failure.isEmpty() && batch->unpack_runtime )
+		if ( batch->failures.empty() && batch->unpack_runtime )
 		{
-			install_status_->setText( QStringLiteral( "Installing OCR runtime..." ) );
+			install_status_->setText( QStringLiteral( "Unpacking ONNX Runtime, which runs OCR and translation..." ) );
 			const QString installed = batch->runtime + "/" + ocr_install::runtimeLibraryName();
 			const auto    unpack    = [this, batch, after_runtime, installed] {
 				QString error = ocr_install::unpackRuntime( batch->runtime, batch->archive );
@@ -1020,7 +1216,7 @@ namespace lexiglance::gui
 					log::warn( "setup: {} (keeping the ONNX Runtime already installed)", ss( error ) );
 					error.clear();
 				}
-				after_runtime( error );
+				after_runtime( error.isEmpty() ? QString() : failureText( { { QStringLiteral( "ONNX Runtime" ), error } } ) );
 			};
 			// The daemon keeps onnxruntime.dll mapped; replace it only after that process has gone.
 			if ( QFile::exists( installed ) && context_.client->connected() )
@@ -1043,9 +1239,9 @@ namespace lexiglance::gui
 			return;
 		}
 
-		if ( !batch->failure.isEmpty() )
+		if ( !batch->failures.empty() )
 		{
-			after_runtime( batch->failure );
+			after_runtime( failureText( batch->failures ) );
 			return;
 		}
 		after_runtime( {} );
@@ -1067,28 +1263,37 @@ namespace lexiglance::gui
 		const auto&   config   = context_.settings->config();
 		const QString trigger  = chordText( config.scan.trigger ).toHtmlEscaped();
 		const QString sentence = config.translation.sentence_key.empty() ? QString() : qs( config::displayName( config.translation.sentence_key ) ).toHtmlEscaped();
-		translation_note_->setText( sentence.isEmpty() ? QStringLiteral( "Translated on this computer, nothing is sent anywhere. Faster full precision models are on the Translation page." ) : QStringLiteral( "Hold %1 with the trigger over a sentence to read it in English. Translated on this computer; "
-		                                                                                                                                                                                                        "faster full precision models are on the Translation page." )
-		                                                                                                                                                                                                .arg( sentence ) );
-		QString    tips = QStringLiteral( "<b>Meanwhile, how it works</b><table cellspacing=\"0\" cellpadding=\"3\" style=\"margin-top:6px\">" );
+		translation_note_->setText( sentence.isEmpty() ? QStringLiteral( "It's translated on this computer, so nothing you read is sent anywhere." ) : QStringLiteral( "Hold %1 with the trigger to see the sentence in English. It's translated on this computer, so nothing you read is sent anywhere." ).arg( sentence ) );
+		QString    tips = QStringLiteral( "<b>While you wait, here's how it works</b><table cellspacing=\"0\" cellpadding=\"3\" style=\"margin-top:6px\">" );
 		const auto tip  = [&]( const QString& what, const QString& how ) { tips += QStringLiteral( "<tr><td style=\"padding-right:14px\">%1</td><td>%2</td></tr>" ).arg( what, how ); };
 		tip( QStringLiteral( "Look up a word" ), QStringLiteral( "Hold <b>%1</b> and point at it" ).arg( trigger ) );
-		tip( QStringLiteral( "Select more characters" ), QStringLiteral( "Keep holding it and use the scroll wheel" ) );
+		tip( QStringLiteral( "Select more characters" ), QStringLiteral( "Keep holding it and turn the scroll wheel" ) );
 		if ( !sentence.isEmpty() )
 		{
 			tip( QStringLiteral( "Translate the sentence" ), QStringLiteral( "Hold <b>%1</b> as well" ).arg( sentence ) );
 		}
-		tip( QStringLiteral( "In the popup" ), QStringLiteral( "Scroll for more entries, click one to copy it" ) );
+		tip( QStringLiteral( "Use the popup" ), QStringLiteral( "Move onto it before you let go. Scroll for more entries, click one to copy it" ) );
 		tips_->setText( tips + QStringLiteral( "</table>" ) );
-		done_blurb_->setText( sentence.isEmpty() ? QStringLiteral( "Hold <b>%1</b> and point at a word below." ).arg( trigger ) : QStringLiteral( "Hold <b>%1</b> and point at a word below. Then add <b>%2</b> to read the sentence in English." ).arg( trigger, sentence ) );
+		done_blurb_->setText( sentence.isEmpty() ? QStringLiteral( "Hold <b>%1</b> and point at a word below." ).arg( trigger ) : QStringLiteral( "Hold <b>%1</b> and point at a word below. Add <b>%2</b> to see the sentence in English." ).arg( trigger, sentence ) );
 	}
 
 	void SetupWizard::updatePractice()
 	{
 		const auto chosen = selectedLanguages();
 		tried_            = false;
-		practice_status_->setText( QStringLiteral( "<span style=\"color:gray\">Keep holding the key and use the scroll wheel to select more characters.</span>" ) );
-		practice_->setHtml( chosen.empty() ? QString() : QStringLiteral( "<p align=\"center\">%1</p>" ).arg( qs( chosen.front()->exampleSentence() ).toHtmlEscaped() ) );
+		practice_status_->setText( QStringLiteral( "<span style=\"color:gray\">Tip: keep holding the keys and turn the scroll wheel to select more characters.</span>" ) );
+		QString html;
+		if ( !chosen.empty() )
+		{
+			// The sentence, and words every general dictionary has.
+			QStringList words;
+			for ( const std::string_view word : chosen.front()->sampleWords() )
+			{
+				words << qs( word ).toHtmlEscaped();
+			}
+			html = QStringLiteral( "<p align=\"center\">%1</p><p align=\"center\">%2</p>" ).arg( qs( chosen.front()->exampleSentence() ).toHtmlEscaped(), words.join( QStringLiteral( "&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;" ) ) );
+		}
+		practice_->setHtml( html );
 		fitPractice();
 	}
 
@@ -1105,25 +1310,43 @@ namespace lexiglance::gui
 
 	void SetupWizard::finishInstall( const QString& error )
 	{
-		installing_ = false;
+		installing_    = false;
+		dicts_pending_ = false;
 		// Translation models that came are loaded when next needed.
 		context_.client->call( "translation.reload" );
-		auto* continue_anyway = findChild<QPushButton*>( QStringLiteral( "setupContinueAnyway" ) );
 		if ( !error.isEmpty() )
 		{
-			log::warn( "setup: {}", ss( error ) );
-			install_status_->setText( QStringLiteral( "Something could not be downloaded: %1\n\nYou can finish setup and install the rest from Dictionaries and Scanning." ).arg( error ) );
-			if ( continue_anyway != nullptr )
+			log::warn( "setup: {}", ss( QString( error ).replace( QStringLiteral( "\n• " ), QStringLiteral( "; " ) ).mid( 2 ) ) );
+			install_status_->setText( QStringLiteral( "Some downloads didn't work:%1\n\nGet them later on the Dictionaries, Scanning (OCR) and Translation pages." ).arg( error ) );
+			downloads_note_->setText( QStringLiteral( "Some downloads didn't work. Get them later on the Dictionaries, Scanning (OCR) and Translation pages." ) );
+			downloads_note_->show();
+			// Only what went wrong and the way on: the tips and the bars would push it out of the card, and a full bar reads as done.
+			tips_->hide();
+			for ( QWidget* widget : std::initializer_list<QWidget*>{ overall_label_, overall_bar_, dict_label_, dict_bar_, ocr_label_, ocr_bar_ } )
 			{
-				continue_anyway->show();
+				widget->hide();
 			}
+			continue_anyway_->setText( QStringLiteral( "Continue anyway" ) );
+			setPrimary( continue_anyway_, true );
+			if ( pages_->currentIndex() == static_cast<int>( Page::Install ) )
+			{
+				continue_anyway_->setFocus();
+			}
+			place();
 			return;
 		}
-		if ( continue_anyway != nullptr )
+		continue_anyway_->hide();
+		// Already trying it (Continue while it downloads): only say so.
+		if ( pages_->currentIndex() == static_cast<int>( Page::Done ) )
 		{
-			continue_anyway->hide();
+			downloads_note_->setText( QStringLiteral( "All downloads finished." ) );
+			return;
 		}
-		showPage( Page::Done );
+		downloads_note_->hide();
+		if ( isVisible() )
+		{
+			showPage( Page::Done );
+		}
 	}
 
 	void SetupWizard::complete()

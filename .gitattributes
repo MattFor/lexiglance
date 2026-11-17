@@ -4,3 +4,4 @@
 *.onnx binary
 *.zip binary
 *.bmp binary
+*.icns binary

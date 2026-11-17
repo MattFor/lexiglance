@@ -81,7 +81,7 @@ namespace lexiglance::gui
 		Page( std::move( context ), parent ),
 		installer_( new translation_install::Installer( &client(), this ) ),
 		enabled_( new QCheckBox( QStringLiteral( "Translate sentences into English" ) ) ),
-		selections_( new QCheckBox( QStringLiteral( "Also selected text of more than a word (when selections are looked up)" ) ) ),
+		selections_( new QCheckBox( QStringLiteral( "Also translate selected text longer than a word (when selections are looked up)" ) ) ),
 		key_( new QComboBox() ),
 		precision_( new QComboBox() ),
 		table_( new QTreeWidget() ),
@@ -112,13 +112,13 @@ namespace lexiglance::gui
 
 		auto* models_box    = new QGroupBox( QStringLiteral( "Models" ) );
 		auto* models_layout = new QVBoxLayout( models_box );
-		models_layout->addWidget( note( QStringLiteral( "Tick the languages to translate, and the weights each one translates with. Both kinds can be downloaded at once, and a language "
-		                                                "translates with the other until the ticked ones are here. Select rows to download them again, or to remove what they do not use." ) ) );
+		models_layout->addWidget( note( QStringLiteral( "Tick the languages to translate, and Compact or Full precision for each. Until the ticked kind is downloaded, a language "
+		                                                "translates with the other one if you have it. Select rows to download them again, or to remove what they don't use." ) ) );
 		precision_->addItem( QStringLiteral( "Compact: about 115 MB each" ), QString::fromUtf8( translate::precisionName( translate::Precision::Compact ) ) );
 		precision_->addItem( QStringLiteral( "Full precision: about 440 MB each, faster and a little more accurate" ), QString::fromUtf8( translate::precisionName( translate::Precision::Full ) ) );
-		precision_->setToolTip( QStringLiteral( "Sets every language below at once; each can then be ticked on its own. Compact models have their weights rounded to eight bits: a "
-		                                        "quarter of the download and about half the memory. Full precision ones translate about twice as fast on most processors, a little "
-		                                        "more accurately, but take about twice the memory while loaded (up to a gigabyte)." ) );
+		precision_->setToolTip( QStringLiteral( "Sets every language below at once; you can then change each one in the table. Compact models round their weights to eight bits: "
+		                                        "a quarter of the download and about half the memory. Full precision models translate about twice as fast on most processors "
+		                                        "and a little more accurately, but use about twice the memory while loaded (up to 1 GB)." ) );
 		auto* precision_form = new QFormLayout();
 		precision_form->addRow( QStringLiteral( "All languages" ), precision_ );
 		models_layout->addLayout( precision_form );
@@ -131,7 +131,7 @@ namespace lexiglance::gui
 		models_layout->addLayout( toolbar );
 
 		table_->setColumnCount( 5 );
-		table_->setHeaderLabels( { QStringLiteral( "Language" ), QStringLiteral( "Model" ), QStringLiteral( "Compact" ), QStringLiteral( "Full precision" ), QStringLiteral( "State" ) } );
+		table_->setHeaderLabels( { QStringLiteral( "Language" ), QStringLiteral( "Model" ), QStringLiteral( "Compact" ), QStringLiteral( "Full precision" ), QStringLiteral( "Status" ) } );
 		table_->setRootIsDecorated( false );
 		table_->setAlternatingRowColors( true );
 		table_->setUniformRowHeights( true );
@@ -141,6 +141,9 @@ namespace lexiglance::gui
 		{
 			table_->header()->setSectionResizeMode( column, QHeaderView::ResizeToContents );
 		}
+		// Qt sizes cells for the base style's check box, smaller than the style sheet's, which cut a size beside one short
+		// ("115 ..."): both kinds of weights are as wide as the wider heading.
+		table_->header()->setMinimumSectionSize( table_->header()->sectionSizeHint( full_column ) );
 		for ( const lang::Language* language : lang::languages() )
 		{
 			if ( language->translationModel().empty() )
@@ -408,7 +411,7 @@ namespace lexiglance::gui
 			// A language turned off in Scanning is never read, so its model is not needed either.
 			if ( unused )
 			{
-				state += QStringLiteral( " (the language is off in Scanning)" );
+				state += QStringLiteral( " (language off in Scanning)" );
 			}
 			const QSignalBlocker blocker( table_ );
 			if ( item->text( status_column ) != state )
@@ -426,7 +429,7 @@ namespace lexiglance::gui
 					item->setText( column, size );
 				}
 				item->setForeground( column, unused || !here ? muted : plain );
-				item->setToolTip( column, QStringLiteral( "%1 weights: %2. Tick them to translate %3 with them." ).arg( precisionLabel( weights ), here ? QStringLiteral( "downloaded" ) : QStringLiteral( "not downloaded" ), qs( language.name() ) ) );
+				item->setToolTip( column, QStringLiteral( "%1 weights (%2). Tick to use them for %3." ).arg( precisionLabel( weights ), here ? QStringLiteral( "downloaded" ) : QStringLiteral( "not downloaded" ), qs( language.name() ) ) );
 			}
 			for ( const int column : { language_column, model_column, status_column } )
 			{
@@ -448,7 +451,7 @@ namespace lexiglance::gui
 		// The selected models: those not here yet, or all of them afresh when they all are.
 		again_->setText( absent > 0 ? QStringLiteral( "Download selected (%1)" ).arg( translation_install::megabytes( absent ) ) : QStringLiteral( "Download again" ) );
 		again_->setEnabled( !busy && !chosen.empty() );
-		again_->setToolTip( absent > 0 ? QStringLiteral( "Downloads the selected models that are not here yet" ) : QStringLiteral( "Downloads the selected models afresh, replacing what is here" ) );
+		again_->setToolTip( absent > 0 ? QStringLiteral( "Downloads the selected models you don't have yet" ) : QStringLiteral( "Downloads the selected models again, replacing your copies" ) );
 
 		// Remove says what it would delete: the weights a language has but does not translate with, else its model.
 		const auto    deletable = removable();
@@ -465,10 +468,10 @@ namespace lexiglance::gui
 				}
 			}
 		}
-		remove_->setText( deletable.empty() ? QStringLiteral( "Remove" ) : spare ? QStringLiteral( "Remove the weights not in use (%1)" ).arg( translation_install::megabytes( bytes ) )
+		remove_->setText( deletable.empty() ? QStringLiteral( "Remove" ) : spare ? QStringLiteral( "Remove unused weights (%1)" ).arg( translation_install::megabytes( bytes ) )
 		                                                                         : QStringLiteral( "Remove %1 (%2)" ).arg( deletable.size() == 1 ? QStringLiteral( "the model" ) : QStringLiteral( "the models" ), translation_install::megabytes( bytes ) ) );
 		remove_->setEnabled( !busy && !deletable.empty() );
-		remove_->setToolTip( spare ? QStringLiteral( "Deletes the kind of weights the selected languages are not translating with; what they do translate with stays" ) : QStringLiteral( "Deletes the selected models from this computer; they can be downloaded again" ) );
+		remove_->setToolTip( spare ? QStringLiteral( "Deletes the weights the selected languages don't translate with; the ones they use stay" ) : QStringLiteral( "Deletes the selected models from this computer; you can download them again" ) );
 	}
 
 	void TranslationPage::showDetails()
@@ -489,11 +492,11 @@ namespace lexiglance::gui
 		if ( translation_install::installed( language, other ) )
 		{
 			html += translation_install::installed( language, precision )
-			              ? QStringLiteral( " The %1 ones are here too, and can be removed." ).arg( precisionLabel( other ).toLower() )
-			              : QStringLiteral( " The %1 ones translate until they are." ).arg( precisionLabel( other ).toLower() );
+			              ? QStringLiteral( " The %1 ones are downloaded too; you can remove them." ).arg( precisionLabel( other ).toLower() )
+			              : QStringLiteral( " Until then, the %1 ones translate." ).arg( precisionLabel( other ).toLower() );
 		}
-		html += QStringLiteral( "<br>An <a href=\"https://github.com/Helsinki-NLP/Opus-MT\">OPUS-MT</a> model of the University of Helsinki (CC BY 4.0), "
-		                        "as <a href=\"https://huggingface.co/%1\">%1</a> converts it for ONNX Runtime, revision %2." )
+		html += QStringLiteral( "<br>An <a href=\"https://github.com/Helsinki-NLP/Opus-MT\">OPUS-MT</a> model from the University of Helsinki (CC BY 4.0), "
+		                        "converted for ONNX Runtime in <a href=\"https://huggingface.co/%1\">%1</a> (revision %2)." )
 		                .arg( qs( model.repository ).toHtmlEscaped(), qs( model.revision.substr( 0, 7 ) ) );
 		if ( const QStringList others = sharing( language, languages_ ); !others.isEmpty() )
 		{
@@ -635,7 +638,7 @@ namespace lexiglance::gui
 					test_button_->setEnabled( true );
 					if ( result == nullptr )
 					{
-						test_result_->setText( QStringLiteral( "No translation: %1" ).arg( error ) );
+						test_result_->setText( QStringLiteral( "Couldn't translate: %1" ).arg( error ) );
 						return;
 					}
 					const auto        took     = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - started ).count();

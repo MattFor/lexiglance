@@ -517,7 +517,7 @@ namespace lexiglance::platform
 				wake();
 			}
 
-			void post( std::move_only_function<void()> task ) override
+			void post( Task task ) override
 			{
 				{
 					const std::scoped_lock lock( tasks_mutex_ );
@@ -779,11 +779,11 @@ namespace lexiglance::platform
 					}
 					chord.append( chord.empty() ? "" : " + " ).append( names );
 				}
-				health::Check trigger{ .id = "trigger", .title = "Trigger keys" };
+				health::Check trigger{ .id = "trigger", .title = "Trigger" };
 				if ( chord_.empty() )
 				{
 					trigger.status = health::Severity::Error;
-					trigger.detail = "No trigger is set, so nothing is ever looked up.";
+					trigger.detail = "No trigger is set, so nothing can be looked up. Choose one on the Scanning page.";
 					trigger.fix    = "open-scanning";
 				}
 				else
@@ -803,7 +803,7 @@ namespace lexiglance::platform
 							{ .id     = "keyboard",
 							  .title  = "Keyboard state",
 							  .status = health::Severity::Info,
-							  .detail = "A key was recorded as held although it was not (or the other way round); this was corrected." }
+							  .detail = "Lexiglance thought a key was held when it wasn't (or the other way round). That's fixed now." }
 					);
 				}
 
@@ -812,7 +812,7 @@ namespace lexiglance::platform
 				{
 					( void )registerRawInput();
 					input.status = health::Severity::Warning;
-					input.detail = "Lexiglance was no longer receiving keyboard and mouse input, so the trigger could not be seen; it registered again.";
+					input.detail = "Lexiglance had stopped receiving keyboard and mouse input, so it couldn't see the trigger. It's receiving it again.";
 				}
 				else
 				{
@@ -821,14 +821,14 @@ namespace lexiglance::platform
 					if ( age < 0 )
 					{
 						input.status = interactive ? health::Severity::Error : health::Severity::Info;
-						input.detail = interactive ? "No keyboard or mouse event reached Lexiglance, not even the click that started this check."
-						                           : "None arrived since Lexiglance started. Move the mouse or press a key, then check again.";
+						input.detail = interactive ? "No keyboard or mouse events reached Lexiglance, not even the click that started this check. Restart Lexiglance."
+						                           : "None have arrived since Lexiglance started. Move the mouse or press a key, then check again.";
 						input.fix    = interactive ? "restart" : "";
 					}
 					else if ( interactive && age > 10 )
 					{
 						input.status = health::Severity::Error;
-						input.detail = std::format( "The click that started this check did not reach Lexiglance (the last event arrived {} s ago).", age );
+						input.detail = std::format( "The click that started this check didn't reach Lexiglance (the last event arrived {} s ago). Restart Lexiglance.", age );
 						input.fix    = "restart";
 					}
 					else
@@ -851,9 +851,9 @@ namespace lexiglance::platform
 							  .title  = "Programs run as administrator",
 							  .status = health::Severity::Warning,
 							  .detail = std::format(
-									  "{} ran as administrator, and Lexiglance does not: while {} in front, Windows keeps its keys and clicks from "
-									  "Lexiglance, so the trigger does nothing over {}. Turn on Run as administrator (Overview, Startup; Windows asks "
-									  "once), or start {} without administrator rights.",
+									  "{} ran as administrator, and Lexiglance doesn't. While {} in front, Windows keeps its keys and clicks from "
+									  "Lexiglance, so the trigger does nothing over {}. Start {} without administrator rights, or run Lexiglance as "
+									  "administrator too (Overview -> Startup; Windows asks once).",
 									  programs,
 									  one ? "it is" : "one is",
 									  one ? "it" : "them",
@@ -1735,7 +1735,7 @@ namespace lexiglance::platform
 
 			void runTasks()
 			{
-				std::vector<std::move_only_function<void()>> tasks;
+				std::vector<Task> tasks;
 				{
 					const std::scoped_lock lock( tasks_mutex_ );
 					tasks.swap( tasks_ );
@@ -2127,7 +2127,7 @@ namespace lexiglance::platform
 			std::vector<std::pair<Rect, std::chrono::steady_clock::time_point>> vacated_;
 			Rect                                                                underlay_rect_;
 			std::shared_ptr<const std::vector<std::uint8_t>>                    underlay_gray_;
-			std::vector<std::move_only_function<void()>>                        tasks_;
+			std::vector<Task>                                                   tasks_;
 			std::atomic<bool>                                                   quit_{ false };
 			std::atomic<bool>                                                   transparent_{ true };
 			std::atomic<double>                                                 scale_{ 1.0 };

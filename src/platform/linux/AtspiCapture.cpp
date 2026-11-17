@@ -211,6 +211,14 @@ namespace lexiglance::platform
 				Ref<AtspiText> text( atspi_accessible_get_text_iface( target.get() ) );
 				if ( !text )
 				{
+					// Qt's text views (QTextEdit, QTextBrowser) hit-test to their viewport, a child of the text.
+					if ( const Ref<AtspiAccessible> parent( atspi_accessible_get_parent( target.get(), error.out() ) ); parent )
+					{
+						text.reset( atspi_accessible_get_text_iface( parent.get() ) );
+					}
+				}
+				if ( !text )
+				{
 					// GTK notebooks (tabbed editors and terminals) do not hit-test their pages.
 					int budget = 256;
 					if ( const auto found = searchText( target.get(), point, 0, budget ) )
@@ -245,7 +253,10 @@ namespace lexiglance::platform
 					}
 				}
 
-				gchar* content = atspi_text_get_text( text.get(), offset, offset + static_cast<gint>( max_chars ), error.out() );
+				// Firefox reads nothing at all when asked for more than there is: the end of every short paragraph went unread.
+				const gint count   = atspi_text_get_character_count( text.get(), error.out() );
+				const gint end     = offset + static_cast<gint>( max_chars );
+				gchar*     content = atspi_text_get_text( text.get(), offset, count > offset && !error.failed() ? std::min( end, count ) : end, error.out() );
 				if ( content == nullptr )
 				{
 					return std::nullopt;
@@ -323,8 +334,8 @@ namespace lexiglance::platform
 				if ( !desktop_ )
 				{
 					check.status = health::Severity::Error;
-					check.detail = "The accessibility bus (AT-SPI) cannot be reached, so text in ordinary applications is not read. Make sure at-spi2-core is "
-								   "installed and that your session starts at-spi-bus-launcher, then restart Lexiglance.";
+					check.detail = "Lexiglance can't reach the accessibility bus (AT-SPI), so it can't read text in ordinary applications. Check that at-spi2-core "
+								   "is installed and your session starts at-spi-bus-launcher, then restart Lexiglance.";
 					check.fix    = "restart";
 					out.push_back( std::move( check ) );
 					return;
@@ -342,26 +353,26 @@ namespace lexiglance::platform
 				if ( !listed )
 				{
 					check.status = health::Severity::Error;
-					check.detail = "The accessibility registry does not answer, so text in ordinary applications cannot be read. Restarting Lexiglance "
-								   "reconnects to it.";
+					check.detail = "The accessibility registry isn't responding, so text in ordinary applications can't be read. Restart Lexiglance to "
+								   "reconnect.";
 					check.fix    = "restart";
 				}
 				else
 				{
 					check.status = elapsed > 250 || !kept_up ? health::Severity::Warning : health::Severity::Ok;
-					check.detail = std::format( "{} applications expose their text; the accessibility bus answered in {} ms ({} events handled).", applications, elapsed, dispatched_ );
+					check.detail = std::format( "{} applications expose their text. The accessibility bus answered in {} ms ({} events handled).", applications, elapsed, dispatched_ );
 					if ( !kept_up )
 					{
-						check.detail += " Applications are sending accessibility events faster than they can be taken in.";
+						check.detail += " Applications are sending accessibility events faster than Lexiglance can handle them.";
 					}
 					else if ( elapsed > 250 )
 					{
-						check.detail += " That is slow: lookups in applications will lag.";
+						check.detail += " That's slow, so lookups in applications will lag.";
 					}
 				}
 				if ( toolkits_asked_ && !toolkits_enabled_ )
 				{
-					check.detail += " Qt and Chromium applications could not be asked to expose their text (no session bus).";
+					check.detail += " Lexiglance couldn't ask Qt and Chromium applications to expose their text (no session bus).";
 				}
 				out.push_back( std::move( check ) );
 			}

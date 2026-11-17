@@ -522,6 +522,11 @@ namespace lexiglance::platform
 			return { .x = left, .y = top, .width = right - left, .height = bottom - top };
 		}
 
+		bool sameRect( const Rect& a, const Rect& b )
+		{
+			return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
+		}
+
 		Rect intersect( const Rect& a, const Rect& b )
 		{
 			const int left   = std::max( a.x, b.x );
@@ -2376,6 +2381,46 @@ namespace lexiglance::platform
 				return spansOf( *line, text, length );
 			}
 
+			std::optional<Snapshot> snapshot( Point point, const WindowInfo& window ) override
+			{
+				if ( paddle_ )
+				{
+					// The region the capture read at the point (as it chose it), else (it read a wider one) the newest that holds
+					// the point.
+					const Rect read   = regionFor( point, readingLimit( window ) );
+					const auto newest = paddle_cache_ | std::views::reverse;
+					auto       entry  = std::ranges::find_if( newest, [&]( const PaddleRegion& region ) { return sameRect( region.region, read ); } );
+					if ( entry == newest.end() )
+					{
+						entry = std::ranges::find_if( newest, [&]( const PaddleRegion& region ) { return region.region.contains( point ); } );
+					}
+					if ( entry == newest.end() )
+					{
+						return std::nullopt;
+					}
+					Snapshot shot{ .region = entry->region, .rgb = entry->pixels, .lines = {} };
+					for ( std::size_t i = 0; i < entry->boxes.size(); ++i )
+					{
+						const auto&     line = entry->lines[i];
+						const ocr::Box& box  = line ? line->box : entry->boxes[i];
+						shot.lines.push_back( { .box = { .x = box.inner_x, .y = box.inner_y, .width = box.inner_width, .height = box.inner_height }, .text = line ? lineText( *line ) : std::string(), .loose = i >= entry->strict } );
+					}
+					return shot;
+				}
+				// Tesseract: the screen around the point, and the line found there.
+				const auto grab = grabAround( point, window );
+				if ( grab.rgb.empty() )
+				{
+					return std::nullopt;
+				}
+				Snapshot shot{ .region = grab.region, .rgb = grab.rgb, .lines = {} };
+				if ( const auto line = locate( grab, analyse( grab, unit_, vertical_ ), unit_, vertical_ ) )
+				{
+					shot.lines.push_back( { .box = line->crop } );
+				}
+				return shot;
+			}
+
 			// Reads words of each language drawn for the purpose, with the same recognisers the captures use.
 			void diagnose( std::vector<health::Check>& out ) override
 			{
@@ -2425,7 +2470,7 @@ namespace lexiglance::platform
 					}
 					else if ( !good.empty() )
 					{
-						check.detail += std::format( " It read its test text for the languages it has in {} ms.", elapsed );
+						check.detail += std::format( " For the languages it has, it read its test text in {} ms.", elapsed );
 					}
 				}
 				else if ( good.empty() && bad.empty() )
@@ -2436,7 +2481,7 @@ namespace lexiglance::platform
 				else if ( !bad.empty() )
 				{
 					check.status = health::Severity::Error;
-					check.detail = std::format( "{} misread its test text ({}): the model may be damaged. Download it again.", description_, joinText( bad, "; " ) );
+					check.detail = std::format( "{} misread its test text ({}), so the model may be damaged. Download it again on the Scanning page.", description_, joinText( bad, "; " ) );
 					check.fix    = "open-scanning";
 				}
 				else
@@ -2485,17 +2530,78 @@ namespace lexiglance::platform
 				return read;
 			}
 
-			// PaddleOCR: text boxes in a region around the pointer, then the box under it read as a line. Regions sit on a
-			// grid, so moving along a line keeps hitting the cache.
-			std::optional<CapturedText> capturePaddle( Point point, const WindowInfo& window, CaptureScope scope )
+			// The window's part of the screen, or all of it.
+			Rect readingLimit( const WindowInfo& window )
 			{
-				const int u     = unit_;
-				Rect      limit = screen_->bounds();
+				Rect limit = screen_->bounds();
 				if ( const auto bounds = windowRect( window.id ) )
 				{
 					limit = intersect( limit, *bounds );
 				}
-				const Rect region = intersect( { .x = floorTo( point.x - ( 10 * u ), 8 * u ), .y = floorTo( point.y - ( 10 * u ), 4 * u ), .width = 44 * u, .height = 20 * u }, limit );
+				return limit;
+			}
+
+			// What PaddleOCR reads first around a point: on a grid, so a pointer moving a little reads the same again.
+			[[nodiscard]] Rect readingRegion( Point point, const Rect& limit ) const
+			{
+				const int u = unit_;
+				return intersect( { .x = floorTo( point.x - ( 10 * u ), 8 * u ), .y = floorTo( point.y - ( 10 * u ), 4 * u ), .width = 44 * u, .height = 20 * u }, limit );
+			}
+
+			// Of boxes [from, to) of a region, the one under `local` (region coordinates) or the nearest closer than `reach`.
+			[[nodiscard]] static std::optional<std::size_t> nearestBox( const PaddleRegion& region, Point local, std::size_t from, std::size_t to, int reach )
+			{
+				std::optional<std::size_t> chosen;
+				for ( std::size_t i = from; i < to; ++i )
+				{
+					const auto& b        = region.boxes[i];
+					const int   distance = std::max( { 0, b.inner_x - local.x, local.x - ( b.inner_x + b.inner_width ), b.inner_y - local.y, local.y - ( b.inner_y + b.inner_height ) } );
+					if ( distance < reach )
+					{
+						reach  = distance;
+						chosen = i;
+					}
+				}
+				return chosen;
+			}
+
+			// The region to read at the point: the one on the grid, unless one read before holds the whole line under the
+			// pointer (no edge cuts it). Moving along a line then finds that line read already, instead of looking for text
+			// in a new region every few words.
+			[[nodiscard]] Rect regionFor( Point point, const Rect& limit ) const
+			{
+				const Rect grid = readingRegion( point, limit );
+				if ( std::ranges::any_of( paddle_cache_, [&]( const PaddleRegion& entry ) { return sameRect( entry.region, grid ); } ) )
+				{
+					return grid;
+				}
+				for ( const PaddleRegion& entry : paddle_cache_ | std::views::reverse )
+				{
+					const Rect& r = entry.region;
+					if ( !r.contains( point ) || !sameRect( intersect( r, limit ), r ) )
+					{
+						continue;
+					}
+					const auto chosen = nearestBox( entry, { .x = point.x - r.x, .y = point.y - r.y }, 0, entry.strict, ( unit_ / 2 ) + 1 );
+					if ( !chosen )
+					{
+						continue;
+					}
+					const ocr::Box& b = entry.boxes[*chosen];
+					if ( b.x > 0 && b.y > 0 && b.x + b.width < r.width && b.y + b.height < r.height )
+					{
+						return r;
+					}
+				}
+				return grid;
+			}
+
+			// PaddleOCR: text boxes in a region around the pointer, then the box under it read as a line. Regions sit on a
+			// grid, so moving along a line keeps hitting the cache.
+			std::optional<CapturedText> capturePaddle( Point point, const WindowInfo& window, CaptureScope scope )
+			{
+				const Rect limit  = readingLimit( window );
+				const Rect region = regionFor( point, limit );
 				Cut        cut;
 				auto       text = readRegion( region, point, scope, 0.0, cut );
 				if ( !cut.before && !cut.after )
@@ -2569,7 +2675,7 @@ namespace lexiglance::platform
 				const auto    now    = std::chrono::steady_clock::now();
 				for ( PaddleRegion& entry : paddle_cache_ )
 				{
-					if ( entry.region.x != region.x || entry.region.y != region.y || entry.region.width != region.width || entry.region.height != region.height )
+					if ( !sameRect( entry.region, region ) )
 					{
 						continue;
 					}
@@ -2623,25 +2729,11 @@ namespace lexiglance::platform
 
 				// The box under the pointer, or the nearest one within half a unit; a box of the looser pass only when nothing
 				// else fits, and then only right under the pointer.
-				const auto nearest = [&]( std::size_t from, std::size_t to, int reach ) {
-					std::optional<std::size_t> chosen;
-					for ( std::size_t i = from; i < to; ++i )
-					{
-						const auto& b        = cached->boxes[i];
-						const int   distance = std::max( { 0, b.inner_x - local.x, local.x - ( b.inner_x + b.inner_width ), b.inner_y - local.y, local.y - ( b.inner_y + b.inner_height ) } );
-						if ( distance < reach )
-						{
-							reach  = distance;
-							chosen = i;
-						}
-					}
-					return chosen;
-				};
-				auto       chosen = nearest( 0, cached->strict, ( u / 2 ) + 1 );
+				auto       chosen = nearestBox( *cached, local, 0, cached->strict, ( u / 2 ) + 1 );
 				const bool loose  = !chosen;
 				if ( loose )
 				{
-					chosen = nearest( cached->strict, cached->boxes.size(), 1 );
+					chosen = nearestBox( *cached, local, cached->strict, cached->boxes.size(), 1 );
 				}
 				if ( !chosen )
 				{
@@ -2994,9 +3086,9 @@ namespace lexiglance::platform
 				const Span a    = span( cached.boxes[current] );
 				const int  size = std::max( 1, a.bottom - a.top );
 				// Of about the same size: a short line (す。) hugs smaller letters, so the next line may be well under.
-				const auto alike = [&]( const Span& b, int low = 7 ) {
+				const auto alike = [&]( const Span& b, int low = 7, int high = 16 ) {
 					const int other = b.bottom - b.top;
-					return other * 10 >= size * low && other * 10 <= size * 16;
+					return other * 10 >= size * low && other * 10 <= size * high;
 				};
 
 				std::optional<std::size_t> best;
@@ -3009,7 +3101,8 @@ namespace lexiglance::platform
 					const int  overlap = std::min( a.bottom, b.bottom ) - std::max( a.top, b.top );
 					const int  gap     = b.from - a.to;
 					const int  reach   = !vertical && std::abs( a.bottom - b.bottom ) * 4 <= size ? 4 * size : 2 * size;
-					if ( i != current && alike( b ) && overlap * 2 >= size && gap >= -size / 2 && gap <= reach && gap < best_gap )
+					// A word of short letters alone (изменения, нам) is boxed lower than one with tall ones beside it.
+					if ( i != current && alike( b, 5, 20 ) && overlap * 2 >= size && gap >= -size / 2 && gap <= reach && gap < best_gap )
 					{
 						best     = i;
 						best_gap = gap;

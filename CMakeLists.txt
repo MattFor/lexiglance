@@ -1,6 +1,12 @@
 # 3.30: the first CMake that knows GCC's C++26 mode.
 cmake_minimum_required(VERSION 3.30)
 
+# macOS 13.3: std::format of floating-point numbers needs that system's libc++.
+# The release's libraries are built for it too (.github/scripts/macos-deps.sh).
+set(CMAKE_OSX_DEPLOYMENT_TARGET
+    "13.3"
+    CACHE STRING "Oldest macOS the programs run on")
+
 project(
     lexiglance
     VERSION 1.4.1
@@ -70,15 +76,26 @@ elseif(WIN32)
     set(LEXIGLANCE_PLATFORM
         "windows"
         CACHE STRING "Desktop integration backend used by the daemon")
+elseif(APPLE)
+    set(LEXIGLANCE_PLATFORM
+        "macos"
+        CACHE STRING "Desktop integration backend used by the daemon")
 else()
     set(LEXIGLANCE_PLATFORM
         "null"
         CACHE STRING "Desktop integration backend used by the daemon")
 endif()
-set_property(CACHE LEXIGLANCE_PLATFORM PROPERTY STRINGS x11 windows null)
+set_property(CACHE LEXIGLANCE_PLATFORM PROPERTY STRINGS x11 windows macos null)
 
 if(WIN32)
     enable_language(RC)
+endif()
+# Lexiglance.app: the settings application is the bundle's program with
+# lexiglancectl beside it, the daemon a helper app inside (apps/daemon).
+# .github/scripts/macos-package.sh adds Qt and the libraries.
+if(APPLE)
+    set(CMAKE_INSTALL_BINDIR Lexiglance.app/Contents/MacOS)
+    set(CMAKE_INSTALL_DOCDIR Lexiglance.app/Contents/Resources)
 endif()
 
 add_subdirectory(src)
@@ -143,6 +160,13 @@ if(UNIX AND NOT APPLE)
         USE_SOURCE_PERMISSIONS)
     install(FILES ${PROJECT_BINARY_DIR}/services/systemd/lexiglanced.service
             DESTINATION lib/systemd/user)
+endif()
+if(APPLE)
+    configure_file(data/macos/Info.plist.in Info.plist @ONLY)
+    install(FILES ${PROJECT_BINARY_DIR}/Info.plist
+            DESTINATION Lexiglance.app/Contents)
+    install(FILES data/macos/lexiglance.icns
+            DESTINATION Lexiglance.app/Contents/Resources)
 endif()
 if(WIN32 AND NOT LEXIGLANCE_STATIC)
     # CMake 4: runtime dependencies come with normalised paths (no notice per

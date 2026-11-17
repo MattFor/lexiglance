@@ -3,6 +3,7 @@
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Thread.h>
+#include <lexiglance/core/Utf8.h>
 #include <lexiglance/ocr/Onnx.h>
 #include <lexiglance/translate/Model.h>
 
@@ -138,7 +139,7 @@ namespace lexiglance::daemon
 		}
 		if ( !translate::downloaded( modelDirectory( language ), translate::Precision::Compact ) )
 		{
-			return std::format( "Translating {} needs its model: Translation page, Download.", language.name() );
+			return std::format( "Translating {} needs its model. Download it on the Translation page.", language.name() );
 		}
 		return {};
 	}
@@ -258,9 +259,9 @@ namespace lexiglance::daemon
 		thread::setName( "lg-translate" );
 		while ( !stop.stop_requested() )
 		{
-			std::optional<Request>          request;
-			std::move_only_function<void()> job;
-			bool                            unload = false;
+			std::optional<Request> request;
+			Task                   job;
+			bool                   unload = false;
 			{
 				std::unique_lock lock( mutex_ );
 				const bool       woken = wake_.wait_for( lock, stop, idle_unload, [this] { return pending_.has_value() || !jobs_.empty() || reload_; } );
@@ -315,6 +316,7 @@ namespace lexiglance::daemon
 			auto loaded = model( *request->language );
 			if ( !loaded )
 			{
+				log::warn( "translation: {}", loaded.error().message );
 				answer( std::unexpected( loaded.error() ), std::chrono::microseconds::zero() );
 				continue;
 			}
@@ -338,7 +340,7 @@ namespace lexiglance::daemon
 				active_.reset();
 				continue;
 			}
-			log::debug( "translation: {} characters in {} ms", request->text.size(), took.count() / 1000 );
+			log::debug( "translation: {} characters in {} ms", utf8::length( request->text ), took.count() / 1000 );
 			if ( translated )
 			{
 				remember( *request->language, request->text, *translated );
@@ -411,7 +413,7 @@ namespace lexiglance::daemon
 		if ( answer.wait_for( std::chrono::seconds( 90 ) ) != std::future_status::ready )
 		{
 			check.status = health::Severity::Warning;
-			check.detail = "The translation models did not answer within 90 seconds.";
+			check.detail = "The translation models didn't respond within 90 seconds.";
 			out.push_back( std::move( check ) );
 			return;
 		}
@@ -444,8 +446,8 @@ namespace lexiglance::daemon
 			// Windows without Microsoft's runtime, which ONNX Runtime needs: installing that is the fix, not the model.
 			const bool runtime = std::ranges::any_of( bad, []( const std::string& reason ) { return reason.contains( ocr::vc_runtime_absent ); } );
 			check.status       = health::Severity::Error;
-			check.detail       = runtime ? std::format( "Translation does not work: {}.", join( bad, "; " ) )
-			                             : std::format( "Translation does not work for {}. Download the model again (Translation page).", join( bad, "; " ) );
+			check.detail       = runtime ? std::format( "Translation doesn't work: {}.", join( bad, "; " ) )
+			                             : std::format( "Translation doesn't work for {}. Download the model again.", join( bad, "; " ) );
 			check.fix          = runtime ? "install-vcredist" : "download-translation";
 		}
 		else if ( !missing.empty() )

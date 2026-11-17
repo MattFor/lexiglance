@@ -1085,13 +1085,14 @@ namespace lexiglance::dict
 		std::error_code ec;
 		fs::create_directories( output.parent_path(), ec );
 		// One import of a title at a time (the daemon's, lexiglancectl's); the lock ends with its process however it ends,
-		// and the next import then reuses the temporary file a killed one left.
+		// and the next import then reuses the temporary file a killed one left. Its file goes with it.
 		fs::path lock_path = output;
 		lock_path += ".lock";
-		const process::InstanceLock lock( lock_path );
+		const process::InstanceLock lock( lock_path, /*temporary=*/true );
 		if ( !lock.held() )
 		{
-			return lock.holder() > 0 ? fail( "\"{}\" is being imported already", summary.title ) : fail( "cannot lock {}", lock_path.string() );
+			// A holder that has only just taken it has not written its pid yet.
+			return lock.holder() > 0 || fs::exists( lock_path, ec ) ? fail( "\"{}\" is being imported already", summary.title ) : fail( "cannot lock {}", lock_path.string() );
 		}
 		fs::path temp_path = output;
 		temp_path += ".tmp";

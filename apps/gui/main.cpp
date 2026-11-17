@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QLoggingCategory>
 #include <QLocalServer>
 #include <QLocalSocket>
@@ -118,7 +119,7 @@ namespace
 		const auto program = lg::process::sibling( "lexiglanced" );
 		if ( program.empty() )
 		{
-			std::println( stderr, "error: lexiglanced is not beside {}", lg::process::executable().string() );
+			std::println( stderr, "error: lexiglanced isn't next to {}", lg::process::executable().string() );
 			return 1;
 		}
 		std::vector<std::string> arguments( argv + from, argv + argc );
@@ -133,7 +134,7 @@ namespace
 		}
 		list.push_back( nullptr );
 		::execv( path.c_str(), list.data() );
-		std::println( stderr, "error: cannot start {}", path );
+		std::println( stderr, "error: couldn't start {}", path );
 		return 1;
 #endif
 	}
@@ -201,7 +202,19 @@ namespace
 				const QCoreApplication app( argc, argv );
 				startLogging( QCoreApplication::arguments() );
 				lexiglance::gui::desktop::claim();
-				std::println( "Lexiglance's autostart and menu entry start {}", lexiglance::gui::desktop::thisCopy().toStdString() );
+#ifdef Q_OS_MACOS
+				// The LaunchAgent starts the settings application, which starts the daemon; an app has no menu entry.
+				if ( lexiglance::gui::desktop::autostartEnabled() )
+				{
+					std::println( "The autostart starts {} in the menu bar", QFileInfo( QCoreApplication::applicationFilePath() ).canonicalFilePath().toStdString() );
+				}
+				else
+				{
+					std::println( "The autostart is off" );
+				}
+#else
+				std::println( "The autostart and the menu entry now start {}", lexiglance::gui::desktop::thisCopy().toStdString() );
+#endif
 				return 0;
 			}
 		}
@@ -220,6 +233,8 @@ namespace
 
 		const QStringList arguments = QApplication::arguments();
 		startLogging( arguments );
+		// In the Dock only once the window shows (macOS): never when started in the menu bar or to update in the background.
+		lexiglance::gui::showInDock( false );
 
 		// For documentation and checks: draws a page of the window into an image and exits (works offscreen, with
 		// QT_QPA_PLATFORM=offscreen). --screenshot <page> <file.png> [milliseconds to wait for the daemon's data]
@@ -255,8 +270,13 @@ namespace
 			return 0;
 		}
 
-		const auto    page_flag   = arguments.indexOf( QStringLiteral( "--page" ) );
-		const QString page        = page_flag >= 0 && page_flag + 1 < arguments.size() ? arguments[page_flag + 1] : QString();
+		const auto page_flag = arguments.indexOf( QStringLiteral( "--page" ) );
+		QString    page      = page_flag >= 0 && page_flag + 1 < arguments.size() ? arguments[page_flag + 1] : QString();
+		// lexiglance --developer: developer mode on, its page in front.
+		if ( arguments.contains( QStringLiteral( "--developer" ) ) )
+		{
+			page = QStringLiteral( "developer" );
+		}
 		const auto    search_flag = arguments.indexOf( QStringLiteral( "--search" ) );
 		const QString query       = search_flag >= 0 && search_flag + 1 < arguments.size() ? arguments[search_flag + 1] : QString();
 
@@ -265,7 +285,8 @@ namespace
 		// (a build tree's, another AppImage's): it asks that one to make way, as starting it makes it the copy that runs
 		// (DesktopEntry.h). A window says which copy it is as soon as it is reached, then reads one request.
 #ifdef _WIN32
-		const QString instance    = QStringLiteral( "lexiglance-gui-%1" ).arg( qEnvironmentVariable( "USERNAME" ) );
+		// The daemon pipe's name after "lexiglance-": the user, and the home when it has one of its own.
+		const QString instance    = QStringLiteral( "lexiglance-gui-%1" ).arg( lexiglance::gui::qs( lexiglance::paths::ipcEndpoint() ).section( QLatin1Char( '-' ), 1 ) );
 		const bool    private_dir = true;
 #else
 		// Beside the daemon's socket: a bare name would be in the shared /tmp, where another user can take it first.
@@ -357,9 +378,11 @@ namespace
 			}
 		}
 
+		// The autostart and the menu entry (DesktopEntry.h); not for the offscreen runs of checks and tests. Before the
+		// window, whose Startup options show them.
+		const bool                  installed = QGuiApplication::platformName() != QStringLiteral( "offscreen" ) && lexiglance::gui::desktop::maintain();
 		lexiglance::gui::MainWindow window;
-		// The autostart and the menu entry (DesktopEntry.h); not for the offscreen runs of checks and tests.
-		if ( QGuiApplication::platformName() != QStringLiteral( "offscreen" ) && lexiglance::gui::desktop::maintain() )
+		if ( installed )
 		{
 			window.replaceOtherDaemon();
 		}

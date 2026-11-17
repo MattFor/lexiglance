@@ -52,6 +52,8 @@ failures=0
 # shellcheck disable=SC2329 # called by the trap
 finish() {
     kill "${started[@]}" 2>/dev/null || true
+    # Gone before their folder is: the daemon writes to it until it exits.
+    wait "${started[@]}" 2>/dev/null || true
     if [ "$failures" -eq 0 ] && [ -z "${KEEP:-}" ]; then
         rm -rf "$work"
     else
@@ -138,6 +140,14 @@ tap 6
 step release
 xdotool keyup Alt_L keyup Super_L
 sleep 1
+# Pressed again where the wheel chose text: the word is looked up afresh, and the wheel chooses there again.
+step again
+xdotool keydown Super_L keydown Alt_L
+sleep 3
+xdotool click 4
+sleep 2
+xdotool keyup Alt_L keyup Super_L
+sleep 1
 step end
 
 check 'the word under the pointer is looked up' "$(logged trigger 'lookup: «')" -ge 1
@@ -148,4 +158,6 @@ check 'the wheel chooses more text' "$(logged wheel 'lookup: [0-9]+ terms')" -ge
 check 'the pointer wobbling on the wheel does not look the word up afresh' "$(logged wheel 'capture: [0-9]+ characters')" -eq 0
 check 'the sentence key translates the text the wheel chose' "$(logged chosen 'translation: [0-9]+ characters')" -ge 1
 check 'letting go of the trigger closes the popup' "$(logged release 'popup closed')" -ge 1
+check 'pressed again where the wheel chose text, the popup shows again' "$(logged again 'render: [0-9]+ terms')" -ge 1
+check 'the wheel chooses more text there again' "$(logged again 'lookup: [0-9]+ terms')" -ge 2
 exit "$((failures > 0))"

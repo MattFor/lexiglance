@@ -3,6 +3,7 @@
 #include <lexiglance/core/Json.h>
 #include <lexiglance/core/Paths.h>
 #include <lexiglance/core/Process.h>
+#include <lexiglance/core/Report.h>
 #include <lexiglance/core/Uninstall.h>
 #include <lexiglance/core/Version.h>
 #include <lexiglance/dictionary/DictionaryStore.h>
@@ -14,18 +15,23 @@
 #include <lexiglance/translate/Model.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <print>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #ifdef _WIN32
@@ -65,9 +71,21 @@ namespace
 		std::println( "  translate <text> [--language <code>]              translate <text> into English offline" );
 		std::println( "" );
 		std::println( "  status | pause | resume | reload | hide | quit    control the running daemon" );
-		std::println( "  show <text>                                       show a popup at the pointer" );
+		std::println( "  show [text]                                       show a popup at the pointer (no text: a sample word)" );
 		std::println( "  health                                            check that everything works (exit 1 on problems)" );
 		std::println( "  stats [reset]                                     what has been looked up so far, or forget it" );
+		std::println( "  report [file.zip] [--what <text>]                 save a problem report (no secrets) and print the" );
+		std::println( "                                                    link of a GitHub issue filled in with its summary" );
+		std::println( "" );
+		std::println( "  trace and debug ... need developer mode (docs/debugging.md)" );
+		std::println( "  trace                                             the pipeline trace as lookups happen" );
+		std::println( "  debug capture <x> <y> [--image <file.png>]        what the screen reads at a point, boxes and OCR picture" );
+		std::println( "  debug scan <x> <y> [--sentence]                   a lookup there, as holding the trigger would make" );
+		std::println( "  debug lookup <text> <x> <y>                       <text> looked up and its popup shown at x,y" );
+		std::println( "  debug wheel <+1|-1> | debug release               turn the wheel over the popup, let go of the trigger" );
+		std::println( "  debug simulate [info|warning|error|ocr|permissions]...   made-up problems (none: back to real)" );
+		std::println( "  debug log [lines]                                 the end of the daemon's log, then lines as they come" );
+		std::println( "  debug call <method> [json]                        any request; prints its answer as it is" );
 		std::println( "" );
 		std::println( "  uninstall [--keep-data] [--yes]                   remove Lexiglance, and its settings, dictionaries" );
 		std::println( "                                                    and downloaded models unless --keep-data" );
@@ -194,6 +212,293 @@ namespace
 		return 0;
 	}
 
+	std::string decodedBase64( std::string_view text )
+	{
+		std::string   out;
+		std::uint32_t bits  = 0;
+		int           count = 0;
+		for ( const char c : text )
+		{
+			const auto at = std::string_view( "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" ).find( c );
+			if ( at == std::string_view::npos )
+			{
+				continue;
+			}
+			bits = ( bits << 6U ) | static_cast<std::uint32_t>( at );
+			count += 6;
+			if ( count >= 8 )
+			{
+				count -= 8;
+				out.push_back( static_cast<char>( ( bits >> static_cast<unsigned>( count ) ) & 0xFFU ) );
+			}
+		}
+		return out;
+	}
+
+	// One trace event on a line: which lookup, where, what was read and how long each stage took.
+	void printTrace( const lg::json::Value& event )
+	{
+		std::string line = std::format( "#{} {}", event["id"].asInt(), event["time"].asString() );
+		if ( const auto kind = event["kind"].asString(); !kind.empty() )
+		{
+			// The wheel reads nothing anew: it has no point, window or source of its own.
+			line += std::format( " {}", kind );
+			if ( kind != "wheel" )
+			{
+				line += std::format( " at {},{}", event["x"].asInt(), event["y"].asInt() );
+			}
+			if ( const auto window = event["window"].asString(); !window.empty() )
+			{
+				line += std::format( " in {}", printable( window ) );
+			}
+			if ( const auto source = event["source"].asString(); !source.empty() )
+			{
+				line += std::format( " via {}", source );
+			}
+			line += std::format( ": «{}» ({}%), {} found", printable( event["text"].asString() ), std::lround( event["confidence"].asDouble() ), event["found"].asInt() );
+		}
+		for ( const auto& [stage, times] : event["stages"].members() )
+		{
+			line += std::format( " | {} {:.2f} ms (p50 {:.2f}, p95 {:.2f})", stage, times["ms"].asDouble(), times["p50"].asDouble(), times["p95"].asDouble() );
+		}
+		std::println( "{}", line );
+	}
+
+	// Subscribes to `topic` and prints each of its events until the daemon goes (or Ctrl+C).
+	int follow( lg::ipc::Client& client, std::string_view topic )
+	{
+		if ( const auto subscribed = client.call( "events.subscribe", std::format( R"({{"events":["{}"]}})", topic ) ); !subscribed )
+		{
+			std::println( stderr, "error: {}", subscribed.error().message );
+			return 1;
+		}
+		if ( topic == "trace" )
+		{
+			std::println( stderr, "Tracing every lookup (Ctrl+C stops)..." );
+		}
+		const auto ended = client.listen( [&]( std::string_view name, const lg::json::Value& params ) {
+			if ( name == "trace" )
+			{
+				printTrace( params );
+			}
+			else if ( name == "log.line" )
+			{
+				std::println( "{}", printable( params["line"].asString() ) );
+			}
+			( void )std::fflush( stdout );
+		} );
+		std::println( stderr, "{}", ended ? std::string( "the daemon went away" ) : ended.error().message );
+		return 1;
+	}
+
+	int traceCommand()
+	{
+		auto client = lg::ipc::Client::connect( lg::paths::ipcEndpoint() );
+		if ( !client )
+		{
+			std::println( stderr, "error: the daemon is not running ({})", client.error().message );
+			return 1;
+		}
+		return follow( *client, "trace" );
+	}
+
+	int toInt( std::string_view text )
+	{
+		int value = 0;
+		if ( text.starts_with( '+' ) )
+		{
+			text.remove_prefix( 1 );
+		}
+		std::from_chars( text.data(), text.data() + text.size(), value );
+		return value;
+	}
+
+	// lexiglancectl debug capture <x> <y> [--image <file.png>]
+	int debugCapture( const Args& args )
+	{
+		const bool       image = args.size() == 5;
+		lg::json::Writer params;
+		params.beginObject().field( "x", toInt( args[1] ) ).field( "y", toInt( args[2] ) ).field( "image", image ).endObject();
+		auto client = lg::ipc::Client::connect( lg::paths::ipcEndpoint(), std::chrono::seconds( 20 ) );
+		auto reply  = client ? client->call( "debug.capture", params.str() ) : lg::Result<lg::json::Document>( std::unexpected( client.error() ) );
+		if ( !reply )
+		{
+			std::println( stderr, "error: {}", reply.error().message );
+			return 1;
+		}
+		const auto& result = reply->root()["result"];
+		for ( const auto& [key, value] : result.members() )
+		{
+			if ( key != "image" )
+			{
+				std::println( "{}: {}", key, printable( value.isString() ? std::string( value.asString() ) : lg::json::serialize( value ) ) );
+			}
+		}
+		if ( !image )
+		{
+			return 0;
+		}
+		if ( !result["image"].isObject() )
+		{
+			std::println( stderr, "error: no picture: the text was not read by OCR" );
+			return 1;
+		}
+		std::ofstream( std::string( args[4] ), std::ios::binary ) << decodedBase64( result["image"]["png"].asString() );
+		std::println( "image: {}", args[4] );
+		return 0;
+	}
+
+	// lexiglancectl debug log [lines]: the end of the log, then its lines as they come.
+	int debugLog( const Args& args )
+	{
+		auto client = lg::ipc::Client::connect( lg::paths::ipcEndpoint() );
+		if ( !client )
+		{
+			std::println( stderr, "error: the daemon is not running ({})", client.error().message );
+			return 1;
+		}
+		lg::json::Writer params;
+		params.beginObject().field( "lines", args.size() == 2 ? toInt( args[1] ) : 50 ).endObject();
+		if ( const auto reply = client->call( "debug.log", params.str() ) )
+		{
+			for ( const auto& line : reply->root()["result"]["lines"].items() )
+			{
+				std::println( "{}", printable( line.asString() ) );
+			}
+		}
+		return follow( *client, "log" );
+	}
+
+	// lexiglancectl debug call <method> [json]: the answer as it is.
+	int debugCall( const Args& args )
+	{
+		auto client = lg::ipc::Client::connect( lg::paths::ipcEndpoint(), std::chrono::seconds( 60 ) );
+		auto reply  = client ? client->call( args[1], args.size() == 3 ? args[2] : std::string_view( "{}" ) ) : lg::Result<lg::json::Document>( std::unexpected( client.error() ) );
+		if ( !reply )
+		{
+			std::println( stderr, "error: {}", reply.error().message );
+			return 1;
+		}
+		std::println( "{}", printable( lg::json::serialize( reply->root()["result"] ) ) );
+		return 0;
+	}
+
+	// lexiglancectl debug ...: developer mode's tools, all through the daemon's own pipeline.
+	int debugCommand( const Args& args )
+	{
+		const std::string_view what = args.empty() ? std::string_view() : args.front();
+		lg::json::Writer       params;
+		if ( what == "capture" && ( args.size() == 3 || ( args.size() == 5 && args[3] == "--image" ) ) )
+		{
+			return debugCapture( args );
+		}
+		if ( what == "scan" && ( args.size() == 3 || ( args.size() == 4 && args[3] == "--sentence" ) ) )
+		{
+			params.beginObject().field( "x", toInt( args[1] ) ).field( "y", toInt( args[2] ) ).field( "sentence", args.size() == 4 ).endObject();
+			return call( "debug.scan", params.take() );
+		}
+		if ( what == "lookup" && args.size() == 4 )
+		{
+			params.beginObject().field( "text", args[1] ).field( "x", toInt( args[2] ) ).field( "y", toInt( args[3] ) ).endObject();
+			return call( "debug.lookup", params.take() );
+		}
+		if ( what == "wheel" && args.size() == 2 )
+		{
+			params.beginObject().field( "delta", toInt( args[1] ) ).endObject();
+			return call( "debug.wheel", params.take() );
+		}
+		if ( what == "release" && args.size() == 1 )
+		{
+			return call( "debug.release" );
+		}
+		if ( what == "simulate" )
+		{
+			params.beginObject().key( "problems" ).beginArray();
+			for ( const auto name : args | std::views::drop( 1 ) )
+			{
+				if ( name != "none" )
+				{
+					params.value( name );
+				}
+			}
+			params.endArray().endObject();
+			return call( "debug.simulate", params.take() );
+		}
+		if ( what == "log" && args.size() <= 2 )
+		{
+			return debugLog( args );
+		}
+		if ( what == "call" && ( args.size() == 2 || args.size() == 3 ) )
+		{
+			return debugCall( args );
+		}
+		usage();
+		return 2;
+	}
+
+	// lexiglancectl report: the problem report of the settings application, without it: saved here, nothing sent.
+	int reportCommand( const Args& args )
+	{
+		std::string           what;
+		std::filesystem::path file;
+		for ( std::size_t i = 0; i < args.size(); ++i )
+		{
+			if ( args[i] == "--what" && i + 1 < args.size() )
+			{
+				what = args[++i];
+			}
+			else if ( !args[i].starts_with( "--" ) && file.empty() )
+			{
+				file = std::string( args[i] );
+			}
+			else
+			{
+				usage();
+				return 2;
+			}
+		}
+		if ( file.empty() )
+		{
+			file = lg::report::fileName( std::chrono::system_clock::now() );
+		}
+		std::optional<lg::json::Document> status;
+		std::optional<lg::json::Document> health;
+		std::optional<lg::json::Document> dictionaries;
+		if ( auto client = lg::ipc::Client::connect( lg::paths::ipcEndpoint(), std::chrono::seconds( 40 ) ) )
+		{
+			std::println( stderr, "Asking the daemon for its status and health report..." );
+			const auto ask = [&]( std::string_view method, std::optional<lg::json::Document>& into ) {
+				if ( auto reply = client->call( method ) )
+				{
+					into = std::move( *reply );
+				}
+			};
+			ask( "status", status );
+			ask( "health", health );
+			ask( "dictionaries.list", dictionaries );
+		}
+		const lg::report::Input input{
+			.what         = what,
+			.program      = std::format( "lexiglancectl {} ({} build)", lg::version, lg::channel ),
+			.status       = status ? &status->root()["result"] : nullptr,
+			.health       = health ? &health->root()["result"] : nullptr,
+			.dictionaries = dictionaries ? &dictionaries->root()["result"] : nullptr,
+		};
+		const auto parts = lg::report::parts( input );
+		if ( auto saved = lg::report::save( file, parts ); !saved )
+		{
+			std::println( stderr, "error: {}", saved.error().message );
+			return 1;
+		}
+		std::println( "Saved {} with:", file.string() );
+		for ( const auto& part : parts )
+		{
+			std::println( "  {:<18} {}", part.name, part.title );
+		}
+		std::println( "\nNothing was sent anywhere. To report the problem, open this link, describe what happened and drag the zip into the issue:\n\n{}", lg::report::issueUrl( what, lg::report::summary( input ) ) );
+		return 0;
+	}
+
 	// Lets a running daemon pick up dictionaries changed behind its back.
 	void notifyReload()
 	{
@@ -227,7 +532,12 @@ namespace
 
 	int importCommand( const Args& args )
 	{
-		const bool                      replace = std::ranges::find( args, std::string_view( "--replace" ) ) != args.end();
+		const bool replace = std::ranges::find( args, std::string_view( "--replace" ) ) != args.end();
+		if ( std::ranges::all_of( args, []( std::string_view arg ) { return arg.starts_with( "--" ); } ) || std::ranges::any_of( args, []( std::string_view arg ) { return arg.starts_with( "--" ) && arg != "--replace"; } ) )
+		{
+			usage();
+			return 2;
+		}
 		const lg::dict::DictionaryStore store( lg::paths::dictionariesDir() );
 		int                             failures = 0;
 
@@ -434,8 +744,13 @@ namespace
 		std::string_view code;
 		for ( std::size_t i = 0; i < args.size(); ++i )
 		{
-			if ( args[i] == "--language" && i + 1 < args.size() )
+			if ( args[i] == "--language" )
 			{
+				if ( i + 1 == args.size() )
+				{
+					usage();
+					return 2;
+				}
 				code = args[++i];
 				continue;
 			}
@@ -656,6 +971,37 @@ namespace
 
 		const std::string_view command = argv[1];
 		const Args             args( argv.begin() + 2, argv.end() );
+		if ( command == "--help" || command == "-h" || command == "help" )
+		{
+			usage();
+			return 0;
+		}
+		// How many arguments each command takes (import, translate and uninstall check theirs themselves).
+		constexpr std::array<std::tuple<std::string_view, std::size_t, std::size_t>, 15> counts{ {
+				{ "list", 0, 0 },
+				{ "trace", 0, 0 },
+				{ "status", 0, 0 },
+				{ "health", 0, 0 },
+				{ "pause", 0, 0 },
+				{ "resume", 0, 0 },
+				{ "reload", 0, 0 },
+				{ "hide", 0, 0 },
+				{ "quit", 0, 0 },
+				{ "stats", 0, 1 },
+				{ "show", 0, 1 },
+				{ "remove", 1, 1 },
+				{ "lookup", 1, 1 },
+				{ "bench", 1, 2 },
+				{ "ocr", 1, 1 },
+		} };
+		for ( const auto& [name, least, most] : counts )
+		{
+			if ( name == command && ( args.size() < least || args.size() > most ) )
+			{
+				usage();
+				return 2;
+			}
+		}
 
 		if ( command == "import" )
 		{
@@ -693,13 +1039,30 @@ namespace
 		{
 			return healthCommand();
 		}
+		if ( command == "trace" )
+		{
+			return traceCommand();
+		}
+		if ( command == "debug" )
+		{
+			return debugCommand( args );
+		}
+		if ( command == "report" )
+		{
+			return reportCommand( args );
+		}
 		if ( command == "stats" )
 		{
 			if ( args.empty() )
 			{
 				return call( "stats" );
 			}
-			return args.front() == "reset" ? call( "stats.reset" ) : 2;
+			if ( args.front() == "reset" )
+			{
+				return call( "stats.reset" );
+			}
+			usage();
+			return 2;
 		}
 		if ( command == "pause" || command == "resume" )
 		{
@@ -720,10 +1083,11 @@ namespace
 		{
 			return call( "shutdown", "{}", std::chrono::seconds( 5 ) );
 		}
-		if ( command == "show" && !args.empty() )
+		if ( command == "show" )
 		{
+			// Without a text the daemon shows a word the dictionaries have.
 			lg::json::Writer params;
-			params.beginObject().field( "text", args.front() ).endObject();
+			params.beginObject().field( "text", args.empty() ? std::string_view() : args.front() ).endObject();
 			return call( "popup.show", params.take() );
 		}
 		usage();

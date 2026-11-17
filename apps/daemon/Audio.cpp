@@ -33,6 +33,11 @@
 	#include <unistd.h>
 #endif
 
+#ifdef __APPLE__
+// Declared by glibc's unistd.h, not by Apple's.
+extern char** environ; // NOLINT(readability-redundant-declaration)
+#endif
+
 namespace lexiglance::daemon
 {
 
@@ -102,13 +107,17 @@ namespace lexiglance::daemon
 		};
 
 		// Players that decode MP3, the preferred first.
-		constexpr std::array<Candidate, 5> candidates{ {
+		constexpr auto candidates = std::to_array<Candidate>( {
 				{ .name = "ffplay", .options = "-nodisp -autoexit -loglevel quiet" },
 				{ .name = "mpv", .options = "--no-video --really-quiet" },
 				{ .name = "mpg123", .options = "-q" },
 				{ .name = "gst-play-1.0", .options = "-q" },
 				{ .name = "pw-play", .options = "" },
-		} };
+#ifdef __APPLE__
+				// Part of macOS (MP3, AAC, WAV; no Ogg).
+				{ .name = "afplay", .options = "" },
+#endif
+		} );
 
 		// The first installed player that decodes MP3.
 		std::optional<std::vector<std::string>> playerCommand( const std::string& file )
@@ -199,7 +208,7 @@ namespace lexiglance::daemon
 			startup.cb = sizeof( startup );
 			if ( CreateProcessW( nullptr, line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process ) == FALSE )
 			{
-				return fail( "cannot start {} (error {})", command.front(), GetLastError() );
+				return fail( "Couldn't start {} (error {})", command.front(), GetLastError() );
 			}
 			CloseHandle( process.hThread );
 			return static_cast<void*>( process.hProcess );
@@ -279,7 +288,7 @@ namespace lexiglance::daemon
 			posix_spawn_file_actions_destroy( &actions );
 			if ( error != 0 )
 			{
-				return fail( "cannot start {}: {}", command.front(), std::strerror( error ) );
+				return fail( "Couldn't start {}: {}", command.front(), std::strerror( error ) );
 			}
 			return pid;
 		}
@@ -435,7 +444,7 @@ namespace lexiglance::daemon
 			if ( !out )
 			{
 				// Without the reason this reads as a broken path, which it almost never is.
-				return fail( "cannot write {}: {}", file.string(), std::error_code( errno, std::generic_category() ).message() );
+				return fail( "Couldn't save the clip to {}: {}", file.string(), std::error_code( errno, std::generic_category() ).message() );
 			}
 		}
 
@@ -448,13 +457,13 @@ namespace lexiglance::daemon
 		auto command = playerCommand( file.string() );
 		if ( !command )
 		{
-			return fail( "Windows cannot play this clip (install ffmpeg or mpv for other formats)" );
+			return fail( "Windows can't play this clip. Install ffmpeg or mpv for other formats." );
 		}
 #else
 		auto command = playerCommand( file.string() );
 		if ( !command )
 		{
-			return fail( "No audio player found (install ffmpeg or mpv)" );
+			return fail( "No audio player found. Install ffmpeg or mpv." );
 		}
 #endif
 		auto player = spawn( *command );

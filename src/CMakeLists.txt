@@ -35,6 +35,7 @@ add_library(
     core/Md5.cpp
     core/Paths.cpp
     core/Process.cpp
+    core/Report.cpp
     core/Thread.cpp
     core/Uninstall.cpp
     core/Utf8.cpp

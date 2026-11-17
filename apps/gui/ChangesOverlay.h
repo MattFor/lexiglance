@@ -5,14 +5,14 @@
 
 #include <QLabel>
 #include <QPushButton>
-#include <QScrollArea>
+#include <QTextBrowser>
 
 namespace lexiglance::gui
 {
 
 	// What changed, from the changelog built into the program, on a rounded card over the window: shown once after an
-	// update, for every version since the one shown last, newest first, scrolling when it is long. Escape, a click beside
-	// the card or its button closes it.
+	// update, for every version since the one shown last, newest first, scrolling when it is long. Escape, Enter, a click
+	// beside the card or its button closes it.
 	class ChangesOverlay final : public CardOverlay
 	{
 	public:
@@ -23,10 +23,9 @@ namespace lexiglance::gui
 		void open( const QString& version, const QString& since = {} );
 
 	private:
-		QLabel*      title_;
-		QLabel*      text_;
-		QScrollArea* scroll_;
-		QPushButton* close_;
+		QLabel*       title_;
+		QTextBrowser* text_;
+		QPushButton*  close_;
 	};
 
 } // namespace lexiglance::gui

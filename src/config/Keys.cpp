@@ -41,21 +41,29 @@ namespace lexiglance::config
 				{ .name = "RAlt", .keys = { Key::AltR } },
 				{ .name = "Right Alt", .keys = { Key::AltR } },
 				{ .name = "AltGr", .keys = { Key::AltR } },
+				{ .name = "Option", .keys = { Key::AltL, Key::AltR } },
+				{ .name = "Left Option", .keys = { Key::AltL } },
+				{ .name = "Right Option", .keys = { Key::AltR } },
 				{ .name = "Super", .keys = { Key::SuperL, Key::SuperR } },
 				{ .name = "Win", .keys = { Key::SuperL, Key::SuperR } },
 				{ .name = "Windows", .keys = { Key::SuperL, Key::SuperR } },
 				{ .name = "Meta", .keys = { Key::SuperL, Key::SuperR } },
 				{ .name = "Cmd", .keys = { Key::SuperL, Key::SuperR } },
+				{ .name = "Command", .keys = { Key::SuperL, Key::SuperR } },
 				{ .name = "Super_L", .keys = { Key::SuperL } },
 				{ .name = "Win_L", .keys = { Key::SuperL } },
 				{ .name = "LWin", .keys = { Key::SuperL } },
 				{ .name = "Left Win", .keys = { Key::SuperL } },
 				{ .name = "Left Super", .keys = { Key::SuperL } },
+				{ .name = "Left Cmd", .keys = { Key::SuperL } },
+				{ .name = "Left Command", .keys = { Key::SuperL } },
 				{ .name = "Super_R", .keys = { Key::SuperR } },
 				{ .name = "Win_R", .keys = { Key::SuperR } },
 				{ .name = "RWin", .keys = { Key::SuperR } },
 				{ .name = "Right Win", .keys = { Key::SuperR } },
 				{ .name = "Right Super", .keys = { Key::SuperR } },
+				{ .name = "Right Cmd", .keys = { Key::SuperR } },
+				{ .name = "Right Command", .keys = { Key::SuperR } },
 				{ .name = "Caps_Lock", .keys = { Key::CapsLock } },
 				{ .name = "Caps Lock", .keys = { Key::CapsLock } },
 				{ .name = "Menu", .keys = { Key::Menu } },
@@ -122,16 +130,30 @@ namespace lexiglance::config
 		constexpr std::string_view super_either = "Win";
 		constexpr std::string_view super_left   = "Left Win";
 		constexpr std::string_view super_right  = "Right Win";
+#elifdef __APPLE__
+		// Mac keyboards label them Command and Option.
+		constexpr std::string_view super_either = "Cmd";
+		constexpr std::string_view super_left   = "Left Cmd";
+		constexpr std::string_view super_right  = "Right Cmd";
 #else
 		constexpr std::string_view super_either = "Super";
 		constexpr std::string_view super_left   = "Left Super";
 		constexpr std::string_view super_right  = "Right Super";
 #endif
+#ifdef __APPLE__
+		constexpr std::string_view alt_either = "Option";
+		constexpr std::string_view alt_left   = "Left Option";
+		constexpr std::string_view alt_right  = "Right Option";
+#else
+		constexpr std::string_view alt_either = "Alt";
+		constexpr std::string_view alt_left   = "Left Alt";
+		constexpr std::string_view alt_right  = "Right Alt";
+#endif
 
 		constexpr std::array<std::string_view, 17> suggestions{
 			super_either,
-			"Left Alt",
-			"Right Alt",
+			alt_left,
+			alt_right,
 			"Shift",
 			"Left Shift",
 			"Right Shift",
@@ -217,9 +239,9 @@ namespace lexiglance::config
 			case Key::ControlR:
 				return "Right Ctrl";
 			case Key::AltL:
-				return "Left Alt";
+				return alt_left;
 			case Key::AltR:
-				return "Right Alt";
+				return alt_right;
 			case Key::SuperL:
 				return super_left;
 			case Key::SuperR:
@@ -258,7 +280,7 @@ namespace lexiglance::config
 		}
 		if ( *group == KeyGroup{ Key::AltL, Key::AltR } )
 		{
-			return "Alt";
+			return std::string( alt_either );
 		}
 		if ( *group == KeyGroup{ Key::SuperL, Key::SuperR } )
 		{

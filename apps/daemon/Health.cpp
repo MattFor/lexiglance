@@ -16,6 +16,7 @@
 #include <future>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef _WIN32
@@ -132,7 +133,7 @@ namespace lexiglance::daemon
 			if ( enabled.empty() )
 			{
 				check.status = Severity::Error;
-				check.detail = "Every built-in language is turned off, so Lexiglance will not recognise text.";
+				check.detail = "All languages are turned off, so Lexiglance can't recognise any text. Turn at least one on in Scanning.";
 				check.fix    = "open-scanning";
 			}
 			else
@@ -161,7 +162,7 @@ namespace lexiglance::daemon
 	{
 		// Which daemon this is, and whether it still is the program on disk.
 		{
-			Check      check{ .id = "daemon", .title = "Lexiglance daemon" };
+			Check      check{ .id = "daemon", .title = "Lexiglance" };
 			const auto uptime = std::chrono::duration_cast<std::chrono::seconds>( Clock::now() - started_ );
 #ifdef _WIN32
 			const int pid = _getpid();
@@ -172,26 +173,27 @@ namespace lexiglance::daemon
 			if ( process::executableReplaced() )
 			{
 				check.status = Severity::Warning;
-				check.detail += " The program was rebuilt or updated after it started: restart it to run the new version.";
+				check.detail += " The program changed on disk after it started (an update or a rebuild). Restart it to run the new version.";
 				check.fix = "restart";
 			}
 			checks.push_back( std::move( check ) );
 		}
 
-		// Other daemons (from before the instance lock, or ones that lost their socket) show popups of their own.
+		// Other daemons (another copy's, with a LEXIGLANCE_HOME of its own) show popups of their own. This one's home has
+		// only this one, so restarting does not touch them.
 		if ( const auto others = process::othersNamed( "lexiglanced" ); !others.empty() )
 		{
 			checks.push_back(
 					{ .id     = "instances",
-					  .title  = "Other Lexiglance daemons",
-					  .status = Severity::Error,
+					  .title  = "Other copies of Lexiglance",
+					  .status = Severity::Warning,
 					  .detail = std::format(
-							  "{} more {} running (pid {}). Each shows popups of its own, possibly with old settings; restarting stops them.",
+							  "{} more {} running (pid {}), with {} own settings and popups. Quit any you don't use.",
 							  others.size(),
-							  others.size() == 1 ? "daemon is" : "daemons are",
-							  joined( others, ", " )
-					  ),
-					  .fix = "restart" }
+							  others.size() == 1 ? "copy of Lexiglance is" : "copies of Lexiglance are",
+							  joined( others, ", " ),
+							  others.size() == 1 ? "its" : "their"
+					  ) }
 			);
 		}
 
@@ -206,18 +208,25 @@ namespace lexiglance::daemon
 		if ( cfg.paused )
 		{
 			checks.push_back(
-					{ .id = "paused", .title = "Scanning", .status = Severity::Warning, .detail = "Scanning is paused: holding the trigger does nothing until it is resumed.", .fix = "resume" }
+					{ .id = "paused", .title = "Scanning", .status = Severity::Warning, .detail = "Scanning is paused, so holding the trigger does nothing.", .fix = "resume" }
 			);
 		}
 
 		// The desktop: the UI thread answers and checks the trigger keys and input events itself.
 		if ( !backend_ )
 		{
+#ifdef _WIN32
+			constexpr std::string_view desktop = "the Windows desktop";
+#elifdef __APPLE__
+			constexpr std::string_view desktop = "the macOS desktop";
+#else
+			constexpr std::string_view desktop = "the desktop (X11)";
+#endif
 			checks.push_back(
 					{ .id     = "desktop",
 					  .title  = "Desktop",
 					  .status = Severity::Error,
-					  .detail = "There is no connection to the desktop (X11), so the trigger and popups cannot work. Was the daemon started outside the graphical session?",
+					  .detail = std::format( "Lexiglance isn't connected to {}, so the trigger and popups can't work. It may have been started outside your desktop session: restart it.", desktop ),
 					  .fix    = "restart" }
 			);
 		}
@@ -232,6 +241,19 @@ namespace lexiglance::daemon
 			} );
 			if ( auto desktop = await( future, std::chrono::seconds( 2 ) ) )
 			{
+#ifdef _WIN32
+				// Set up but not in effect (the Start-up item says why): setting it up again is the fix, not turning it on.
+				if ( run_as_administrator_ && !elevated_ )
+				{
+					for ( Check& check : *desktop )
+					{
+						if ( check.id == "elevated" )
+						{
+							check.detail += " Run as administrator is already on but didn't take effect (see Start-up): click Run as administrator to set it up again.";
+						}
+					}
+				}
+#endif
 				std::ranges::move( *desktop, std::back_inserter( checks ) );
 			}
 			else
@@ -240,7 +262,7 @@ namespace lexiglance::daemon
 						{ .id     = "desktop",
 						  .title  = "Desktop",
 						  .status = Severity::Error,
-						  .detail = "The desktop thread does not answer, so no popup can be shown.",
+						  .detail = "The desktop thread isn't responding, so no popups can be shown. Restart Lexiglance.",
 						  .fix    = "restart" }
 				);
 			}
@@ -272,8 +294,8 @@ namespace lexiglance::daemon
 		if ( words == 0 )
 		{
 			check.status = Severity::Error;
-			check.detail = set->all().empty() ? "No dictionary is installed and enabled, so nothing can be looked up."
-			                                  : "No word dictionary is enabled (only kanji or frequency lists), so words cannot be looked up.";
+			check.detail = set->all().empty() ? "No dictionary is enabled, so nothing can be looked up. Install or enable one on the Dictionaries page."
+			                                  : "Only kanji dictionaries or frequency lists are enabled, so words can't be looked up. Install or enable a word dictionary.";
 			check.fix    = "open-dictionaries";
 		}
 		else
@@ -296,6 +318,8 @@ namespace lexiglance::daemon
 			return;
 		}
 
+		// Not ipc_translator_: the check runs on a worker, beside the IPC thread.
+		lookup::Translator       translator;
 		Check                    lookup{ .id = "lookup", .title = "Looking words up" };
 		const auto               started = Clock::now();
 		std::size_t              found   = 0;
@@ -305,7 +329,7 @@ namespace lexiglance::daemon
 		{
 			for ( const std::string_view word : language->sampleWords() )
 			{
-				found += ipc_translator_.lookup( set, word, lookupOptions( cfg ) ).terms.empty() ? 0 : 1;
+				found += translator.lookup( set, word, lookupOptions( cfg ) ).terms.empty() ? 0 : 1;
 				tried.emplace_back( word );
 			}
 		}
@@ -313,7 +337,7 @@ namespace lexiglance::daemon
 		if ( found == 0 )
 		{
 			lookup.status = Severity::Warning;
-			lookup.detail = std::format( "None of {} is in the enabled dictionaries: are the right ones enabled?", joined( tried, ", " ) );
+			lookup.detail = std::format( "None of these everyday words is in the enabled dictionaries: {}. Check that the right dictionaries are enabled.", joined( tried, ", " ) );
 			lookup.fix    = "open-dictionaries";
 		}
 		else
@@ -408,15 +432,15 @@ namespace lexiglance::daemon
 		if ( !missing.empty() )
 		{
 			check.status = Severity::Error;
-			check.detail = std::format( "No installed font has every character of {} text, so popups show boxes for it. Install a font that has, such as Noto Sans (Noto Sans CJK JP for Japanese).", joined( missing, " and " ) );
+			check.detail = std::format( "No installed font has all the characters of {} text, so popups show boxes instead. Install one that does, such as Noto Sans (Noto Sans CJK JP for Japanese).", joined( missing, " and " ) );
 		}
 		else
 		{
-			check.detail = std::format( "Text is drawn: {}.", joined( drawn, "; " ) );
+			check.detail = std::format( "Popups draw {}.", joined( drawn, "; " ) );
 			if ( !borrowed.empty() )
 			{
 				check.status = Severity::Info;
-				check.detail += std::format( " The chosen font, {}, has no {} of its own.", cfg.popup.font_family, joined( borrowed, " or " ) );
+				check.detail += std::format( " The chosen font, {}, has no {} characters, so another font fills in.", cfg.popup.font_family, joined( borrowed, " or " ) );
 			}
 		}
 		checks.push_back( std::move( check ) );
@@ -433,7 +457,7 @@ namespace lexiglance::daemon
 						{ .id     = "accessibility-setting",
 						  .title  = "Accessibility for Qt and Chromium",
 						  .status = Severity::Warning,
-						  .detail = "Qt, Chromium and Electron applications are not asked to expose their text, so it can only be read with OCR (slower, less exact).",
+						  .detail = "Qt, Chromium and Electron applications aren't asked to expose their text, so only OCR can read it, which is slower and less exact.",
 						  .fix    = "enable-accessibility" }
 				);
 			}
@@ -444,7 +468,7 @@ namespace lexiglance::daemon
 						{ .id     = "capture",
 						  .title  = "Text capture",
 						  .status = Severity::Error,
-						  .detail = std::format( "Reading the text under the pointer has been stuck for {} s, most likely in a call to an application that does not answer.", busy.count() / 1000 ),
+						  .detail = std::format( "Reading the text under the pointer has been stuck for {} s, most likely waiting on an application that isn't responding. Restart Lexiglance.", busy.count() / 1000 ),
 						  .fix    = "restart" }
 				);
 			}
@@ -478,8 +502,8 @@ namespace lexiglance::daemon
 							{ .id     = "capture",
 							  .title  = "Text capture",
 							  .status = replaced ? Severity::Warning : Severity::Error,
-							  .detail = replaced ? "Text capture was busy with lookups; check again without holding the trigger."
-							                     : "Text capture did not answer within 8 s.",
+							  .detail = replaced ? "Text capture was busy with lookups. Check again without holding the trigger."
+							                     : "Text capture didn't respond within 8 s. Restart Lexiglance.",
 							  .fix    = replaced ? "" : "restart" }
 					);
 				}
@@ -488,7 +512,7 @@ namespace lexiglance::daemon
 			if ( const auto busy = busyFor( render_busy_since_ ); busy > std::chrono::seconds( 3 ) )
 			{
 				checks.push_back(
-						{ .id = "render", .title = "Drawing popups", .status = Severity::Error, .detail = std::format( "Drawing a popup has been stuck for {} s.", busy.count() / 1000 ), .fix = "restart" }
+						{ .id = "render", .title = "Drawing popups", .status = Severity::Error, .detail = std::format( "Drawing a popup has been stuck for {} s. Restart Lexiglance.", busy.count() / 1000 ), .fix = "restart" }
 				);
 			}
 
@@ -536,8 +560,6 @@ namespace lexiglance::daemon
 			json::Writer out;
 			out.beginObject().field( "checking", what ).field( "done", static_cast<std::uint64_t>( ++done ) ).field( "total", static_cast<std::uint64_t>( steps.size() ) ).endObject();
 			ipc_.broadcast( "health.progress", out.str() );
-			// The check holds the server's thread while it works, so what it says goes out now rather than at the end.
-			ipc_.flush();
 		};
 
 		step( steps[0] );
@@ -585,14 +607,14 @@ namespace lexiglance::daemon
 				if ( cfg->anki.deck.empty() || cfg->anki.model.empty() )
 				{
 					check.status = Severity::Warning;
-					check.detail += " Choose a deck and a note type so notes can be added.";
+					check.detail += " Choose a deck and a note type to add notes.";
 					check.fix = "open-anki";
 				}
 			}
 			else
 			{
 				check.status = Severity::Warning;
-				check.detail = std::format( "AnkiConnect does not answer at {} ({}). Start Anki with the AnkiConnect add-on, or turn Anki export off.", cfg->anki.url, anki.error().message );
+				check.detail = std::format( "Couldn't reach AnkiConnect at {} ({}). Start Anki with the AnkiConnect add-on, or turn off the \"add to Anki\" button.", cfg->anki.url, anki.error().message );
 				check.fix    = "open-anki";
 			}
 			checks.push_back( std::move( check ) );
@@ -604,7 +626,7 @@ namespace lexiglance::daemon
 			if ( !directoryWritable( config_path_.parent_path() ) )
 			{
 				check.status = Severity::Error;
-				check.detail = std::format( "{} cannot be written, so changed settings are lost when Lexiglance restarts.", config_path_.parent_path().string() );
+				check.detail = std::format( "Lexiglance can't write to {}, so changed settings are lost when it restarts.", config_path_.parent_path().string() );
 			}
 			else
 			{
@@ -636,7 +658,7 @@ namespace lexiglance::daemon
 			if ( !bad.empty() )
 			{
 				check.status = Severity::Error;
-				check.detail = std::format( "Cannot write {}: Lexiglance cannot save dictionaries, logs or downloads there.", joined( bad, "; " ) );
+				check.detail = std::format( "Lexiglance can't write to {}, so it can't save dictionaries, logs or downloads there.", joined( bad, "; " ) );
 			}
 			else
 			{
@@ -674,6 +696,10 @@ namespace lexiglance::daemon
 			}
 		}
 
+		{
+			const std::scoped_lock lock( problems_mutex_ );
+			addSimulated( checks, simulated_ );
+		}
 		json::Writer out;
 		health::write( out, checks );
 		return out.take();

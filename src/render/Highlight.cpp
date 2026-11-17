@@ -252,10 +252,14 @@ namespace lexiglance::render
 
 		// The text is laid out first: the panels fit around it, or it fits the panels when a width is asked for.
 		// A font map of its own, freed with the preview (the shared default one lives as long as its thread).
-		PangoFontMap*         map     = pango_cairo_font_map_new();
-		PangoContext*         context = pango_font_map_create_context( map );
-		PangoLayout*          layout  = pango_layout_new( context );
-		PangoFontDescription* font    = pango_font_description_new();
+		PangoFontMap* map     = pango_cairo_font_map_new();
+		PangoContext* context = pango_font_map_create_context( map );
+#ifdef __APPLE__
+		// As the popup does (PopupRenderer.cpp): Japanese forms of the sample's kanji.
+		pango_context_set_language( context, pango_language_from_string( "ja" ) );
+#endif
+		PangoLayout*          layout = pango_layout_new( context );
+		PangoFontDescription* font   = pango_font_description_new();
 		pango_font_description_set_family( font, fontFamilies().c_str() );
 		pango_font_description_set_absolute_size( font, px( 22 ) * PANGO_SCALE );
 		pango_layout_set_font_description( layout, font );

@@ -3,6 +3,7 @@
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Thread.h>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <ranges>
@@ -13,10 +14,13 @@
 	#endif
 	#include <windows.h>
 #else
+	#include <fcntl.h>
 	#include <poll.h>
-	#include <sys/eventfd.h>
 	#include <sys/socket.h>
 	#include <unistd.h>
+	#ifndef __APPLE__
+		#include <sys/eventfd.h>
+	#endif
 #endif
 
 namespace lexiglance::daemon
@@ -108,6 +112,24 @@ namespace lexiglance::daemon
 			return false;
 		}
 
+		// The handler's answer to request `id`, as the line that goes to the client.
+		std::string answer( const IpcServer::Handler& handler, std::string_view method, const json::Value& params, std::int64_t id )
+		{
+			Result<std::string> result = fail( "internal error" );
+			try
+			{
+				result = handler( params );
+			}
+			catch ( const std::exception& e )
+			{
+				result = fail( "{} failed: {}", method, e.what() );
+			}
+			return result ? ipc::response( id, *result ) : ipc::errorResponse( id, result.error().message );
+		}
+
+		// Slow requests worked on at once; more wait for a free worker, while quick ones never do.
+		constexpr unsigned slow_workers = 4;
+
 	} // namespace
 
 	// Out of line: clients hold Windows' pending operations, complete only here.
@@ -120,7 +142,12 @@ namespace lexiglance::daemon
 
 	void IpcServer::on( std::string method, Handler handler )
 	{
-		handlers_.emplace( std::move( method ), std::move( handler ) );
+		handlers_.emplace( std::move( method ), Route{ .handler = std::move( handler ) } );
+	}
+
+	void IpcServer::onSlow( std::string method, Handler handler )
+	{
+		handlers_.emplace( std::move( method ), Route{ .handler = std::move( handler ), .slow = true } );
 	}
 
 	Result<> IpcServer::start( const std::string& endpoint )
@@ -138,14 +165,30 @@ namespace lexiglance::daemon
 		{
 			return fail( "CreateEvent failed (error {})", GetLastError() );
 		}
+#elifdef __APPLE__
+		// macOS has no eventfd: a pipe, read at one end and written at the other.
+		std::array<int, 2> ends{ -1, -1 };
+		if ( ::pipe( ends.data() ) != 0 )
+		{
+			return fail( "pipe failed" );
+		}
+		for ( const int end : ends )
+		{
+			( void )::fcntl( end, F_SETFD, FD_CLOEXEC );
+			( void )::fcntl( end, F_SETFL, O_NONBLOCK );
+		}
+		wake_fd_       = ends[0];
+		wake_write_fd_ = ends[1];
 #else
 		wake_fd_ = ::eventfd( 0, EFD_CLOEXEC | EFD_NONBLOCK );
 		if ( wake_fd_ < 0 )
 		{
 			return fail( "eventfd failed" );
 		}
+		wake_write_fd_ = wake_fd_;
 #endif
-		thread_ = std::jthread( [this]( const std::stop_token& stop ) {
+		workers_ = std::make_unique<ThreadPool>( slow_workers, false, "lg-ipc-slow" );
+		thread_  = std::jthread( [this]( const std::stop_token& stop ) {
 			thread::setName( "lg-ipc" );
 			loop( stop );
 		} );
@@ -161,6 +204,7 @@ namespace lexiglance::daemon
 			thread_.join();
 		}
 		clients_.clear();
+		recount();
 		if ( server_.valid() )
 		{
 			server_.close();
@@ -169,6 +213,8 @@ namespace lexiglance::daemon
 			std::filesystem::remove( endpoint_, ec );
 #endif
 		}
+		// Slow requests still being worked on finish here; they wake the loop when done, so before its wake-up goes.
+		workers_.reset();
 #ifdef _WIN32
 		if ( wake_event_ != nullptr )
 		{
@@ -176,11 +222,16 @@ namespace lexiglance::daemon
 			wake_event_ = nullptr;
 		}
 #else
+		if ( wake_write_fd_ != wake_fd_ )
+		{
+			::close( wake_write_fd_ );
+		}
 		if ( wake_fd_ >= 0 )
 		{
 			::close( wake_fd_ );
-			wake_fd_ = -1;
 		}
+		wake_fd_       = -1;
+		wake_write_fd_ = -1;
 #endif
 	}
 
@@ -188,14 +239,63 @@ namespace lexiglance::daemon
 	{
 		{
 			const std::scoped_lock lock( outbox_mutex_ );
-			outbox_.push_back( ipc::event( name, params_json ) );
+			outbox_.push_back( { .client = 0, .message = ipc::event( name, params_json ) } );
 		}
 		wake();
 	}
 
-	void IpcServer::flush()
+	void IpcServer::publish( Topic topic, std::string_view name, std::string_view params_json )
 	{
-		deliver();
+		{
+			const std::scoped_lock lock( outbox_mutex_ );
+			outbox_.push_back( { .client = 0, .topic = static_cast<unsigned>( topic ), .message = ipc::event( name, params_json ) } );
+		}
+		wake();
+	}
+
+	void IpcServer::guardTopics( std::function<Result<>()> guard )
+	{
+		topic_guard_ = std::move( guard );
+	}
+
+	Result<> IpcServer::subscribe( Client& client, const json::Value& names )
+	{
+		unsigned topics = 0;
+		for ( const json::Value& name : names.items() )
+		{
+			if ( name.asString() == "trace" )
+			{
+				topics |= static_cast<unsigned>( Topic::Trace );
+			}
+			else if ( name.asString() == "log" )
+			{
+				topics |= static_cast<unsigned>( Topic::Log );
+			}
+			else
+			{
+				return fail( "no such events: {}", name.asString() );
+			}
+		}
+		if ( topics != 0 && topic_guard_ )
+		{
+			if ( auto allowed = topic_guard_(); !allowed )
+			{
+				return allowed;
+			}
+		}
+		client.topics = topics;
+		recount();
+		return {};
+	}
+
+	void IpcServer::recount()
+	{
+		unsigned topics = 0;
+		for ( const Client& client : clients_ )
+		{
+			topics |= client.topics;
+		}
+		topics_.store( topics, std::memory_order_relaxed );
 	}
 
 	void IpcServer::wake() const
@@ -206,31 +306,62 @@ namespace lexiglance::daemon
 			SetEvent( wake_event_ );
 		}
 #else
-		if ( wake_fd_ >= 0 )
+		if ( wake_write_fd_ >= 0 )
 		{
 			const std::uint64_t         one     = 1;
-			[[maybe_unused]] const auto written = ::write( wake_fd_, &one, sizeof( one ) );
+			[[maybe_unused]] const auto written = ::write( wake_write_fd_, &one, sizeof( one ) );
 		}
 #endif
 	}
 
-	// Sends what broadcast() queued to every client.
+	// Sends what broadcast() and the slow requests queued, to each client its share in order. A client whose answer came
+	// goes on with the requests that waited for it.
 	void IpcServer::deliver()
 	{
-		std::vector<std::string> messages;
+		std::vector<Outgoing> messages;
 		{
 			const std::scoped_lock lock( outbox_mutex_ );
 			messages.swap( outbox_ );
 		}
-		for ( const Client& client : clients_ )
+		// What the topics take no longer holds (developer mode turned off): they stop.
+		const auto topical = []( const Outgoing& message ) { return message.topic != 0; };
+		if ( topic_guard_ && std::ranges::any_of( messages, topical ) && !topic_guard_() )
 		{
-			for ( const auto& message : messages )
+			for ( Client& client : clients_ )
 			{
-				if ( !sendTo( client.socket, message ) )
+				client.topics = 0;
+			}
+			recount();
+			std::erase_if( messages, topical );
+		}
+		for ( Client& client : clients_ )
+		{
+			for ( const auto& [to, topic, message] : messages )
+			{
+				const bool wanted = to == client.id || ( to == 0 && ( topic == 0 || ( client.topics & topic ) != 0 ) );
+				if ( wanted && !sendTo( client.socket, message ) )
 				{
 					break;
 				}
 			}
+			if ( std::ranges::contains( messages, client.id, &Outgoing::client ) )
+			{
+				client.busy = false;
+				serve( client );
+			}
+		}
+	}
+
+	void IpcServer::serve( Client& client )
+	{
+		while ( !client.busy )
+		{
+			auto line = client.buffer.next();
+			if ( !line )
+			{
+				return;
+			}
+			dispatch( client, std::move( *line ) );
 		}
 	}
 
@@ -245,24 +376,35 @@ namespace lexiglance::daemon
 
 		const json::Value& root   = message->root();
 		const auto         id     = root["id"].asInt( -1 );
-		const auto         method = std::string( root["method"].asString() );
-		const auto         it     = handlers_.find( method );
+		auto               method = std::string( root["method"].asString() );
+		if ( method == "events.subscribe" )
+		{
+			const auto subscribed = subscribe( client, root["params"]["events"] );
+			sendTo( client.socket, subscribed ? ipc::response( id, "{}" ) : ipc::errorResponse( id, subscribed.error().message ) );
+			return;
+		}
+		const auto it = handlers_.find( method );
 		if ( it == handlers_.end() )
 		{
 			sendTo( client.socket, ipc::errorResponse( id, "unknown method: " + method ) );
 			return;
 		}
+		if ( !it->second.slow )
+		{
+			sendTo( client.socket, answer( it->second.handler, method, root["params"], id ) );
+			return;
+		}
 
-		Result<std::string> result = fail( "internal error" );
-		try
-		{
-			result = it->second( root["params"] );
-		}
-		catch ( const std::exception& e )
-		{
-			result = fail( "{} failed: {}", method, e.what() );
-		}
-		sendTo( client.socket, result ? ipc::response( id, *result ) : ipc::errorResponse( id, result.error().message ) );
+		// The answer goes out through the outbox, after the events sent before it.
+		client.busy = true;
+		( void )workers_->submit( [this, owner = client.id, handler = &it->second.handler, method = std::move( method ), id, request = std::move( *message )] {
+			auto reply = answer( *handler, method, request.root()["params"], id );
+			{
+				const std::scoped_lock lock( outbox_mutex_ );
+				outbox_.push_back( { .client = owner, .message = std::move( reply ) } );
+			}
+			wake();
+		} );
 	}
 
 #ifdef _WIN32
@@ -330,6 +472,8 @@ namespace lexiglance::daemon
 			{
 				clients_.erase( clients_.begin() + static_cast<std::ptrdiff_t>( index ) );
 			}
+			// Clients that went took their subscriptions along.
+			recount();
 
 			events.clear();
 			events.push_back( wake_event_ );
@@ -370,7 +514,7 @@ namespace lexiglance::daemon
 					await();
 					continue;
 				}
-				Client client{ .socket = std::move( server_ ), .buffer = {}, .read = std::make_unique<Pending>() };
+				Client client{ .socket = std::move( server_ ), .buffer = {}, .id = next_client_++, .read = std::make_unique<Pending>() };
 				( void )client.socket.setTimeout( write_timeout );
 				clients_.push_back( std::move( client ) );
 				if ( auto next = ipc::createPipeInstance( endpoint_, false ) )
@@ -400,10 +544,7 @@ namespace lexiglance::daemon
 				clients_.erase( clients_.begin() + static_cast<std::ptrdiff_t>( index - first_client ) );
 				continue;
 			}
-			while ( auto line = client.buffer.next() )
-			{
-				dispatch( client, std::move( *line ) );
-			}
+			serve( client );
 		}
 
 		for ( Client& client : clients_ )
@@ -425,6 +566,8 @@ namespace lexiglance::daemon
 
 		while ( !stop.stop_requested() )
 		{
+			// Clients that went took their subscriptions along.
+			recount();
 			fds.clear();
 			fds.push_back( { .fd = server_.fd(), .events = POLLIN, .revents = 0 } );
 			fds.push_back( { .fd = wake_fd_, .events = POLLIN, .revents = 0 } );
@@ -467,10 +610,7 @@ namespace lexiglance::daemon
 					closed.push_back( i );
 					continue;
 				}
-				while ( auto line = client.buffer.next() )
-				{
-					dispatch( client, std::move( *line ) );
-				}
+				serve( client );
 			}
 			for ( const std::size_t index : std::views::reverse( closed ) )
 			{
@@ -482,7 +622,7 @@ namespace lexiglance::daemon
 				if ( auto socket = ipc::acceptFrom( server_ ) )
 				{
 					( void )socket->setTimeout( write_timeout );
-					clients_.push_back( { .socket = std::move( *socket ) } );
+					clients_.push_back( { .socket = std::move( *socket ), .id = next_client_++ } );
 				}
 			}
 		}

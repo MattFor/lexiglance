@@ -2,13 +2,17 @@
 #define LEXIGLANCE_GUI_CARDOVERLAY_H
 
 #include <QFrame>
+#include <QLabel>
+#include <QPointer>
+#include <QVBoxLayout>
 #include <QWidget>
 
 namespace lexiglance::gui
 {
 
 	// A rounded card over the whole window, which dims behind it: what the settings application shows in place of a
-	// dialog. Escape or a click beside the card closes it, unless it is told to stay.
+	// dialog. Escape or a click beside the card closes it, unless it is told to stay; Enter presses the button in focus,
+	// or the card's primary one. The focus goes back where it was when the card closes.
 	class CardOverlay : public QWidget
 	{
 	public:
@@ -27,6 +31,10 @@ namespace lexiglance::gui
 		void popUp();
 		// Fits the card to what it holds, after that changed.
 		void place();
+		// The card's layout, with the margins and spacing every card has.
+		QVBoxLayout* cardLayout();
+		// A card's heading.
+		[[nodiscard]] static QLabel* cardTitle( const QString& text = {} );
 
 		void setDismissible( bool dismissible )
 		{
@@ -36,11 +44,13 @@ namespace lexiglance::gui
 		void paintEvent( QPaintEvent* event ) override;
 		void mousePressEvent( QMouseEvent* event ) override;
 		void keyPressEvent( QKeyEvent* event ) override;
+		void hideEvent( QHideEvent* event ) override;
 
 	private:
-		QFrame* card_;
-		int     width_;
-		bool    dismissible_ = true;
+		QFrame*           card_;
+		int               width_;
+		bool              dismissible_ = true;
+		QPointer<QWidget> focus_before_;
 	};
 
 } // namespace lexiglance::gui

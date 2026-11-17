@@ -67,4 +67,26 @@ elseif(LEXIGLANCE_PLATFORM STREQUAL "windows")
                 shcore)
     target_compile_definitions(lexiglance_platform
                                PRIVATE LEXIGLANCE_PLATFORM_WINDOWS=1)
+elseif(LEXIGLANCE_PLATFORM STREQUAL "macos")
+    # A listen-only event tap, AppKit panels, the accessibility API and
+    # CoreGraphics screen reads; all part of macOS itself.
+    enable_language(OBJCXX)
+    target_sources(lexiglance_platform PRIVATE macos/MacBackend.mm
+                                               macos/AxCapture.mm macos/CgScreen.mm)
+    # C++26 rejects the enum arithmetic of QuickDraw's deprecated ColorSync
+    # header, which AppKit pulls in and nothing uses: its guard skips it.
+    set_source_files_properties(
+        macos/MacBackend.mm macos/AxCapture.mm macos/CgScreen.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc" COMPILE_DEFINITIONS
+                                                "__COLORSYNCDEPRECATED__")
+    target_link_libraries(
+        lexiglance_platform
+        PRIVATE "-framework AppKit"
+                "-framework ApplicationServices"
+                "-framework CoreGraphics"
+                "-framework CoreFoundation"
+                "-framework IOKit"
+                "-framework QuartzCore")
+    target_compile_definitions(lexiglance_platform
+                               PRIVATE LEXIGLANCE_PLATFORM_MACOS=1)
 endif()

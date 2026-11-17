@@ -3,11 +3,14 @@
 
 #include "Anki.h"
 #include "Audio.h"
+#include "ConfigWatch.h"
+#include "Developer.h"
 #include "IpcServer.h"
 #include "Stats.h"
 #include "Translation.h"
 
 #include <lexiglance/config/Config.h>
+#include <lexiglance/core/Compat.h>
 #include <lexiglance/core/Health.h>
 #include <lexiglance/core/Thread.h>
 #include <lexiglance/dictionary/DictionaryStore.h>
@@ -25,6 +28,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -60,13 +64,24 @@ namespace lexiglance::daemon
 #endif
 
 	private:
+		// What debug.capture read (the capture inspector): the text, its lines on screen, and for OCR what it read them
+		// from.
+		struct Probe
+		{
+			std::optional<platform::CapturedText> captured;
+			std::vector<platform::Rect>           lines;
+			std::optional<platform::Snapshot>     snapshot;
+			std::chrono::microseconds             took{ 0 };
+			platform::WindowInfo                  window;
+		};
+
 		struct CaptureRequest
 		{
-			std::uint64_t                                                        generation = 0;
-			platform::Point                                                      point;
-			platform::WindowInfo                                                 window;
-			std::optional<std::string>                                           text;
-			std::shared_ptr<std::promise<std::optional<platform::CapturedText>>> probe;
+			std::uint64_t                        generation = 0;
+			platform::Point                      point;
+			platform::WindowInfo                 window;
+			std::optional<std::string>           text;
+			std::shared_ptr<std::promise<Probe>> probe;
 			// The capture's self-checks, for the health report.
 			std::shared_ptr<std::promise<std::vector<health::Check>>> diagnose;
 			bool                                                      refresh = false;
@@ -141,7 +156,7 @@ namespace lexiglance::daemon
 		}
 
 		Result<>                                   applyConfig( config::Config config, bool save );
-		void                                       reloadDictionaries();
+		void                                       reloadDictionaries( bool save = true, std::string_view removed = {} );
 		[[nodiscard]] render::PopupStyle           styleFor( const config::Config& cfg ) const;
 		[[nodiscard]] static lookup::LookupOptions lookupOptions( const config::Config& cfg );
 		// The languages turned on that dictionaries are installed for (those turned on, when none is): what fonts and
@@ -157,8 +172,10 @@ namespace lexiglance::daemon
 		// replaces whatever was asked for before it.
 		void post( CaptureRequest request, bool acted );
 		// Lets go of a translation on its way, so it cannot arrive after what replaced it.
-		void               forgetTranslation();
-		void               onClickOutside();
+		void forgetTranslation();
+		void onClickOutside();
+		// The trigger was let go (UI thread).
+		void               onTriggerReleased();
 		void               onPopupAction( std::size_t entry, render::PopupAction action );
 		void               onAdjustLength( int delta );
 		void               playAudio( std::shared_ptr<const Shown> shown, std::size_t entry, bool report );
@@ -205,7 +222,7 @@ namespace lexiglance::daemon
 			std::optional<platform::CapturedText> captured;
 			std::string_view                      source;
 			std::string                           unread;
-			std::chrono::milliseconds             took{ 0 };
+			std::chrono::microseconds             took{ 0 };
 			// The whole sentence was read, over all its lines (CaptureScope::sentence).
 			bool whole = false;
 		};
@@ -221,8 +238,10 @@ namespace lexiglance::daemon
 		// Now and then, while the user is away from the keyboard, the settings application looks for an update in the
 		// background (lexiglance --background-update), so a copy whose window is never opened stays up to date too.
 		void updateLoop( const std::stop_token& stop );
+		// Applies the settings file again when someone else changed it (a hand edit), every couple of seconds.
+		void watchConfig( const std::stop_token& stop );
 		void importLoop( const std::stop_token& stop );
-		void runImport( const ImportJob& job );
+		void runImport( const ImportJob& job, const std::stop_token& stop );
 
 		void reportCapture( const CaptureRequest& request, std::string_view text, std::string_view unread, std::string_view source, std::chrono::milliseconds took, std::size_t entries, CaptureReport& reported );
 
@@ -231,9 +250,25 @@ namespace lexiglance::daemon
 		// Lookups, popups and previews, keys and diagnostics.
 		void registerLookupHandlers();
 		// Translating text, and taking in models just downloaded.
-		void                      registerTranslationHandlers();
+		void registerTranslationHandlers();
+		// Developer mode (Debugging.cpp): the capture inspector, simulated scans and problems, the log's tail.
+		void registerDeveloperHandlers();
+		// Scans, lookups, the wheel and problems simulated (Debugging.cpp).
+		void registerSimulationHandlers();
+		// What the developer tools hand out (the screen, which macOS lets the daemon read; the log; what was looked up)
+		// goes to any program of the user that asks: they answer only while developer mode is on.
+		[[nodiscard]] Result<>           developerMode() const;
+		[[nodiscard]] IpcServer::Handler developerOnly( IpcServer::Handler handler ) const;
+		// What the capture inspector shows of a probe's capture (capture thread).
+		[[nodiscard]] static Probe inspect( CaptureState& state, const CaptureRequest& request, std::optional<platform::CapturedText> captured, std::chrono::microseconds took );
+		// The trace of a lookup from the capture thread, while anyone listens: what was read where, and how long reading and
+		// looking up took.
+		void traceLookup( const CaptureRequest& request, const platform::CapturedText& captured, const lookup::LookupResult& result, std::string_view source, std::string_view unread, std::chrono::microseconds took );
+		// The status's capture_problem, as simulated or `real`, and the names of the problems simulated.
+		void                      writeSimulated( json::Writer& out, std::string_view real ) const;
 		[[nodiscard]] std::string statusJson() const;
-		// Runs every self-check (see Health.cpp); called on the IPC thread. `interactive`: started by a click.
+		// Runs every self-check (see Health.cpp); called on an IPC worker, under health_mutex_. `interactive`: started by a
+		// click.
 		[[nodiscard]] std::string healthJson( bool interactive );
 		// Parts of the health report: this daemon and the desktop; dictionaries, lookups and fonts of the languages in
 		// use; reading the screen.
@@ -274,15 +309,20 @@ namespace lexiglance::daemon
 		// A translation is done (translation thread): the popup waiting for it is drawn again with it.
 		void translationDone( std::uint64_t ticket, Result<std::string> translation, std::chrono::microseconds took );
 
-		std::unique_ptr<platform::Backend>                                                       backend_;
-		dict::DictionaryStore                                                                    store_;
-		std::filesystem::path                                                                    config_path_;
-		std::atomic<std::shared_ptr<const config::Config>>                                       config_;
-		std::atomic<std::shared_ptr<const lookup::DictionarySet>>                                dictionaries_;
-		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<const dict::Dictionary>>>> installed_;
-		std::mutex                                                                               reload_mutex_;
+		std::unique_ptr<platform::Backend>                                       backend_;
+		dict::DictionaryStore                                                    store_;
+		std::filesystem::path                                                    config_path_;
+		AtomicShared<const config::Config>                                       config_;
+		AtomicShared<const lookup::DictionarySet>                                dictionaries_;
+		AtomicShared<const std::vector<std::shared_ptr<const dict::Dictionary>>> installed_;
+		std::mutex                                                               reload_mutex_;
+		// Settings are applied one at a time, each saved, applied and its dictionaries reloaded whole: by the IPC
+		// handlers, imports and the watcher of the settings file. Taken before reload_mutex_.
+		std::recursive_mutex apply_mutex_;
+		// The daemon's own saves and reads of the settings file; used under apply_mutex_.
+		ConfigWatch config_watch_;
 		// Codes of the languages of the enabled word dictionaries.
-		std::atomic<std::shared_ptr<const std::vector<std::string>>> dictionary_languages_;
+		AtomicShared<const std::vector<std::string>> dictionary_languages_;
 
 		std::atomic<std::uint64_t> generation_{ 0 };
 		// What the popup on screen shows (0: nothing, or not from the screen), so identical redraws are skipped.
@@ -314,6 +354,9 @@ namespace lexiglance::daemon
 		std::vector<std::string>              load_errors_;
 		std::string                           last_capture_;
 		std::chrono::steady_clock::time_point last_capture_time_;
+		// Problems made up by developer mode (debug.simulate), by name and as checks.
+		std::vector<std::string>   simulated_names_;
+		std::vector<health::Check> simulated_;
 
 		Mailbox<CaptureRequest> capture_requests_;
 		Mailbox<RenderRequest>  render_requests_;
@@ -329,7 +372,9 @@ namespace lexiglance::daemon
 
 		// The result behind the popup on screen, for its buttons; UI thread only.
 		CurrentPopup current_;
-		int          forced_length_ = 0;
+		// What the latest popup showed, closed or not, for a bug report's picture of it.
+		AtomicShared<const Shown> last_popup_;
+		int                       forced_length_ = 0;
 		// Turns of the wheel while the trigger's first popup was still on its way (UI thread), applied once it is up.
 		int pending_wheel_ = 0;
 		// A lookup was asked for and neither its popup nor word that there is none has come yet (UI thread).
@@ -344,10 +389,16 @@ namespace lexiglance::daemon
 		// lookups since it was last written (capture thread only).
 		Statistics  stats_;
 		std::size_t unsaved_stats_ = 0;
-		// Network work behind the popup buttons (audio downloads, AnkiConnect).
+		// Network work behind the popup buttons: AnkiConnect, and pronunciations on their own, so an Anki that hangs
+		// (a dialog open in it) holds no pronunciation up.
 		std::unique_ptr<ThreadPool> actions_;
+		std::unique_ptr<ThreadPool> audio_actions_;
+		// The latest pronunciation asked for from a popup: an older one still downloading is not played over it.
+		std::atomic<std::uint64_t> audio_asked_{ 0 };
 
+		// The IPC thread's; its slow handlers, on workers, have their own.
 		lookup::Translator                     ipc_translator_;
+		std::mutex                             health_mutex_;
 		std::unique_ptr<render::PopupRenderer> preview_renderer_;
 
 		// The popup waiting for a translation, drawn again when it comes (the ticket tells it from older ones).
@@ -359,10 +410,12 @@ namespace lexiglance::daemon
 		std::unique_ptr<TranslationService> translation_;
 
 		IpcServer    ipc_;
+		Tracer       tracer_{ &ipc_ };
 		std::jthread capture_thread_;
 		std::jthread render_thread_;
 		std::jthread import_thread_;
 		std::jthread update_thread_;
+		std::jthread config_thread_;
 	};
 
 } // namespace lexiglance::daemon

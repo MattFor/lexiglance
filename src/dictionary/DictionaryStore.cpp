@@ -2,6 +2,7 @@
 
 #include <lexiglance/core/Hash.h>
 #include <lexiglance/core/MappedFile.h>
+#include <lexiglance/core/Process.h>
 
 #include <algorithm>
 #include <format>
@@ -50,6 +51,21 @@ namespace lexiglance::dict
 		std::error_code                                ec;
 		for ( const auto& entry : fs::directory_iterator( directory_, ec ) )
 		{
+			// What a killed import left, or an import of a version that kept them: taken, and so removed, unless held.
+			if ( entry.path().extension() == ".lock" )
+			{
+				const process::InstanceLock stale( entry.path(), /*temporary=*/true );
+			}
+			// A killed import's half-written file, removed under its title's lock so no import is writing it meanwhile.
+			if ( entry.path().extension() == ".tmp" && entry.path().stem().extension() == format::extension )
+			{
+				auto lock = entry.path();
+				lock.replace_extension( ".lock" );
+				if ( const process::InstanceLock writer( lock, /*temporary=*/true ); writer.held() )
+				{
+					fs::remove( entry.path(), ec );
+				}
+			}
 			if ( !entry.is_regular_file( ec ) || entry.path().extension() != format::extension )
 			{
 				continue;
@@ -98,6 +114,9 @@ namespace lexiglance::dict
 		{
 			return fail( "cannot remove \"{}\": {}", title, removed.error().message );
 		}
+		fs::path lock = file;
+		lock += ".lock";
+		const process::InstanceLock stale( lock, /*temporary=*/true );
 		return {};
 	}
 

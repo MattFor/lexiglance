@@ -8,6 +8,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -70,8 +71,12 @@ namespace lexiglance::lookup
 		std::string form_of;
 		// Found only through its search key (всё for все): words spelled as written come first.
 		bool folded = false;
+		// Characters of the matched text a folded spelling left out (the ー of うまーい): not counted when ranking.
+		std::uint32_t left_out = 0;
 		// A form-of entry whose word no dictionary has: shown after everything else.
-		bool                        unresolved = false;
+		bool unresolved = false;
+		// How common the word is, by the frequency list that ranks the result (lower: more common); unranked last.
+		std::int64_t                frequency_rank = std::numeric_limits<std::int64_t>::max();
 		std::vector<TermDefinition> definitions;
 		std::vector<Frequency>      frequencies;
 		std::vector<Pitch>          pitches;
@@ -144,6 +149,13 @@ namespace lexiglance::lookup
 			std::string form_of;
 			bool        folded     = false;
 			bool        unresolved = false;
+			// Characters of the text a folded spelling left out, which do not count towards its length when ranking.
+			std::uint32_t left_out = 0;
+
+			[[nodiscard]] std::uint32_t ranked() const noexcept
+			{
+				return length - left_out;
+			}
 
 			// Rules applied, or the one step a form-of entry stands for; unresolved form-of entries go last.
 			[[nodiscard]] std::size_t steps() const noexcept
@@ -160,10 +172,10 @@ namespace lexiglance::lookup
 			std::vector<std::string> paths;
 		};
 
-		void        collect( const DictionarySet& set, const lang::TextVariant& variant, const lang::Deinflector& deinflector );
-		bool        addFormsOf( const DictionarySet& set, const dict::Dictionary& dictionary, const dict::format::TermRecord& term, const Match& match, int depth = 0 );
-		void        group( LookupResult& result );
-		static void attachMeta( LookupResult& result );
+		void collect( const DictionarySet& set, const lang::TextVariant& variant, const lang::Deinflector& deinflector );
+		bool addFormsOf( const DictionarySet& set, const dict::Dictionary& dictionary, const dict::format::TermRecord& term, const Match& match, int depth = 0 );
+		void group( LookupResult& result );
+		void attachMeta( LookupResult& result ) const;
 
 		std::vector<lang::TextVariant>                 variants_;
 		std::vector<lang::Deinflection>                deinflections_;
@@ -172,6 +184,9 @@ namespace lexiglance::lookup
 		std::map<FollowKey, Followed>                  followed_;
 		std::unordered_set<std::uint64_t>              seen_terms_;
 		std::unordered_map<std::uint64_t, std::size_t> groups_;
+		// The term and meta dictionaries searched for the text looked up now.
+		std::vector<std::uint16_t> term_dictionaries_;
+		std::vector<std::uint16_t> meta_dictionaries_;
 	};
 
 } // namespace lexiglance::lookup

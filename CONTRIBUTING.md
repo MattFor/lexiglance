@@ -1,7 +1,15 @@
 # Contributing
 
 Thanks for helping. Bug reports with screenshots and daemon logs (`lexiglanced --replace --verbose`) are as welcome
-as code.
+as code: **Report a problem** (Overview -> Health, About or the tray menu) or `lexiglancectl report` gathers what is
+needed into one zip.
+
+## Debugging
+
+Developer mode (About: click the version seven times, or `lexiglance --developer`) adds a Developer page: the pipeline
+trace with each stage's timings, a capture inspector that shows what OCR read, scans, lookups and problems simulated
+through the daemon's own pipeline, the log as it is written and an IPC console. `lexiglancectl trace` and
+`lexiglancectl debug ...` do the same from a terminal. [docs/debugging.md](docs/debugging.md) describes it all.
 
 ## Building
 
@@ -16,6 +24,11 @@ Dependencies:
 
 GCC 14 or Clang 18 (or newer) is needed for C++26, CMake 3.30 or newer, and Qt 6.4 or newer for the settings
 application. Ubuntu 24.04's own CMake is too old: `pipx install cmake` gives a current one.
+
+On macOS: Xcode's command line tools (`xcode-select --install`), `pipx install cmake ninja meson`, Pango and Cairo
+built by `bash .github/scripts/macos-deps.sh ~/lexiglance-deps` (for macOS 13.3, as the release has them) and Qt 6 from
+Qt's installer, both passed to the configure step as `-DCMAKE_PREFIX_PATH="<Qt>/6.8.3/macos;$HOME/lexiglance-deps"`.
+[docs/porting.md](docs/porting.md#macos) has the details.
 
 ```sh
 cmake --preset debug          # warnings are errors here
@@ -76,6 +89,18 @@ cmake --install build/release --prefix build/stage
 pwsh .github/scripts/windows-installer.ps1 build/release build/stage build/dist
 ```
 
+## Building the macOS disk image
+
+From a release build against the `macos-deps.sh` libraries, as the release makes `Lexiglance-macos.dmg` (with one
+build directory per architecture, `dmg` merges them into a universal app; `test` fails on a library built for a newer
+macOS than the app's 13.3, such as Homebrew's or MacPorts'):
+
+```sh
+bash .github/scripts/macos-package.sh bundle build/release build/arm64/Lexiglance.app
+bash .github/scripts/macos-package.sh dmg build/dist build/arm64/Lexiglance.app
+bash .github/scripts/macos-package.sh test build/dist/Lexiglance-macos.dmg
+```
+
 ## Cross-compiling for Windows
 
 With MinGW-w64 (GCC 14) and a static zlib built for it (Fedora: `mingw64-gcc-c++ mingw64-zlib-static`):
@@ -90,7 +115,8 @@ ctest --test-dir build/windows   # runs the Windows test binary under wine
 ## Fuzzing
 
 Parsers of untrusted input have libFuzzer targets (JSON, ZIP, configuration, IPC framing, dictionary style sheets,
-glossaries, compiled dictionaries and the whole import). With Clang:
+glossaries, compiled dictionaries, the whole import, language files, lookups of any text with the answer the daemon
+writes, and the translation tokenizer). With Clang:
 
 ```sh
 cmake -S . -B build/fuzz -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=RelWithDebInfo \

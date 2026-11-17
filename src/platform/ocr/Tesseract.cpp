@@ -91,8 +91,20 @@ namespace lexiglance::platform
 #else
 		void* openLibrary()
 		{
+	#ifdef __APPLE__
+			// Homebrew (Apple silicon, then Intel) and MacPorts, which a bare name would not all find.
+			for ( const char* path : { "/opt/homebrew/lib/libtesseract.5.dylib", "/usr/local/lib/libtesseract.5.dylib", "/opt/local/lib/libtesseract.5.dylib" } )
+			{
+				if ( void* library = dlopen( path, RTLD_NOW | RTLD_LOCAL ); library != nullptr )
+				{
+					return library;
+				}
+			}
+			return nullptr;
+	#else
 			void* library = dlopen( "libtesseract.so.5", RTLD_NOW | RTLD_LOCAL );
 			return library != nullptr ? library : dlopen( "libtesseract.so", RTLD_NOW | RTLD_LOCAL );
+	#endif
 		}
 
 		void* symbol( void* library, const char* name )
@@ -267,7 +279,7 @@ namespace lexiglance::platform
 			candidates.push_back( directory / "tessdata" );
 		}
 #else
-		for ( const char* system : { "/usr/share/tessdata", "/usr/share/tesseract-ocr/5/tessdata", "/usr/share/tesseract-ocr/4.00/tessdata", "/usr/local/share/tessdata" } )
+		for ( const char* system : { "/usr/share/tessdata", "/usr/share/tesseract-ocr/5/tessdata", "/usr/share/tesseract-ocr/4.00/tessdata", "/usr/local/share/tessdata", "/opt/homebrew/share/tessdata", "/opt/local/share/tessdata" } )
 		{
 			candidates.emplace_back( system );
 		}

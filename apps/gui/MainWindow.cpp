@@ -13,6 +13,7 @@
 #include "TranslationPage.h"
 
 #include <lexiglance/config/Keys.h>
+#include <lexiglance/core/Glob.h>
 #include <lexiglance/core/Log.h>
 #include <lexiglance/core/Version.h>
 
@@ -20,10 +21,16 @@
 #include <QComboBox>
 #include <QAbstractSpinBox>
 #include <QAbstractSlider>
+#include <QAccessible>
+#include <QAccessibleWidget>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QHBoxLayout>
 #include <QMenu>
+#include <QMimeData>
+#include <QPainter>
 #include <QPalette>
 #include <QProcess>
 #include <QScrollBar>
@@ -31,6 +38,8 @@
 #include <QStyleHints>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <span>
 
 #ifdef _WIN32
 	#ifndef NOMINMAX
@@ -110,6 +119,37 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 	namespace
 	{
 
+		// Qt's own interface for a main window answers a point with the first child there, which is what an in-window card
+		// covers: this one answers with the top one, so screen readers, and Lexiglance on the setup's sentence to try,
+		// reach the card.
+		class CoveredWindow final : public QAccessibleWidget
+		{
+		public:
+			explicit CoveredWindow( QWidget* window ) :
+				QAccessibleWidget( window, QAccessible::Window )
+			{
+			}
+
+			[[nodiscard]] QAccessibleInterface* childAt( int x, int y ) const override
+			{
+				for ( int i = childCount() - 1; i >= 0; --i )
+				{
+					QAccessibleInterface* item = child( i );
+					if ( item != nullptr && item->isValid() && !item->state().invisible && item->rect().contains( x, y ) )
+					{
+						return item;
+					}
+				}
+				return nullptr;
+			}
+		};
+
+		QAccessibleInterface* accessibleWindow( const QString& key, QObject* object )
+		{
+			auto* window = qobject_cast<QWidget*>( object );
+			return key == QStringLiteral( "QMainWindow" ) && window != nullptr ? new CoveredWindow( window ) : nullptr;
+		}
+
 		// The wheel over a spin box, a drop-down or a slider scrolls the page; it changes the value only once the field
 		// was clicked, so scrolling through the settings never changes one by accident.
 		class WheelGuard final : public QObject
@@ -152,11 +192,14 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		settings_( std::make_unique<Settings>( *client_ ) ),
 		navigation_( new QListWidget() ),
 		pages_( new QStackedWidget() ),
+		recent_timer_( new QTimer( this ) ),
 		connection_( new QLabel() ),
 		summary_( new QLabel() ),
 		start_button_( new QPushButton( QStringLiteral( "Start Lexiglance" ) ) )
 	{
 		qApp->installEventFilter( new WheelGuard( this ) );
+		static const bool accessible = ( QAccessible::installFactory( accessibleWindow ), true );
+		( void )accessible;
 		start_button_->setProperty( "primary", true );
 		setWindowTitle( QStringLiteral( "Lexiglance" ) );
 		// The installed icon, or the program's own copy (a build tree or an AppImage has none installed), also as a PNG for
@@ -194,7 +237,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		auto* help = new QPushButton( QIcon::fromTheme( QStringLiteral( "help-contents" ) ), QStringLiteral( "Help" ) );
 		help->setObjectName( QStringLiteral( "sidebarButton" ) );
 		help->setIconSize( QSize( 20, 20 ) );
-		help->setToolTip( QStringLiteral( "What Lexiglance can do, and where" ) );
+		help->setToolTip( QStringLiteral( "What Lexiglance can do and where to find it" ) );
 		sidebar_layout->addWidget( help );
 		connect( help, &QPushButton::clicked, this, [this] { showHelp(); } );
 
@@ -208,14 +251,21 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 
 		const Context context{ .client = client_, .settings = settings_.get(), .show_page = [this]( const QString& page ) { showPage( page ); }, .show_summary = [this]( const QString& text ) { summary_->setText( text ); } };
 		addPage( new OverviewPage( context ), QStringLiteral( "Overview" ), QStringLiteral( "dialog-information" ) );
-		addPage( new DictionariesPage( context ), QStringLiteral( "Dictionaries" ), QStringLiteral( "accessories-dictionary" ) );
+		dictionaries_page_ = new DictionariesPage( context );
+		search_page_       = new SearchPage( context );
+		addPage( dictionaries_page_, QStringLiteral( "Dictionaries" ), QStringLiteral( "accessories-dictionary" ) );
 		addPage( new ScanningPage( context ), QStringLiteral( "Scanning" ), QStringLiteral( "input-keyboard" ) );
 		addPage( new TranslationPage( context ), QStringLiteral( "Translation" ), QStringLiteral( "preferences-desktop-locale" ) );
 		addPage( new AppearancePage( context ), QStringLiteral( "Appearance" ), QStringLiteral( "preferences-desktop-theme" ) );
-		addPage( new SearchPage( context ), QStringLiteral( "Search" ), QStringLiteral( "edit-find" ) );
+		addPage( search_page_, QStringLiteral( "Search" ), QStringLiteral( "edit-find" ) );
 		addPage( new AnkiPage( context ), QStringLiteral( "Anki" ), QStringLiteral( "document-send" ) );
 		addPage( new StatisticsPage( context ), QStringLiteral( "Statistics" ), QStringLiteral( "office-chart-bar" ) );
 		addPage( new AboutPage( context ), QStringLiteral( "About" ), QStringLiteral( "help-about" ) );
+		developer_ = new DeveloperPage( context, { .show_setup = [this] { showSetup( 0, true ); }, .show_changes = [this]( const QString& changed ) { showChanges( changed ); } } );
+		addPage( developer_, QStringLiteral( "Developer" ), QStringLiteral( "applications-development" ) );
+		// The bundled icons have none for it; the desktop's theme may.
+		navigation_->item( navigation_->count() - 1 )->setIcon( QIcon::fromTheme( QStringLiteral( "applications-development" ), QIcon::fromTheme( QStringLiteral( "network-connect" ) ) ) );
+		navigation_->item( navigation_->count() - 1 )->setHidden( true );
 		// Until the first config.get, an edit would land on a default config and be pushed over the saved one.
 		for ( Page* page : page_list_ )
 		{
@@ -227,6 +277,10 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 			if ( row >= 0 && static_cast<std::size_t>( row ) < page_list_.size() )
 			{
 				page_list_[static_cast<std::size_t>( row )]->activated();
+				if ( page_list_[static_cast<std::size_t>( row )] == search_page_ )
+				{
+					refreshRecent();
+				}
 			}
 		} );
 		navigation_->setCurrentRow( 0 );
@@ -238,6 +292,8 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		connect( start_button_, &QPushButton::clicked, this, [this] { client_->startDaemon( true ); } );
 
 		settings_->onChanged( [this] {
+			updateDeveloper();
+			updateTray();
 			for ( Page* page : page_list_ )
 			{
 				page->setEnabled( true );
@@ -246,10 +302,11 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		} );
 
 		client_->onConnection( [this]( bool connected ) {
-			connection_->setText( connected ? QStringLiteral( "Connected to the Lexiglance daemon" ) : QStringLiteral( "The Lexiglance daemon is not running" ) );
+			connection_->setText( connected ? QStringLiteral( "Lexiglance is running" ) : QStringLiteral( "Lexiglance isn't running" ) );
 			start_button_->setVisible( !connected );
 			if ( connected )
 			{
+				refreshRecent();
 				client_->call( "status", "{}", [this]( const json::Value* status, const QString& ) {
 					if ( status != nullptr )
 					{
@@ -263,7 +320,24 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 			{
 				updateStatus( params );
 			}
+			else if ( name == "capture.result" )
+			{
+				if ( const QString window = qs( params["window"].asString() ); !window.isEmpty() && window != last_window_ )
+				{
+					last_window_ = window;
+					updateTray();
+				}
+				// The daemon counts a lookup before it reports it; the latest of a run of them is enough.
+				if ( params["entries"].asInt() > 0 )
+				{
+					recent_timer_->start();
+				}
+			}
 		} );
+		recent_timer_->setSingleShot( true );
+		recent_timer_->setInterval( 400 );
+		connect( recent_timer_, &QTimer::timeout, this, [this] { refreshRecent(); } );
+		setAcceptDrops( true );
 
 		setupTray();
 		connection_->setText( QStringLiteral( "Connecting..." ) );
@@ -330,6 +404,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 
 	void MainWindow::present()
 	{
+		showInDock( true );
 		show();
 		setWindowState( ( windowState() & ~Qt::WindowMinimized ) | Qt::WindowActive );
 		raise();
@@ -367,10 +442,35 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 
 	void MainWindow::showPage( const QString& name )
 	{
+		if ( name.toLower() == QStringLiteral( "report" ) )
+		{
+			present();
+			showReport();
+			return;
+		}
+		if ( name.toLower() == QStringLiteral( "developer" ) )
+		{
+			developer_wanted_ = true;
+			updateDeveloper();
+			present();
+			return;
+		}
 		if ( name.toLower() == QStringLiteral( "help" ) )
 		{
 			present();
 			showHelp();
+			return;
+		}
+		// The cards that open from Help, by name too (--page, --screenshot).
+		if ( name.toLower() == QStringLiteral( "setup" ) )
+		{
+			showSetup( 0 );
+			return;
+		}
+		if ( name.toLower() == QStringLiteral( "changes" ) )
+		{
+			present();
+			showChanges( qs( version ) );
 			return;
 		}
 		// In the order they were added above, which is the order of the sidebar.
@@ -385,14 +485,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 	void MainWindow::search( const QString& text )
 	{
 		showPage( QStringLiteral( "search" ) );
-		for ( Page* page : page_list_ )
-		{
-			if ( auto* search = dynamic_cast<SearchPage*>( page ) )
-			{
-				search->setQuery( text );
-				return;
-			}
-		}
+		search_page_->setQuery( text );
 	}
 
 	void MainWindow::showHelp( bool first )
@@ -401,7 +494,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		{
 			help_ = new HelpOverlay(
 					[this]( const QString& page ) { showPage( page ); },
-					[this] { showSetup( 0, true ); },
+					[this] { showSetup( 0 ); },
 					[this] { showChanges( qs( version ) ); },
 					this
 			);
@@ -441,6 +534,43 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		}
 	}
 
+	void MainWindow::showReport()
+	{
+		if ( report_ == nullptr )
+		{
+			report_ = new ReportOverlay( *client_, [this] { return developer_->reportParts(); }, this );
+		}
+		report_->open();
+	}
+
+	void MainWindow::updateDeveloper()
+	{
+		if ( !settings_->loaded() )
+		{
+			return;
+		}
+		if ( developer_wanted_ && !settings_->config().developer )
+		{
+			// Every page hears of it, and this comes back here with it on.
+			auto config      = settings_->config();
+			config.developer = true;
+			settings_->replace( std::move( config ) );
+			return;
+		}
+		const int  row = static_cast<int>( page_list_.size() ) - 1;
+		const bool on  = settings_->config().developer;
+		navigation_->item( row )->setHidden( !on );
+		if ( on && developer_wanted_ )
+		{
+			navigation_->setCurrentRow( row );
+		}
+		else if ( !on && navigation_->currentRow() == row )
+		{
+			navigation_->setCurrentRow( row - 1 );
+		}
+		developer_wanted_ = false;
+	}
+
 	void MainWindow::replaceOtherDaemon()
 	{
 		replace_other_ = true;
@@ -457,19 +587,73 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 			}
 			return;
 		}
-		tray_ = new QSystemTrayIcon( windowIcon(), this );
+#ifdef Q_OS_MACOS
+		// A template image, which macOS draws in the menu bar's own colour.
+		tray_icon_ = QIcon( QStringLiteral( ":/lexiglance/menubar.png" ) );
+		tray_icon_.setIsMask( true );
+#else
+		tray_icon_ = windowIcon();
+#endif
+		tray_ = new QSystemTrayIcon( tray_icon_, this );
 		tray_->setToolTip( QStringLiteral( "Lexiglance" ) );
 
 		auto* menu    = new QMenu( this );
 		pause_action_ = menu->addAction( QStringLiteral( "Pause scanning" ) );
 		pause_action_->setCheckable( true );
 		connect( pause_action_, &QAction::triggered, this, [this]( bool paused ) { client_->call( "scan.pause", paused ? "{\"paused\":true}" : "{\"paused\":false}" ); } );
+		// The window of the latest lookup, in Scanning -> Ignored windows or out of it at a click.
+		ignore_action_ = menu->addAction( QString() );
+		ignore_action_->setCheckable( true );
+		ignore_action_->setVisible( false );
+		connect( ignore_action_, &QAction::triggered, this, [this]( bool ignore ) {
+			if ( !settings_->loaded() || last_window_.isEmpty() )
+			{
+				return;
+			}
+			auto  config   = settings_->config();
+			auto& patterns = config.scan.ignored_windows;
+			if ( ignore )
+			{
+				patterns.push_back( ss( last_window_ ) );
+			}
+			else
+			{
+				std::erase_if( patterns, [this]( const std::string& pattern ) { return QString::compare( qs( pattern ), last_window_, Qt::CaseInsensitive ) == 0; } );
+			}
+			settings_->replace( std::move( config ) );
+			// A wider pattern still covers it: shown where it can be changed.
+			if ( !ignore && ignore_action_->isChecked() )
+			{
+				showPage( QStringLiteral( "scanning" ) );
+			}
+		} );
+		recent_menu_ = menu->addMenu( QStringLiteral( "Recent lookups" ) );
+		recent_menu_->menuAction()->setEnabled( false );
+		menu->addAction( QStringLiteral( "Search..." ), this, [this] { showPage( QStringLiteral( "search" ) ); } );
 		menu->addAction( QStringLiteral( "Settings..." ), this, [this] { present(); } );
 		menu->addSeparator();
-		menu->addAction( QStringLiteral( "Stop the dictionary daemon" ), this, [this] { client_->call( "shutdown" ); } );
-		menu->addAction( QStringLiteral( "Quit" ), qApp, &QApplication::quit );
+		menu->addAction( QStringLiteral( "Report a problem..." ), this, [this] { showPage( QStringLiteral( "report" ) ); } );
+		menu->addSeparator();
+		menu->addAction( QStringLiteral( "Stop Lexiglance" ), this, [this] { client_->call( "shutdown" ); } );
+		menu->addAction( QStringLiteral( "Quit (lookups keep working)" ), qApp, &QApplication::quit );
 		tray_->setContextMenu( menu );
+		// Whatever the latest lookup missed (the statistics just forgotten, say).
+		connect( menu, &QMenu::aboutToShow, this, [this] { refreshRecent(); } );
+		updateTray();
+		refreshRecent();
 
+#ifdef Q_OS_MACOS
+		// A click on a menu bar icon opens its menu there. Opening the app again (Finder, Spotlight) while it runs only
+		// reactivates it: that shows the window. Not the activation that comes with starting it in the menu bar.
+		QTimer::singleShot( 3000, this, [this] {
+			connect( qApp, &QGuiApplication::applicationStateChanged, this, [this]( Qt::ApplicationState state ) {
+				if ( state == Qt::ApplicationActive && !isVisible() )
+				{
+					present();
+				}
+			} );
+		} );
+#else
 		connect( tray_, &QSystemTrayIcon::activated, this, [this]( QSystemTrayIcon::ActivationReason reason ) {
 			if ( reason == QSystemTrayIcon::Trigger )
 			{
@@ -483,7 +667,113 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 				}
 			}
 		} );
+#endif
 		tray_->show();
+	}
+
+	namespace
+	{
+
+		// The tray icon while scanning is paused: the same, faded.
+		QIcon faded( const QIcon& icon )
+		{
+			QIcon result;
+			auto  sizes = icon.availableSizes();
+			if ( sizes.isEmpty() )
+			{
+				sizes << QSize( 64, 64 );
+			}
+			for ( const QSize& size : sizes )
+			{
+				const QPixmap source = icon.pixmap( size );
+				QPixmap       pixmap( source.size() );
+				pixmap.setDevicePixelRatio( source.devicePixelRatio() );
+				pixmap.fill( Qt::transparent );
+				QPainter painter( &pixmap );
+				painter.setOpacity( 0.35 );
+				painter.drawPixmap( 0, 0, source );
+				painter.end();
+				result.addPixmap( pixmap );
+			}
+			result.setIsMask( icon.isMask() );
+			return result;
+		}
+
+	} // namespace
+
+	void MainWindow::updateTray()
+	{
+		// The tray's actions come with it.
+		if ( tray_ == nullptr || pause_action_ == nullptr || ignore_action_ == nullptr )
+		{
+			return;
+		}
+		const bool paused = pause_action_->isChecked();
+		if ( paused != tray_faded_ )
+		{
+			tray_faded_ = paused;
+			tray_->setIcon( paused ? faded( tray_icon_ ) : tray_icon_ );
+		}
+		const auto& config = settings_->config();
+		if ( paused )
+		{
+			tray_->setToolTip( QStringLiteral( "Lexiglance: scanning paused" ) );
+		}
+		else
+		{
+			tray_->setToolTip( settings_->loaded() ? QStringLiteral( "Lexiglance: hold %1 and point at a word" ).arg( chordText( config.scan.trigger ) ) : QStringLiteral( "Lexiglance" ) );
+		}
+		QString window = last_window_.size() > 40 ? last_window_.left( 39 ) + QStringLiteral( "…" ) : last_window_;
+		ignore_action_->setText( QStringLiteral( "Don't scan in %1" ).arg( window.replace( '&', QStringLiteral( "&&" ) ) ) );
+		ignore_action_->setVisible( !last_window_.isEmpty() );
+		ignore_action_->setEnabled( settings_->loaded() );
+		ignore_action_->setChecked( std::ranges::any_of( config.scan.ignored_windows, [window = ss( last_window_ )]( const std::string& pattern ) { return globMatch( pattern, window ); } ) );
+	}
+
+	void MainWindow::refreshRecent()
+	{
+		client_->call( "stats.recent", "{}", [this]( const json::Value* result, const QString& ) {
+			QStringList words;
+			for ( const json::Value& word : result != nullptr ? ( *result )["recent"].items() : std::span<const json::Value>() )
+			{
+				words << qs( word.asString() );
+			}
+			if ( recent_menu_ != nullptr )
+			{
+				recent_menu_->clear();
+				for ( const QString& word : words.mid( 0, 10 ) )
+				{
+					recent_menu_->addAction( QString( word ).replace( '&', QStringLiteral( "&&" ) ), this, [this, word] { search( word ); } );
+				}
+				recent_menu_->menuAction()->setEnabled( !words.isEmpty() );
+			}
+			search_page_->setRecent( std::move( words ) );
+		} );
+	}
+
+	void MainWindow::dragEnterEvent( QDragEnterEvent* event )
+	{
+		if ( event->mimeData()->hasUrls() )
+		{
+			event->acceptProposedAction();
+		}
+	}
+
+	void MainWindow::dropEvent( QDropEvent* event )
+	{
+		QStringList files;
+		for ( const QUrl& url : event->mimeData()->urls() )
+		{
+			if ( url.isLocalFile() )
+			{
+				files << url.toLocalFile();
+			}
+		}
+		if ( !files.isEmpty() )
+		{
+			showPage( QStringLiteral( "dictionaries" ) );
+			dictionaries_page_->importFiles( files );
+		}
 	}
 
 	void MainWindow::closeEvent( QCloseEvent* event )
@@ -492,6 +782,7 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		if ( tray_ != nullptr && tray_->isVisible() )
 		{
 			hide();
+			showInDock( false );
 			event->ignore();
 			return;
 		}
@@ -560,15 +851,11 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 			QApplication::quit();
 			return;
 		}
-		const bool paused = status["paused"].asBool();
 		if ( pause_action_ != nullptr )
 		{
-			pause_action_->setChecked( paused );
+			pause_action_->setChecked( status["paused"].asBool() );
 		}
-		if ( tray_ != nullptr )
-		{
-			tray_->setToolTip( paused ? QStringLiteral( "Lexiglance (paused)" ) : QStringLiteral( "Lexiglance" ) );
-		}
+		updateTray();
 		if ( palette_from_daemon_ && status["dark_theme"].isBool() && status["dark_theme"].asBool() != dark_ )
 		{
 			applyPalette( status["dark_theme"].asBool() );
@@ -632,6 +919,8 @@ QStatusBar QLabel { padding: 3px 8px; color: %6; }
 		else
 		{
 			palette = QApplication::style()->standardPalette();
+			// The accent's blue, not the style's pure one.
+			palette.setColor( QPalette::Link, QColor( 42, 103, 190 ) );
 		}
 		QApplication::setPalette( palette );
 		qApp->setStyleSheet( applicationStyle( dark ) );

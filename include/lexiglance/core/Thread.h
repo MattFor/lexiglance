@@ -1,6 +1,8 @@
 #ifndef LEXIGLANCE_CORE_THREAD_H
 #define LEXIGLANCE_CORE_THREAD_H
 
+#include <lexiglance/core/Compat.h>
+
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -62,13 +64,13 @@ namespace lexiglance
 		}
 
 	private:
-		void enqueue( std::move_only_function<void()> job );
+		void enqueue( Task job );
 		void work( const std::stop_token& stop );
 
-		std::mutex                                  mutex_;
-		std::condition_variable_any                 ready_;
-		std::deque<std::move_only_function<void()>> queue_;
-		std::vector<std::jthread>                   workers_;
+		std::mutex                  mutex_;
+		std::condition_variable_any ready_;
+		std::deque<Task>            queue_;
+		std::vector<std::jthread>   workers_;
 	};
 
 	// Single slot channel where a newer value replaces an unconsumed one. Used between pipeline stages so that fast

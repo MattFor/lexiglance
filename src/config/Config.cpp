@@ -285,6 +285,7 @@ namespace lexiglance::config
 		readBool( root, "paused", config.paused );
 		readBool( root, "statistics", config.statistics );
 		readBool( root, "statistics_translations", config.statistics_translations );
+		readBool( root, "developer", config.developer );
 
 		const json::Value& scan = root["scan"];
 		readStrings( scan, "trigger", config.scan.trigger );
@@ -331,7 +332,8 @@ namespace lexiglance::config
 		config.popup.compositor      = parseCompositor( popup["compositor"].asString() );
 		readBool( popup, "highlight_auto", config.popup.highlight_auto );
 		config.popup.select_button = popup["select_button"].asString() == "middle" ? MouseButton::Middle : MouseButton::Right;
-		config.popup.scale         = std::clamp( popup["scale"].asDouble( 0.0 ), 0.0, 4.0 );
+		const double scale         = popup["scale"].asDouble( 0.0 );
+		config.popup.scale         = scale > 0.0 ? std::clamp( scale, min_popup_scale, 4.0 ) : 0.0;
 		const auto theme           = popup["theme"].asString();
 		config.popup.theme         = parseTheme( theme );
 		readInt( popup, "highlight_radius", config.popup.highlight_radius, 0, 32 );
@@ -501,6 +503,7 @@ namespace lexiglance::config
 		out.field( "paused", paused );
 		out.field( "statistics", statistics );
 		out.field( "statistics_translations", statistics_translations );
+		out.field( "developer", developer );
 
 		out.key( "scan" ).beginObject();
 		writeStrings( out, "trigger", scan.trigger );
@@ -626,6 +629,50 @@ namespace lexiglance::config
 	{
 		const auto it = std::ranges::find( dictionaries, title, &DictionaryPreference::title );
 		return it != dictionaries.end() ? &*it : nullptr;
+	}
+
+	namespace
+	{
+
+		void compare( const json::Value* before, const json::Value* after, const std::string& name, std::vector<Change>& out )
+		{
+			// Maps (colours, Anki fields, models) can hold different keys on each side.
+			if ( before != nullptr && after != nullptr && before->isObject() && after->isObject() )
+			{
+				const auto prefix = name.empty() ? name : name + ".";
+				for ( const json::Member& member : before->members() )
+				{
+					compare( &member.value, after->find( member.key ), prefix + std::string( member.key ), out );
+				}
+				for ( const json::Member& member : after->members() )
+				{
+					if ( before->find( member.key ) == nullptr )
+					{
+						compare( nullptr, &member.value, prefix + std::string( member.key ), out );
+					}
+				}
+				return;
+			}
+			auto old_value = before != nullptr ? json::serialize( *before ) : std::string();
+			auto new_value = after != nullptr ? json::serialize( *after ) : std::string();
+			if ( old_value != new_value )
+			{
+				out.push_back( { .setting = name, .before = std::move( old_value ), .after = std::move( new_value ) } );
+			}
+		}
+
+	} // namespace
+
+	std::vector<Change> changes( const Config& from, const Config& to )
+	{
+		std::vector<Change> out;
+		const auto          before = json::Document::parse( from.toJson( false ) );
+		const auto          after  = json::Document::parse( to.toJson( false ) );
+		if ( before && after )
+		{
+			compare( &before->root(), &after->root(), {}, out );
+		}
+		return out;
 	}
 
 } // namespace lexiglance::config

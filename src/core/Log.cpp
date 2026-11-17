@@ -5,10 +5,13 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <system_error>
+#include <utility>
 
 namespace lexiglance::log
 {
@@ -29,9 +32,10 @@ namespace lexiglance::log
 
 		struct Sinks
 		{
-			std::mutex        mutex;
-			std::ofstream     file;
-			std::deque<Entry> problems;
+			std::mutex                                     mutex;
+			std::ofstream                                  file;
+			std::deque<Entry>                              problems;
+			std::function<void( Level, std::string_view )> tap;
 		};
 
 		Sinks& sinks()
@@ -40,6 +44,7 @@ namespace lexiglance::log
 			return instance;
 		}
 
+#ifndef __APPLE__
 		// This computer's time zone, looked up once; null where the system has no time zone database, and then times
 		// are written in UTC rather than not at all.
 		const std::chrono::time_zone* localZone() noexcept
@@ -56,6 +61,7 @@ namespace lexiglance::log
 			}();
 			return zone;
 		}
+#endif
 
 	} // namespace
 
@@ -93,10 +99,21 @@ namespace lexiglance::log
 	std::string timestamp( std::chrono::system_clock::time_point when )
 	{
 		const auto moment = std::chrono::floor<std::chrono::milliseconds>( when );
+#ifdef __APPLE__
+		// Apple's libc++ has no time zone database: the C library's local time instead.
+		const std::time_t seconds = std::chrono::system_clock::to_time_t( std::chrono::floor<std::chrono::seconds>( moment ) );
+		std::tm           local{};
+		if ( ::localtime_r( &seconds, &local ) != nullptr )
+		{
+			const auto millis = ( moment - std::chrono::floor<std::chrono::seconds>( moment ) ).count();
+			return std::format( "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec, millis );
+		}
+#else
 		if ( const auto* zone = localZone(); zone != nullptr )
 		{
 			return std::format( "{:%Y-%m-%d %H:%M:%S}", std::chrono::zoned_time( zone, moment ) );
 		}
+#endif
 		return std::format( "{:%Y-%m-%d %H:%M:%S}", moment );
 	}
 
@@ -155,6 +172,10 @@ namespace lexiglance::log
 			s.file << line;
 			s.file.flush();
 		}
+		if ( s.tap )
+		{
+			s.tap( lvl, std::string_view( line ).substr( 0, line.size() - 1 ) );
+		}
 		if ( lvl >= Level::Warn && lvl != Level::Off )
 		{
 			if ( s.problems.size() == kept_problems )
@@ -163,6 +184,13 @@ namespace lexiglance::log
 			}
 			s.problems.push_back( { .time = now, .level = lvl, .message = std::string( message ) } );
 		}
+	}
+
+	void setTap( std::function<void( Level, std::string_view line )> tap )
+	{
+		auto&                  s = sinks();
+		const std::scoped_lock lock( s.mutex );
+		s.tap = std::move( tap );
 	}
 
 	std::vector<Entry> recentProblems()

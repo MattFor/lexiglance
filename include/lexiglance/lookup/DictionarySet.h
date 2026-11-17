@@ -3,6 +3,7 @@
 
 #include <lexiglance/dictionary/Dictionary.h>
 #include <lexiglance/dictionary/StructuredContent.h>
+#include <lexiglance/language/Language.h>
 
 #include <cstdint>
 #include <memory>
@@ -58,11 +59,20 @@ namespace lexiglance::lookup
 			return dictionaries_.empty();
 		}
 
+		// Whether dictionary `index` can hold words of text looked up in `language` that starts with `first`: one of that
+		// language, of another written in the same script (Ukrainian for Russian), or of a language not known.
+		[[nodiscard]] bool reads( std::uint16_t index, const lang::Language& language, char32_t first ) const noexcept
+		{
+			const lang::Language* own = languages_[index];
+			return own == nullptr || own == &language || own->isScriptCharacter( first );
+		}
+
 	private:
-		std::vector<LoadedDictionary> dictionaries_;
-		std::vector<std::uint16_t>    terms_;
-		std::vector<std::uint16_t>    meta_;
-		std::vector<std::uint16_t>    kanji_;
+		std::vector<LoadedDictionary>      dictionaries_;
+		std::vector<std::uint16_t>         terms_;
+		std::vector<std::uint16_t>         meta_;
+		std::vector<std::uint16_t>         kanji_;
+		std::vector<const lang::Language*> languages_;
 	};
 
 } // namespace lexiglance::lookup

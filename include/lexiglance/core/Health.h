@@ -29,16 +29,19 @@ namespace lexiglance::health
 		std::string detail;
 		// The action that fixes it, understood by the settings application: "restart", "resume", "enable-ocr",
 		// "enable-accessibility", "install-vcredist" (Windows), "run-as-administrator" (Windows, which asks first, so only
-		// its own button does it), "open-dictionaries", "open-scanning", "open-anki";
+		// its own button does it), "open-dictionaries", "open-scanning", "open-anki", "open-privacy-accessibility",
+		// "open-privacy-input-monitoring", "open-privacy-screen-recording" (macOS: that pane of System Settings);
 		// empty when there is none. All but the "open-" ones are carried out by its Fix issues button.
 		std::string fix;
+		// Made up by developer mode (debug.simulate): shown as it is, never taken for the real state.
+		bool simulated = false;
 	};
 
 	[[nodiscard]] std::string_view statusName( Severity status ) noexcept;
 
 	[[nodiscard]] Severity parseStatus( std::string_view name ) noexcept;
 
-	// {"checks": [{id, title, status, detail, fix}], "errors": n, "warnings": n}
+	// {"checks": [{id, title, status, detail, fix, simulated?}], "errors": n, "warnings": n}
 	void write( json::Writer& out, const std::vector<Check>& checks );
 
 	// The checks of a written report.

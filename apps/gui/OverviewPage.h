@@ -97,6 +97,7 @@ namespace lexiglance::gui
 		qint64                     restart_started_ = 0;
 		bool                       paused_          = false;
 		bool                       health_stale_    = false;
+		bool                       privacy_restart_ = false;
 		// A lookup seen while this window was open; until then the health report says when the last one was.
 		bool saw_lookup_ = false;
 		// Run as administrator and the line under it, where there is such an option (Windows); busy while it is being

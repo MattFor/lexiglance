@@ -23,7 +23,7 @@ touch a game's process, its memory or its input stream. Lexiglance does none of 
 | Text under the pointer             | AT-SPI (desktop accessibility bus)                                                      | The application exports its text itself; games expose nothing.                                                                                                                |
 | Text in games, images and video    | OCR of the root window (`XGetImage`)                                                    | The same request every screenshot tool makes, to the X server rather than the game.                                                                                           |
 | Show the popup                     | An ordinary override-redirect window                                                    | It never takes keyboard focus, and the highlight overlay is click-through.                                                                                                    |
-| Wheel changes the looked-up length | A grab of mouse buttons 4 and 5 only, only while the trigger is held over an open popup | The ordinary X11 button grab hotkey tools use, at the X server; released with the trigger. **Scanning -> Mouse wheel changes the looked-up length** off means no grab at all. |
+| Wheel changes the looked-up length | A grab of mouse buttons 4 and 5 only, only while the trigger is held over an open popup | The ordinary X11 button grab hotkey tools use, at the X server; released with the trigger. **Scanning -> Scroll wheel selects more or fewer characters** off means no grab at all. |
 | Selections (optional)              | The X11 PRIMARY selection                                                               | Standard clipboard protocol.                                                                                                                                                  |
 
 ## On Windows
@@ -55,13 +55,32 @@ X11 can take just the two wheel buttons with an ordinary button grab. Windows ha
 `SetWindowsHookEx(WH_MOUSE_LL, ...)` — a global low-level mouse hook, which is exactly the mechanism some anti-cheat
 systems treat as suspicious in its own right, whatever it is used for.
 
-So it is off by default and Lexiglance installs no hook at all. Turning on **Scanning -> Also keep the wheel from the
-window underneath** installs one, and only while the trigger is held over an open popup; it comes down again the
+So it is off by default and Lexiglance installs no hook at all. Turning on **Scanning -> Stop the window underneath
+from scrolling too** installs one, and only while the trigger is held over an open popup; it comes down again the
 moment the trigger is let go. It swallows the wheel and nothing else, and it never synthesises input. Even then the
 trigger keys stay passive, because low-level hooks do not gate Raw Input — which is also how Lexiglance still sees the
 turn it has taken away from the other window.
 
 If you play anything with kernel-level anti-cheat, leave this off.
+
+## On macOS
+
+The same rules again. macOS asks the user to allow each of these (System Settings -> Privacy & Security), so every
+one of them is visible there and can be withdrawn.
+
+| Need                            | Mechanism                                                   | Why it is safe                                                                   |
+| ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Know when the trigger is held   | A listen-only `CGEventTap` (Input Monitoring)               | It receives copies of events; it cannot change, delay or drop them.              |
+| Keyboard state after a sleep    | `CGEventSourceFlagsState`, `CGEventSourceKeyState`          | Read-only queries.                                                               |
+| Text under the pointer          | The accessibility API, `AXUIElement` (Accessibility)        | The application exports its text itself, as for VoiceOver; games expose nothing. |
+| Text in games, images and video | `CGWindowListCreateImage` of the screen (Screen Recording)  | What every screenshot tool does, through the window server rather than the game. |
+| Show the popup                  | Non-activating `NSPanel`s, the highlight ignoring the mouse | They never take the focus, and the highlight lets every click through.           |
+| Copied text (optional)          | The pasteboard's change count, read every 200 ms            | A read-only query.                                                               |
+
+**Scanning -> Stop the window underneath from scrolling too** is off by default here too. Turned on, it adds an
+active event tap that takes wheel events and nothing else, only while the trigger is held over an open popup; macOS
+allows that only with the Accessibility permission. As on Windows, leave it off if you play anything with kernel-level
+anti-cheat.
 
 ## Excluding games completely
 

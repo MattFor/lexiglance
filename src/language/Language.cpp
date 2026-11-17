@@ -326,10 +326,11 @@ namespace lexiglance::lang
 		return variant;
 	}
 
-	void addVariant( std::vector<TextVariant>& out, const Units& units )
+	void addVariant( std::vector<TextVariant>& out, const Units& units, bool folded )
 	{
 		if ( TextVariant variant = toVariant( units ); std::ranges::none_of( out, [&]( const TextVariant& v ) { return v.text == variant.text; } ) )
 		{
+			variant.folded = folded;
 			out.push_back( std::move( variant ) );
 		}
 	}

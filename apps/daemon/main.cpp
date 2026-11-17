@@ -28,6 +28,9 @@
 	#include <windows.h>
 #else
 	#include <pthread.h>
+	#ifdef __APPLE__
+		#include <sys/event.h>
+	#endif
 #endif
 
 namespace
@@ -38,6 +41,34 @@ namespace
 	constexpr std::string_view daemon_name = "lexiglanced";
 	// How long tearing down may take before the process simply ends.
 	constexpr auto shutdown_limit = std::chrono::seconds( 4 );
+
+#ifndef _WIN32
+	// Takes one of `signals` once it arrives within `interval`.
+	bool takeSignal( const sigset_t& signals, const timespec& interval )
+	{
+	#ifdef __APPLE__
+		// macOS has no sigtimedwait, and its sigpending() sees only the calling thread's signals; a kqueue sees the
+		// process's, blocked ones included.
+		static const int queue = [&signals] {
+			const int made = ::kqueue();
+			for ( const int number : { SIGINT, SIGTERM, SIGHUP } )
+			{
+				if ( made >= 0 && sigismember( &signals, number ) == 1 )
+				{
+					struct kevent change{};
+					EV_SET( &change, number, EVFILT_SIGNAL, EV_ADD, 0, 0, nullptr );
+					( void )::kevent( made, &change, 1, nullptr, 0, nullptr );
+				}
+			}
+			return made;
+		}();
+		struct kevent got{};
+		return queue >= 0 && ::kevent( queue, nullptr, 0, &got, 1, &interval ) > 0;
+	#else
+		return sigtimedwait( &signals, nullptr, &interval ) > 0;
+	#endif
+	}
+#endif
 
 	void usage()
 	{
@@ -73,8 +104,8 @@ namespace
 		return lg::ipc::connectTo( lg::paths::ipcEndpoint(), std::chrono::milliseconds( 300 ) ).has_value();
 	}
 
-	// Takes over from a running daemon: asks it to exit, ends it when it does not, and ends stray daemons too (from
-	// before the instance lock, or ones that lost their socket), which would keep showing popups of their own.
+	// Takes over from the running daemon of this home: asks it to exit, and ends it when it does not. Daemons of other
+	// homes (LEXIGLANCE_HOME) are left alone.
 	bool replaceRunning( lg::process::InstanceLock& lock )
 	{
 		if ( auto client = lg::ipc::Client::connect( lg::paths::ipcEndpoint(), std::chrono::milliseconds( 1500 ) ) )
@@ -92,15 +123,6 @@ namespace
 			if ( !waitUntil( [&] { return lock.retry(); }, std::chrono::seconds( 3 ) ) )
 			{
 				return false;
-			}
-		}
-		for ( const int pid : lg::process::othersNamed( daemon_name ) )
-		{
-			// One that had the socket was asked to exit above: a moment for it to do so on its own.
-			if ( !waitUntil( [pid] { return !lg::process::isRunning( pid, daemon_name ); }, std::chrono::seconds( 3 ) ) )
-			{
-				lg::log::warn( "ending a stray daemon (pid {})", pid );
-				( void )lg::process::terminate( pid, daemon_name, std::chrono::seconds( 2 ) );
 			}
 		}
 		// The socket goes with its daemon; a file left behind is replaced when listening.
@@ -371,20 +393,20 @@ namespace
 		lg::daemon::Daemon daemon( backend ? std::move( *backend ) : nullptr, std::move( *config ) );
 		if ( !config_problem.empty() )
 		{
-			daemon.noteStartupProblem( std::format( "The settings file could not be read ({}), so the defaults are used. {}", config_problem, broken_config.empty() ? std::string( "Fix or delete it, then restart Lexiglance." ) : std::format( "It was moved to {}: fix it, rename it back to config.json and restart Lexiglance.", broken_config.string() ) ) );
+			daemon.noteStartupProblem( std::format( "Lexiglance couldn't read the settings file ({}), so it's using the defaults. {}", config_problem, broken_config.empty() ? std::string( "Fix or delete the file, then restart Lexiglance." ) : std::format( "The file was moved to {}. To get your settings back, fix it, rename it back to config.json and restart Lexiglance.", broken_config.string() ) ) );
 		}
 #ifdef _WIN32
 		daemon.setAdministrator( elevated, task_here );
 		if ( !elevation_problem.empty() )
 		{
-			daemon.noteStartupProblem( std::format( "Run as administrator is on, but Lexiglance could not start as administrator ({}), so the trigger does nothing over programs that run as administrator. Turn "
-			                                        "Run as administrator off and on again (Overview, Startup).",
+			daemon.noteStartupProblem( std::format( "Run as administrator is on, but Lexiglance couldn't start as administrator ({}), so the trigger does nothing over programs that run as administrator. To set it "
+			                                        "up again, turn Run as administrator off and on in Overview -> Startup.",
 			                                        elevation_problem ) );
 		}
 #endif
 		if ( !backend_problem.empty() )
 		{
-			daemon.noteStartupProblem( std::format( "No desktop integration: {}.", backend_problem ) );
+			daemon.noteStartupProblem( std::format( "Lexiglance couldn't connect to the desktop: {}.", backend_problem ) );
 		}
 
 #ifdef _WIN32
@@ -406,7 +428,7 @@ namespace
 			const timespec interval{ .tv_sec = 0, .tv_nsec = 200'000'000 };
 			while ( !stop.stop_requested() )
 			{
-				if ( sigtimedwait( &signals, nullptr, &interval ) > 0 )
+				if ( takeSignal( signals, interval ) )
 				{
 					daemon.requestQuit();
 					return;
@@ -423,7 +445,7 @@ namespace
 			while ( std::chrono::steady_clock::now() < until )
 			{
 				const timespec interval{ .tv_sec = 0, .tv_nsec = 100'000'000 };
-				if ( sigtimedwait( &signals, nullptr, &interval ) > 0 )
+				if ( takeSignal( signals, interval ) )
 				{
 					std::_Exit( 0 );
 				}
