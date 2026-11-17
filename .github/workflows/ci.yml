@@ -56,7 +56,11 @@ jobs:
           sudo apt-get install -y $APT_PACKAGES g++-14
       - name: Install Clang
         if: startsWith(matrix.cxx, 'clang')
-        run: wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 20
+        # Downloaded to a file and retried: piped into bash, a failed download ran an empty script and "succeeded".
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors -o llvm.sh https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh 20
+          clang++-20 --version
       - name: Configure
         # The tools too (tools/): nothing else builds them, and they are of no use once they no longer compile.
         run: >-
@@ -77,7 +81,9 @@ jobs:
           sudo apt-get update
           # shellcheck disable=SC2086 # a list of packages, split on purpose
           sudo apt-get install -y $APT_PACKAGES g++-14
-          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 20
+          curl -fsSL --retry 5 --retry-all-errors -o llvm.sh https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh 20
+          clang++-20 --version
       - name: Configure
         run: >-
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++-20
