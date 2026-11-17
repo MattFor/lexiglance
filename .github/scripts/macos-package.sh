@@ -36,10 +36,11 @@ foreign_rpaths() {
 check_closure() {
     local file bad=0
     while IFS= read -r file; do
+        # Only the indented lines are references: on Apple silicon a universal file prints a header per architecture.
         while IFS= read -r line; do
             echo "$file: $line" >&2
             bad=1
-        done < <(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep -Ev '^(/System/Library/|/usr/lib/|@executable_path/|@loader_path/|@rpath/)' || true)
+        done < <(otool -L "$file" | awk '/^\t/ {print $1}' | grep -Ev '^(/System/Library/|/usr/lib/|@executable_path/|@loader_path/|@rpath/)' || true)
         while IFS= read -r line; do
             echo "$file: LC_RPATH $line" >&2
             bad=1
