@@ -9,7 +9,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET
 
 project(
     lexiglance
-    VERSION 1.4.1
+    VERSION 1.5.0
     DESCRIPTION
         "System-wide pop-up dictionary compatible with Yomitan dictionaries"
     HOMEPAGE_URL "https://github.com/MattFor/lexiglance"
